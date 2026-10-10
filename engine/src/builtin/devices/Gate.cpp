@@ -3,9 +3,10 @@
 // the bottom of its range). Flip turns it round: only what is quieter passes.
 //
 // - The key, what opens it, is its own input; with a sidechain chosen, a blend
-//   of the two (S/C Mix, after S/C Gain on the sidechain), optionally through an
-//   EQ (six RBJ types in Live's order, high-pass at 80 Hz by default). Listening
-//   puts the key out instead of the gated audio.
+//   of the two (S/C Mix, after S/C Gain on the sidechain: NaN or infinity there,
+//   from a broken source, is taken as silence, as the input's is), optionally
+//   through an EQ (six RBJ types in Live's order, high-pass at 80 Hz by default).
+//   Listening puts the key out instead of the gated audio.
 // - Detection is peak, linked stereo: the louder key channel's level opens the
 //   gate for both. With lookahead the audio is delayed and the level is the key's
 //   largest over the lookahead window (a sliding maximum), so the gate opens
@@ -23,9 +24,11 @@
 //   (15 ms, every 32 frames while they move); a change of the EQ's type or of the
 //   lookahead crossfades over 10 ms (one that comes during a crossfade starts when
 //   it is done). A filter the EQ starts (switched on, or a new type) starts warm:
-//   run first over the key's last moments, so it has nothing to settle and its
-//   fade in is only ever between two settled outputs. Threshold, Return, Attack,
-//   Hold and Release only move decisions and the ramps' speeds.
+//   run first over the key's last moments, a few times faster than they came
+//   until it has caught up (at most 6.7 ms), and heard only then, so it has
+//   nothing to settle and its fade in is only ever between two settled outputs.
+//   Threshold, Return, Attack, Hold and Release only move decisions and the
+//   ramps' speeds.
 // - Lookahead is latency (0, 1 or 10 ms; 1 ms by default, as Live's): idle()
 //   tells the engine when it changes, so the other tracks are realigned.
 //
@@ -51,19 +54,13 @@ constexpr double kFloorSeconds = 0.02;     // Floor's ramp
 constexpr double kSwitchSeconds = 0.01;    // Flip, Listen, the EQ on and off; the lookahead's and EQ type's crossfades
 constexpr double kKeySeconds = 0.02;       // S/C Gain and S/C Mix (and a sidechain coming or going)
 constexpr double kEqGlideSeconds = 0.015;  // the key EQ's Freq, Q and Gain
-constexpr double kWarmSeconds = 0.1;       // the key kept to start a key EQ filter warm from
 constexpr int kChannels = 2;
 
-// 0 at 0, 1 at 1, flat at both ends: the crossfades' shape.
-inline float sCurve(float t) noexcept { return t * t * (3.f - 2.f * t); }
+using dsp::sCurve;  // (the crossfades' shape: flat at both ends)
 
-// A key EQ section's two states to zero together once both are tiny (-300 dB).
-// dsp::Biquad flushes each below 1e-20 on its own; low down or narrow, its two
-// states nearly cancel, and zeroing one alone kicks the other back up, so such a
-// filter would go on around 1e-19 for minutes instead of falling silent.
-inline void settle(dsp::Biquad& section) noexcept {
-    if (std::abs(section.s1) < 1e-15 && std::abs(section.s2) < 1e-15) section.s1 = section.s2 = 0.0;
-}
+// A sidechain sample as the key takes it: NaN, infinity or an absurd level (what a broken source
+// can leave in the engine's buffer, which only the device's own input is cleaned of) as silence.
+inline float audible(float x) noexcept { return std::abs(x) <= BuiltinProcessor::kMaxInput ? x : 0.f; }
 
 class GateProcessor final : public BuiltinProcessor {
 public:
@@ -100,7 +97,7 @@ public:
             audio_[c].prepare(most + 8);
             keyDelay_[c].prepare(most + 8);
         }
-        warmMost_ = std::max(1, static_cast<int>(std::lround(kWarmSeconds * sampleRate)));
+        warmMost_ = std::max(1, static_cast<int>(std::lround(gate::kWarmSeconds * sampleRate)));
         for (dsp::DelayLine& key : keyIn_) key.prepare(warmMost_ + 1);
         keyPeaks_.prepare(most + 8);
         for (int i = 0; i < gate::kLookaheads; ++i) {
@@ -136,7 +133,8 @@ public:
         held_ = 0;
         openness_ = 0.0;
         fadeLeft_ = typeFadeLeft_ = 0;
-        eqRunning_ = false;
+        warmLag_ = 0;
+        eqRunning_ = eqStarting_ = false;
         meterCount_ = 0;
         peakIn_ = peakOut_ = peakKey_ = 0.f;
         passSum_ = 0.0;
@@ -175,11 +173,21 @@ protected:
         listen_.setTarget(isOn(ScListen) ? 1.f : 0.f);
         scGain_.setTarget(dbToGain(param(ScGain)));
         scMix_.setTarget(keyed ? std::clamp(param(ScMix) / 100.f, 0.f, 1.f) : 0.f);
-        eqMix_.setTarget(isOn(ScEq) ? 1.f : 0.f);
         lookaheadTarget_ = std::clamp(choiceIndex(Lookahead), 0, gate::kLookaheads - 1);
         typeTarget_ = static_cast<gate::KeyFilter>(std::clamp(choiceIndex(ScEqType), 0, gate::kKeyFilters - 1));
 
+        // The key EQ: switched on (or on in the first stretch, after silence), it starts at its settings;
+        // after sound it fades in once its filter has caught up with the key.
         const bool fresh = fresh_;
+        const bool eqOn = isOn(ScEq);
+        if (eqOn || eqRunning_) {
+            eqTargetLogFreq_ = std::log(std::clamp<double>(param(ScEqFreq), gate::kKeyFreqMin, gate::kKeyFreqMax));
+            eqTargetLogQ_ = std::log(std::clamp<double>(param(ScEqQ), gate::kKeyQMin, gate::kKeyQMax));
+            eqTargetGainDb_ = std::clamp<double>(param(ScEqGain), gate::kKeyGainMinDb, gate::kKeyGainMaxDb);
+        }
+        if (eqOn && !eqRunning_) startEq(!fresh);
+        eqMix_.setTarget(eqOn && !eqStarting_ ? 1.f : 0.f);
+
         if (fresh) {  // the first stretch since reset(): everything starts at its settings, nothing ramps
             for (SmoothedValue* s : {&floor_, &flip_, &listen_, &scGain_, &scMix_, &eqMix_}) s->snapTo(s->target());
             lookahead_ = lookaheadTarget_;
@@ -188,16 +196,8 @@ protected:
             fresh_ = false;
         }
         // The key EQ runs while it is on or fading out; nothing of it is computed otherwise.
-        const bool running = isOn(ScEq) || eqMix_.isSmoothing() || eqMix_.current() > 0.f;
-        if (running) {
-            eqTargetLogFreq_ = std::log(std::clamp<double>(param(ScEqFreq), gate::kKeyFreqMin, gate::kKeyFreqMax));
-            eqTargetLogQ_ = std::log(std::clamp<double>(param(ScEqQ), gate::kKeyQMin, gate::kKeyQMax));
-            eqTargetGainDb_ = std::clamp<double>(param(ScEqGain), gate::kKeyGainMinDb, gate::kKeyGainMaxDb);
-            if (!eqRunning_) startEq(!fresh);  // switched on (or the first stretch, after silence): at its settings
-        } else {
-            eqType_ = typeTarget_;
-        }
-        eqRunning_ = running;
+        eqRunning_ = eqOn || eqMix_.isSmoothing() || eqMix_.current() > 0.f;
+        if (!eqRunning_) eqType_ = typeTarget_;
 
         // The state the loop changes, in locals (stores to the audio buffers could
         // otherwise be the members', so the compiler would reload them every sample).
@@ -215,7 +215,7 @@ protected:
             float kL = in0, kR = in1;
             if (keyed || scMix_.isSmoothing()) {  // (without a sidechain the mix rests at 0: the input as it is)
                 const float g = scGain_.next(), m = scMix_.next();
-                const float sL = scL != nullptr ? scL[i] : 0.f, sR = scR != nullptr ? scR[i] : 0.f;
+                const float sL = scL != nullptr ? audible(scL[i]) : 0.f, sR = scR != nullptr ? audible(scR[i]) : 0.f;
                 kL = in0 + m * (g * sL - in0);
                 kR = in1 + m * (g * sR - in1);
             }
@@ -263,11 +263,12 @@ protected:
             }
 
             // (4) The gain: the openness eased, flipped, between the floor and unity.
-            const float pass = gate::pass(gate::shape(static_cast<float>(openness)), flip.next());
+            const float pass = gate::pass(static_cast<float>(openness), flip.next());
             const float gain = gate::gain(pass, floorGain.next());
 
             // (5) The audio through the lookahead, times the gain; listening, the key
-            //     (delayed alike) instead. A lookahead changing crossfades between taps.
+            //     (delayed alike) instead (not listening, nothing of the key is in it). A
+            //     lookahead changing crossfades between taps.
             const float li = listen.next();
             for (int c = 0; c < n; ++c) {
                 audio_[c].push(ch[c][i]);
@@ -280,7 +281,10 @@ protected:
                     k = k0 + t * (k - k0);
                 }
                 float out = a * gain;
-                out += li * (k - out);
+                if (li == 1.f)
+                    out = k;
+                else if (li > 0.f)
+                    out += li * (k - out);
                 ch[c][i] = out;
                 peakIn = std::max(peakIn, std::abs(a));
                 peakOut = std::max(peakOut, std::abs(out));
@@ -314,28 +318,38 @@ protected:
     }
 
 private:
-    // The key through the EQ: a glide step every kEqChunk frames, a type change's
-    // crossfade, and the EQ's own fade in or out.
+    // The key through the EQ: a glide step every kEqChunk frames, a filter starting
+    // catching up, a type change's crossfade, and the EQ's own fade in or out.
     void filterKey(float& kL, float& kR) noexcept {
         if (--eqChunkLeft_ <= 0) {  // (counted per frame: the same pace however automation splits the block)
             eqChunkLeft_ = gate::kEqChunk;
             glideEq();
         }
-        if (typeFadeLeft_ == 0 && eqType_ != typeTarget_) {  // the old filter fades out, its state kept
+        if (typeFadeLeft_ == 0 && warmLag_ == 0 && eqType_ != typeTarget_) {  // the old filter goes on, its state kept
             eqOld_ = eq_;
             eqOldState_[0] = eqState_[0];
             eqOldState_[1] = eqState_[1];
             eqType_ = typeTarget_;
             eq_ = designEq();
-            warm(1);  // (the new one, as if it had been running: the frames before this one)
+            startWarm();
             typeFadeLeft_ = fadeLength_;
         }
-        float fL = eqState_[0].process(eq_, kL), fR = eqState_[1].process(eq_, kR);
-        settle(eqState_[0]);
-        settle(eqState_[1]);
-        if (typeFadeLeft_ > 0) {
-            const float t = sCurve(1.f - static_cast<float>(typeFadeLeft_--) / static_cast<float>(fadeLength_));
+        float fL = kL, fR = kR;
+        bool live = true;  // the filter is level with the key: heard
+        if (warmLag_ == 0) {
+            fL = eqState_[0].process(eq_, kL);
+            fR = eqState_[1].process(eq_, kR);
+        } else {
+            live = catchUp(fL, fR);
+            if (live && eqStarting_) {  // switched on, and warm now: it fades in from here
+                eqStarting_ = false;
+                eqMix_.setTarget(1.f);
+            }
+        }
+        if (typeFadeLeft_ > 0) {  // the old filter, fading out from when the new one is heard
             const float oL = eqOldState_[0].process(eqOld_, kL), oR = eqOldState_[1].process(eqOld_, kR);
+            const float t =
+                live ? sCurve(1.f - static_cast<float>(typeFadeLeft_--) / static_cast<float>(fadeLength_)) : 0.f;
             fL = oL + t * (fL - oL);
             fR = oR + t * (fR - oR);
         }
@@ -353,8 +367,9 @@ private:
         for (int d = window - 2; d >= 0; --d) peak.push(keyPeaks_.tap(d), window);
     }
 
-    // The EQ switched on: its glides and type at the parameters, warm from the key
-    // before this stretch (after reset(), that was silence: from rest).
+    // The EQ switched on: its glides and type at the parameters, its filter warm
+    // from the key before this stretch (after reset(), that was silence: from rest,
+    // heard at once).
     void startEq(bool warmed) noexcept {
         for (int c = 0; c < kChannels; ++c) {
             eqState_[c].reset();
@@ -366,34 +381,37 @@ private:
         eqLogQ_ = eqTargetLogQ_;
         eqGainDb_ = eqTargetGainDb_;
         eq_ = designEq();
-        if (warmed) warm(0);
+        warmLag_ = 0;
+        if (warmed) startWarm();
+        eqStarting_ = warmLag_ > 0;
         eqChunkLeft_ = gate::kEqChunk;
     }
 
-    // The filter eq_ started warm: from rest, run over the key's frames before
-    // `newest` back (taps of keyIn_), for as long as its slowest pole takes to
-    // fall 60 dB (so where it started no longer shows), at most kWarmSeconds. It
-    // then goes on as if it had been running all along: carrying on from another
-    // filter's state, or from rest, its first tens of milliseconds would overshoot
-    // (+5 dB, a low shelf at 30 Hz) and could open the gate. Paid once per start,
-    // a few microseconds (most filters need a few hundred frames).
-    void warm(int newest) noexcept {
-        const int frames = settleFrames(eq_);
+    // The filter eq_ starts warm: from rest, it is run over the key's frames before
+    // this one (keyIn_), as many as its slowest pole takes to fall 60 dB (so where
+    // it started no longer shows), at most kWarmSeconds' worth, and then goes on as
+    // if it had been running all along; carrying on from another filter's state,
+    // or from rest, its first tens of milliseconds would overshoot (+5 dB, a low
+    // shelf at 30 Hz) and could open the gate. It runs over them kWarmPace frames a
+    // frame (catchUp()), so no one block pays for all of them (up to 19 200 frames
+    // a channel at 192 kHz): most filters catch up within a few dozen frames, the
+    // slowest in kWarmSeconds / (kWarmPace - 1), 6.7 ms. Until then what it
+    // replaces (the old filter, or the key unfiltered) is heard.
+    void startWarm() noexcept {
         for (dsp::Biquad& state : eqState_) state.reset();
-        for (int d = newest + frames - 1; d >= newest; --d) {
-            for (int c = 0; c < kChannels; ++c) {
-                eqState_[c].process(eq_, keyIn_[c].tap(d));
-                settle(eqState_[c]);
-            }
-        }
+        warmLag_ = gate::warmFrames(eq_, warmMost_);
     }
-    // Frames for a filter's slowest pole to fall 60 dB, at most warmMost_.
-    int settleFrames(const dsp::BiquadCoefficients& c) const noexcept {
-        const double disc = c.a1 * c.a1 - 4.0 * c.a2;
-        const double radius = disc < 0.0 ? std::sqrt(c.a2) : 0.5 * (std::abs(c.a1) + std::sqrt(disc));
-        if (!(radius > 0.0)) return 1;
-        if (radius >= 1.0) return warmMost_;
-        return std::clamp(static_cast<int>(std::ceil(std::log(1e-3) / std::log(radius))), 1, warmMost_);
+    // One frame of the filter catching up: it runs over up to kWarmPace frames of
+    // the key it hasn't heard, oldest first, this one last once it gets to it.
+    // Whether it has (fL, fR are then its output for this frame).
+    bool catchUp(float& fL, float& fR) noexcept {
+        const int count = std::min(warmLag_ + 1, gate::kWarmPace);
+        for (int d = warmLag_; d > warmLag_ - count; --d) {
+            fL = eqState_[0].process(eq_, keyIn_[0].tap(d));
+            fR = eqState_[1].process(eq_, keyIn_[1].tap(d));
+        }
+        warmLag_ += 1 - count;
+        return warmLag_ == 0;
     }
 
     // One glide step of Freq, Q (both in log) and Gain (dB); the filter designed again if they moved.
@@ -422,8 +440,8 @@ private:
             static const std::vector<std::string> kTypes = {"Low Shelf", "Bell", "High Shelf",
                                                             "Low-pass", "Band-pass", "High-pass"};
             std::vector<ParamInfo> list = {
-                {"threshold", "Threshold", "dB", -70.f, 6.f, -12.f},
-                {"return", "Return", "dB", 0.f, 24.f, 3.f},
+                {"threshold", "Threshold", "dB", gate::kThresholdMinDb, gate::kThresholdMaxDb, -12.f},
+                {"return", "Return", "dB", 0.f, gate::kReturnMaxDb, 3.f},
                 {"attack", "Attack", "ms", 0.02f, 150.f, 3.5f, true},
                 {"hold", "Hold", "ms", 1.f, 1500.f, 10.f, true},
                 {"release", "Release", "ms", 0.1f, 3000.f, 15.f, true},
@@ -475,10 +493,12 @@ private:
     int eqChunkLeft_ = 0;  // frames to the next glide step (carried across stretches)
     dsp::BiquadCoefficients eq_, eqOld_;
     dsp::Biquad eqState_[kChannels], eqOldState_[kChannels];
-    dsp::DelayLine keyIn_[kChannels];  // the key before the EQ, its last kWarmSeconds (to start a filter warm)
-    int warmMost_ = 1;
-    int typeFadeLeft_ = 0;
+    dsp::DelayLine keyIn_[kChannels];  // the key before the EQ, its last kWarmSeconds (to start a filter warm from)
+    int warmMost_ = 1;       // kWarmSeconds in frames
+    int warmLag_ = 0;        // frames before this one a starting filter has still to run over (0: it is level)
+    int typeFadeLeft_ = 0;   // (counted from when the new type's filter is level with the key)
     bool eqRunning_ = false;
+    bool eqStarting_ = false;  // switched on, its filter catching up: the fade in waits
 
     // The displays' accumulators.
     int meterCount_ = 0;

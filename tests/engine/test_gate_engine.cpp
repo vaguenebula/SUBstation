@@ -2,35 +2,35 @@
 // Return, after Hold, over Attack and Release, to the sample; Floor and Flip;
 // lookahead as latency (standalone and through the engine); keying from a
 // sidechain, its gain and blend, and an EQ on the key that plays as its editor
-// draws it; listening to the key; every control changing without a click;
-// automation to the sample, whatever the block size; reset and a new sample
-// rate; the extremes and stability; one channel; and its displays.
+// draws it (a filter it starts heard once it has caught up with the key);
+// listening to the key; every control changing without a click; automation to
+// the sample, whatever the block size; reset and a new sample rate; the
+// extremes, NaN and infinity in its input or on its sidechain, and stability;
+// one channel; and its displays.
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <limits>
-#include <memory>
 #include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "Engine.h"
-#include "builtin/BuiltinRegistry.h"
 #include "builtin/DspBlocks.h"
 #include "builtin/GateDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace gate = sub::gate;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
+constexpr int kBlock = Standalone::kMaxBlock;
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
 
 // What every test starts from unless it says otherwise, so the arithmetic doesn't
 // hang on the defaults: threshold -40 dB, Return 3 dB, attack 0.1 ms (4.8 samples),
@@ -51,12 +51,7 @@ Values with(Values base, const Values& more) {
     return base;
 }
 
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
+using Change = ParamChange;
 
 // The sidechain: what it hears (left, and right or the left again), and the
 // frames at whose blocks it is connected.
@@ -67,57 +62,46 @@ struct Key {
     int64_t to = std::numeric_limits<int64_t>::max();
 };
 
-// A Gate on its own, outside an engine, at any sample rate: processed in blocks,
-// its changes handed over as automation (so its blocks split there), its
-// sidechain set for each block, as the renderer does.
-class Gate {
+// A Gate on its own, outside an engine (harness/Standalone.h); with a sidechain,
+// it is connected (or not) and handed over for each block, as the renderer does.
+class Gate : public Standalone {
 public:
-    explicit Gate(const Values& values = kBase, double rate = kSampleRate)
-        : processor_(sub::BuiltinRegistry::instance().create("gate")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
-
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
+    explicit Gate(const Values& values = kBase, double rate = kSampleRate) : Standalone("gate", rate, values) {}
 
     // Processes one or two channels of equal length in place, `block` frames at a time.
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256,
              const Key& key = {}) {
+        if (key.left == nullptr) {
+            Standalone::run(channels, changes, block);
+            return;
+        }
+        // A block at a time (ending where a direct change comes, as Standalone's do), its sidechain with it.
         const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
+        for (int64_t start = 0; start < frames;) {
+            int64_t end = std::min<int64_t>(start + block, frames);
+            for (const Change& change : changes)
+                if (change.direct && change.frame > start) end = std::min(end, change.frame);
+            std::vector<Samples> parts;
+            std::vector<Samples*> pointers;
+            for (const Samples* c : channels) parts.emplace_back(c->begin() + start, c->begin() + end);
+            for (Samples& part : parts) pointers.push_back(&part);
+            std::vector<Change> here;
+            for (const Change& change : changes) {
+                const int64_t frame = std::max<int64_t>(0, change.frame);
+                if (frame >= start && frame < end)
+                    here.push_back({frame - start, change.id, change.value, change.direct});
             }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            const bool connected = key.left != nullptr && start >= key.from && start < key.to;
-            processor_->setSidechainConnected(connected);
+            const bool connected = start >= key.from && start < key.to;
+            processor().setSidechainConnected(connected);
             if (connected) {
                 const Samples* right = key.right != nullptr ? key.right : key.left;
-                processor_->setSidechain(key.left->data() + start, right->data() + start);
+                processor().setSidechain(key.left->data() + start, right->data() + start);
             }
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->setSidechain(nullptr, nullptr);
-            processor_->clearAutomation();
+            Standalone::run(pointers, here, static_cast<int>(end - start));
+            processor().setSidechain(nullptr, nullptr);
+            for (size_t c = 0; c < channels.size(); ++c)
+                std::copy(parts[c].begin(), parts[c].end(), channels[c]->begin() + start);
+            start = end;
         }
     }
     // One channel: what comes out.
@@ -138,14 +122,11 @@ public:
     std::vector<float> display(int index) {
         std::vector<float> values;
         positions_[static_cast<size_t>(index)] =
-            processor_->readDisplay(index, positions_[static_cast<size_t>(index)], values);
+            processor().readDisplay(index, positions_[static_cast<size_t>(index)], values);
         return values;
     }
-    uint64_t position(int index) const { return positions_[static_cast<size_t>(index)]; }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     uint64_t positions_[4] = {};
 };
 
@@ -214,7 +195,7 @@ double db(double ratio) { return 20.0 * std::log10(ratio); }
 
 // The gain the gate applies with its openness at `openness` (0..1), not flipped.
 double expectedGain(double openness, float floorDb) {
-    return gate::gain(gate::shape(static_cast<float>(openness)), gate::floorGain(floorDb));
+    return gate::gain(gate::pass(static_cast<float>(openness), 0.f), gate::floorGain(floorDb));
 }
 
 // Whether |out| never exceeds |in| `delay` samples earlier (plus a hair).
@@ -693,22 +674,40 @@ TEST_CASE("the gate listening puts out the key instead") {
 
 TEST_CASE("a filter the gate's key EQ starts has nothing to settle: a new type, or the EQ switched on") {
     // Listening to a key of 40 Hz (0.5) and 3 kHz (0.1) through filters at 30 Hz, where they
-    // are slowest. Switched at `at`: during the 10 ms crossfade, exactly the crossfade between
-    // the two settled outputs (the outputs of gates set so all along), and from its end on,
-    // the new one's. Carrying on from the old filter's state instead, Band-pass to Low Shelf
-    // +15 dB peaked at 1.64 against the new one's 0.91, still 0.73 out after the crossfade:
-    // it could open the gate where neither setting would.
+    // are slowest. Switched at `at`, the new filter is run over the key's last moments first
+    // (gate::warmFrames of them), 16 a frame until it has caught up (gate::caughtUpFrame): until
+    // then exactly the old filter is heard; then, for 10 ms, exactly the crossfade between the
+    // two settled outputs (the outputs of gates set so all along); from its end on, the new
+    // one's. Carrying on from the old filter's state instead, Band-pass to Low Shelf +15 dB
+    // peaked at 1.64 against the new one's 0.91, still 0.73 out after the crossfade: it could
+    // open the gate where neither setting would.
     const int64_t at = 24000, fade = 480, length = 36000;
     const Samples key = plus(tone(40.0, length, 0.5), tone(3000.0, length, 0.1));
     const Values listening = with(kBase, {{"sc_listen", 1.f}, {"sc_eq", 1.f}, {"sc_eq_freq", 30.f}, {"sc_eq_q", 0.71f},
                                           {"sc_eq_gain", 15.f}});
-    // `out` against the crossfade from `before` to `after` starting at `at`.
-    const auto check = [&](const Samples& out, const Samples& before, const Samples& after) {
+    const int most = static_cast<int>(std::lround(gate::kWarmSeconds * kSampleRate));
+    // Where the filter of `type` starting at `at` is first heard.
+    const auto heardFrom = [&](int type) {
+        const sub::dsp::BiquadCoefficients c =
+            gate::keyFilter(static_cast<gate::KeyFilter>(type), 30.0, 0.71, 15.0, kSampleRate);
+        const int frames = gate::warmFrames(c, most);
+        INFO("warmed over " + std::to_string(frames) + " frames");
+        CHECK(frames > 0);
+        CHECK(frames <= most);
+        const int64_t start = at + gate::caughtUpFrame(frames);
+        CHECK(start - at <= most / (gate::kWarmPace - 1));  // (6.7 ms at most)
+        return start;
+    };
+    // `out` against the crossfade from `before` to `after` starting at `start`.
+    const auto check = [&](const Samples& out, const Samples& before, const Samples& after, int64_t start) {
+        CHECK_ARRAY_EQUAL(slice(out, 0, start + 1), slice(before, 0, start + 1));
         const double peak = std::max(maxAbs(slice(before, at - 4800, at)), maxAbs(slice(after, at, at + 4800)));
         double worst = 0.0;
         for (int64_t i = at - 4800; i < length; ++i) {
             const auto x = static_cast<size_t>(i);
-            float t = i < at ? 0.f : i >= at + fade ? 1.f : static_cast<float>(i - at) / static_cast<float>(fade);
+            float t = i < start         ? 0.f
+                      : i >= start + fade ? 1.f
+                                          : static_cast<float>(i - start) / static_cast<float>(fade);
             t = t * t * (3.f - 2.f * t);
             worst = std::max(worst, std::abs(static_cast<double>(out[x]) - (before[x] + t * (after[x] - before[x]))));
         }
@@ -719,24 +718,31 @@ TEST_CASE("a filter the gate's key EQ starts has nothing to settle: a new type, 
         CHECK(maxAbs(slice(out, at, at + 4800)) <= peak * (1.0 + 1e-3));
     };
     for (const auto& [from, to] : std::vector<std::pair<int, int>>{{4, 0}, {0, 4}, {5, 0}, {5, 3}, {3, 1}, {1, 2}}) {
-        INFO("type " + std::to_string(from) + " to " + std::to_string(to));
-        Gate moved(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
-        Gate old(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
-        Gate now(with(listening, {{"sc_eq_type", static_cast<float>(to)}}));
-        check(moved.play(key, {{at, "sc_eq_type", static_cast<float>(to)}}), old.play(key), now.play(key));
+        // (Whatever the blocks: it catches up frame by frame.)
+        for (const int block : {32, 256, 1024}) {
+            INFO("type " + std::to_string(from) + " to " + std::to_string(to) + ", blocks of " + std::to_string(block));
+            Gate moved(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
+            Gate old(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
+            Gate now(with(listening, {{"sc_eq_type", static_cast<float>(to)}}));
+            check(moved.play(key, {{at, "sc_eq_type", static_cast<float>(to)}}, block), old.play(key, {}, block),
+                  now.play(key, {}, block), heardFrom(to));
+        }
     }
-    // Switched on (Low Shelf), it fades in from the key as it is to the filter as if it had
-    // been on all along.
+    // Switched on (Low Shelf), it fades in, once warm, from the key as it is to the filter as if
+    // it had been on all along.
     Gate on(with(listening, {{"sc_eq", 0.f}, {"sc_eq_type", 0.f}}));
     Gate off(with(listening, {{"sc_eq", 0.f}, {"sc_eq_type", 0.f}}));
     Gate always(with(listening, {{"sc_eq_type", 0.f}}));
     const Samples moved = on.play(key, {{at, "sc_eq", 1.f}});
     const Samples plain = off.play(key), filtered = always.play(key);
+    const int64_t start = heardFrom(0);
+    CHECK(start > at);  // (a shelf at 30 Hz is slow: it takes some catching up)
+    CHECK_ARRAY_EQUAL(slice(moved, 0, start), slice(plain, 0, start));
     // (The EQ's fade in is linear, the S/C EQ On ramp: the crossfade's shape here.)
     double worst = 0.0;
-    for (int64_t i = at; i < length; ++i) {
+    for (int64_t i = start; i < length; ++i) {
         const auto x = static_cast<size_t>(i);
-        const float t = std::min(1.f, static_cast<float>(i - at + 1) / static_cast<float>(fade));
+        const float t = std::min(1.f, static_cast<float>(i - start + 1) / static_cast<float>(fade));
         worst = std::max(worst, std::abs(static_cast<double>(moved[x]) - (plain[x] + t * (filtered[x] - plain[x]))));
     }
     INFO("switched on: off by " + std::to_string(worst));
@@ -1007,11 +1013,48 @@ TEST_CASE("at the extremes the gate stays finite and never louder than its input
     }
 }
 
+TEST_CASE("the gate takes NaN and infinity in its input or its sidechain as silence") {
+    // One bad sample, in the input (BuiltinProcessor takes it as silence before the Gate hears it)
+    // or on the sidechain (the Gate takes it so where it reads the key), the key a blend of both;
+    // with the key EQ off and on (a slow bell: its states would keep a NaN for good), listening or
+    // not: what comes out is finite and, to the bit, what a zero there gives.
+    const Samples in = noise(9600, 16, 0.3f), key = noise(9600, 17, 0.6f);
+    const auto at = static_cast<size_t>(2400);
+    const Values eq = {
+        {"sc_eq", 1.f}, {"sc_eq_type", 1.f}, {"sc_eq_freq", 30.f}, {"sc_eq_q", 12.f}, {"sc_eq_gain", 15.f}};
+    const float inf = std::numeric_limits<float>::infinity();
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(), inf, -inf, 1e31f}) {
+        for (const bool onSidechain : {false, true}) {
+            for (const bool filtered : {false, true}) {
+                for (const bool listening : {false, true}) {
+                    INFO(std::to_string(bad) + (onSidechain ? " on the sidechain" : " in the input") +
+                         (filtered ? ", EQ on" : "") + (listening ? ", listening" : ""));
+                    Values values = with(kBase, {{"threshold", -20.f},
+                                                 {"sc_mix", 50.f},
+                                                 {"lookahead", 1.f},
+                                                 {"sc_listen", listening ? 1.f : 0.f}});
+                    if (filtered) values = with(values, eq);
+                    Samples x = in, k = key, cleanX = in, cleanK = key;
+                    (onSidechain ? k : x)[at] = bad;
+                    (onSidechain ? cleanK : cleanX)[at] = 0.f;
+                    Gate broken(values), clean(values);
+                    Samples l = x, r = x, cleanL = cleanX, cleanR = cleanX;
+                    broken.run({&l, &r}, {}, 256, Key{&k});
+                    clean.run({&cleanL, &cleanR}, {}, 256, Key{&cleanK});
+                    CHECK(allFinite(l) && allFinite(r));
+                    CHECK_ARRAY_EQUAL(l, cleanL);
+                    CHECK_ARRAY_EQUAL(r, cleanR);
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("the gate stays stable, and silence rings out to exact zeros") {
     // Noise in and on the sidechain (24 dB up), the EQ on each type at its narrowest
     // and widest, cut and boosted, at both ends of its range; listening, so the
     // filtered key is heard. Then silence: the EQ's states die away to exact zeros,
-    // as soon as its slowest pole takes them below 1e-15 (where they are zeroed):
+    // as soon as its slowest pole takes them below 1e-20 (where dsp::Biquad zeroes them):
     // within a few milliseconds high up, 4 s for a bell 15 dB down at 30 Hz and
     // Q 0.1 (whose slowest pole is a real one near 1 Hz), 8.5 s for one 15 dB up
     // at Q 12.

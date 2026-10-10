@@ -26,7 +26,7 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Ott.cpp](../../engine/src/builtin/devices/Ott.cpp) | Over The Top: multiband upward/downward compression |
 | [builtin/devices/Compressor.cpp](../../engine/src/builtin/devices/Compressor.cpp) | Compressor, with sidechain and displays |
 | [builtin/devices/Gate.cpp](../../engine/src/builtin/devices/Gate.cpp) | Gate: threshold, return, hold, attack and release, floor, flip, lookahead; keyed by its input or a sidechain through an EQ; listening to the key; displays |
-| [builtin/GateDesign.h](../../engine/src/builtin/GateDesign.h) | The Gate's maths (`gate::floorGain`, `closeDb`, `shape`, `pass`, `gain`, `lookaheadSamples`, `keyFilter`, `keyFilterDb`, the key EQ's types and ranges), shared with the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) for the editor's meter and key EQ curve |
+| [builtin/GateDesign.h](../../engine/src/builtin/GateDesign.h) | The Gate's maths (`gate::floorGain`, `closeDb`, `pass`, `gain`, `lookaheadSamples`, `keyFilter`, `keyFilterDb`, the key EQ's types, the parameters' ranges, and how a key EQ filter starts warm: `warmFrames`, `caughtUpFrame`), shared with the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h) for the editor's meter, key EQ curve and drags |
 | [builtin/devices/Limiter.cpp](../../engine/src/builtin/devices/Limiter.cpp) | Limiter: brick-wall lookahead limiting, Soft Clip, True Peak, L/R or M/S with Link, Maximize, its displays |
 | [builtin/LimiterDesign.h](../../engine/src/builtin/LimiterDesign.h) | The Limiter's scales, Soft Clip's knee, the M/S ceiling, the true-peak interpolator and its parabola (`limiter::scales`, `knee`, `shape`, `sharedCeiling`, `truePeakPhases`, `refinedPeak`), shared with the application layer's `LimiterResponse.h` for the editor |
 | [builtin/devices/Multiband.cpp](../../engine/src/builtin/devices/Multiband.cpp) | Multiband Dynamics: a three-way Linkwitz-Riley split, Above and Below per band, Peak and RMS detectors, split switches, activators and solos, a per-band sidechain and Listen, glides on a 32-sample grid, displays |
@@ -476,18 +476,26 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
 - **The key** (what opens it): without a sidechain, its own input. With one, the sidechain times S/C Gain blended
   with the input by S/C Mix (100 %: the sidechain alone; 0 %: the input alone); silence while solo leaves its source
   out. The blend glides over 20 ms when a sidechain is chosen and back to the input when it goes (once removed, the
-  sidechain's sound is gone at once, as when its source stops). S/C Gain and Mix ramp over 20 ms.
+  sidechain's sound is gone at once, as when its source stops). S/C Gain and Mix ramp over 20 ms. A sidechain sample
+  that isn't audio (NaN, infinity, beyond ±1e30: what a broken source can leave in the engine's buffer, which
+  `BuiltinProcessor` cleans only for the device's own input) is taken as silence where the key reads it, so it never
+  reaches the EQ's state or the output.
 - **The key EQ** (S/C EQ On): one RBJ biquad per channel (`gate::keyFilter`, `dsp::BiquadCoefficients`), the six
   types in Live's order; the shelves have the cookbook's plain slope (Q 0.7071: Q is the bell's width and the pass
   filters' resonance); the frequency is held below 0.45 of the rate. Freq and Q glide in log, Gain in dB (a 15 ms
   one-pole, the filter designed again every 32 frames while they move, counted per frame so automation splitting
   the block doesn't change its pace). Switched on, it fades in over 10 ms (and out likewise); a change of type
   crossfades over 10 ms from the old filter (its state kept) to the new. A filter that starts (switched on, or a
-  new type) starts warm: the device keeps the key before the EQ for its last 100 ms, and the new filter is run from
-  rest over it, for as long as its slowest pole takes to fall 60 dB (at most those 100 ms), so it goes on as if it
-  had been running all along and the fade is only ever between two settled outputs. Carried on from the old
-  filter's state instead, a low shelf at 30 Hz overshot the key by about 5 dB for tens of milliseconds, enough to
-  open the gate. Nothing of it but that short history is kept while it is off.
+  new type) starts warm: the device keeps the key before the EQ for its last 100 ms (`gate::kWarmSeconds`), and the
+  new filter is run from rest over it, for as long as its slowest pole takes to fall 60 dB (`gate::warmFrames`, at
+  most those 100 ms), so it goes on as if it had been running all along and the fade is only ever between two
+  settled outputs. Carried on from the old filter's state instead, a low shelf at 30 Hz overshot the key by about
+  5 dB for tens of milliseconds, enough to open the gate. It runs over that history 16 frames a frame
+  (`gate::kWarmPace`) until it has caught up with the key, so no one block pays for it all (100 ms is 19 200 frames
+  a channel at 192 kHz: run at once, a 32-frame block cost 200 µs where it lasts 167 µs), and is heard only from
+  then: the crossfade (or the fade in) starts that much later (`gate::caughtUpFrame`), a few frames for most
+  filters and 6.7 ms at most, with the old filter (or the key unfiltered) heard until then. Nothing of it but that
+  short history is kept while it is off.
 - **Detection**: peak, linked stereo (the louder key channel's level opens the gate for both), with no smoothing
   besides the lookahead window; chatter on low notes is what Return and Hold are for, as in Live (the default 10 ms
   hold holds across a 50 Hz note's zero crossings).
@@ -514,20 +522,22 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   default, as Live's); `idle()` returns true once when it changes, so the engine realigns the tracks.
   `tailSamples()` is the lookahead too (what is still in the delay).
 - **Listen** puts out the key (after S/C Gain, Mix and the EQ, delayed by the lookahead as the audio is) instead
-  of the gated audio, crossfading over 10 ms; on one channel, the mean of the key's two channels.
-- A change of lookahead or EQ type that comes during its crossfade waits until it is done.
+  of the gated audio, crossfading over 10 ms; on one channel, the mean of the key's two channels. At either end of
+  the crossfade the output is the one alone, so nothing of the key is in it while nobody listens.
+- A change of lookahead or EQ type that comes during its crossfade (or while the new type's filter catches up)
+  waits until it is done.
 - **Channels**: two as described; on one, the key's right channel is the input itself (a sidechain still brings
   two). A channel that comes back after one-channel processing starts its delays from silence.
 - **reset()** clears the delays, the detector and the EQ, and closes the gate; the next `render()` starts every
   ramp, the lookahead and the EQ at the parameters as they are then (whether a sidechain is connected is only known
   there), so an offline render's first transient sees the key as set. `prepare()` (a new rate) sizes the delays for
   10 ms and works out the ramps again.
-- **Denormals**: the only recursive state is the key EQ's. `dsp::Biquad` zeroes a section's two states together
-  once both are below 1e-20, and the Gate sooner, once both are below 1e-15: low down or narrow (30 Hz, Q 0.1 or 12),
-  the two states nearly cancel, and zeroing one alone would kick the other back up, so it would go on at about 1e-19
-  for minutes. So silence rings out to exact zeros as soon as the filter's slowest pole takes it there:
-  0.08 s for the default high-pass after loud noise, 4 s for a bell 15 dB down at 30 Hz and Q 0.1 (a real pole
-  near 1 Hz), 8.5 s at most (a bell 15 dB up at 30 Hz and Q 12, the key 24 dB up).
+- **Denormals**: the only recursive state is the key EQ's, and `dsp::Biquad` zeroes a section's two states together
+  once both are below 1e-20 (low down or narrow, at 30 Hz and Q 0.1 or 12, the two nearly cancel: zeroing one alone
+  would kick the other back up, and it would go on at about 1e-19 for minutes). So silence rings out to exact zeros
+  as soon as the filter's slowest pole takes it there: 0.11 s for the default high-pass after loud noise, 5.5 s for a
+  bell 15 dB down at 30 Hz and Q 0.1 (a real pole near 1 Hz), 12 s at most (a bell 15 dB up at 30 Hz and Q 12, the
+  key 24 dB up), all of it below -300 dB after the first moments.
 - **Displays**, one value per 256 samples (`gate::kDisplaySamples`), pushed together so they stay in step: `input`
   (the input's peak in dB as it reaches the gain, after the lookahead), `output` (the output's peak in dB, what is
   heard while listening too), `key` (the key's peak in dB, before the lookahead: what the threshold is compared
@@ -537,8 +547,9 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   engine's own biquad, through the application layer's [GateResponse.h](../../app/src/audio/GateResponse.h)).
 - It costs about 0.13 % of one core at 48 kHz stereo at its defaults
   ([builtin_devices_bench](../../benchmarks/builtin_devices_bench.cpp)), 0.07 % without lookahead, and about 0.18 %
-  with the key EQ (a Q 12 bell), 10 ms of lookahead, listening and flipped. Starting a key EQ filter warm costs a few
-  hundred biquad steps per channel for most settings, at most 100 ms' worth (about 30 µs at 48 kHz), once per start.
+  with the key EQ (a Q 12 bell), 10 ms of lookahead, listening and flipped. A key EQ filter catching up costs 16
+  biquad steps a channel a frame while it does (for at most 6.7 ms): the 32-frame block where it starts, about 7 µs
+  against 1.2 µs, at any rate (run at once, it cost 30-55 µs at 48 kHz and 100-400 µs at 192 and 384 kHz).
 
 ### Limiter (`builtin:limiter`, AudioEffect)
 
@@ -2115,12 +2126,14 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   to; a Hold changed while it counts applying at once); Floor (silence, no effect, in between) and Flip; lookahead as
   latency (opening early, the hold counted from the output, a new window holding what came before it, `idle()`, the
   engine lining the output up with the timeline); keying from a sidechain, its gain and mix; the key EQ (each type
-  plays as `gate::keyFilterDb` draws it; a new type, or the EQ switched on, fading between two settled outputs, with
-  nothing to settle); listening; every control moving without a jump (the largest steps) and click-free (a
-  6th-difference measure against the same change made at once); automation to the sample whatever the block size,
-  and through the engine; reset and a new rate; the extremes at 8 to 192 kHz, stability, and silence ringing out to
-  exact zeros (bounded by the key EQ's own poles); one channel (and back to two without the right's old delay); the
-  displays.
+  plays as `gate::keyFilterDb` draws it; a new type, or the EQ switched on, heard once its filter has caught up with
+  the key, to the frame whatever the blocks, then fading between two settled outputs, with nothing to settle);
+  listening; every control moving without a jump (the largest steps) and click-free (a 6th-difference measure against
+  the same change made at once); automation to the sample whatever the block size, and through the engine; reset and
+  a new rate; the extremes at 8 to 192 kHz; NaN, infinity and absurd levels in the input or on the sidechain (the
+  output what a zero there gives, to the bit, with the EQ on or off, listening or not); stability, and silence
+  ringing out to exact zeros (bounded by the key EQ's own poles); one channel (and back to two without the right's
+  old delay); the displays.
 - [test_limiter_engine.cpp](../../tests/engine/test_limiter_engine.cpp): its listing, latency and tail; below the
   ceiling the input, the lookahead late; no sample over the ceiling for every mode, routing and link and other settings
   (sines, noise, lone spikes, a square, Nyquist); a lone peak caught exactly, the gain falling only over the S - 1
