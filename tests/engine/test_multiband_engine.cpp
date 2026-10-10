@@ -9,10 +9,8 @@
 // that doesn't depend on how blocks are cut.
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <complex>
-#include <cstdio>
 #include <limits>
 #include <memory>
 #include <random>
@@ -21,11 +19,18 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
+
 #include "Engine.h"
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/MultibandDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace mb = sub::multiband;
@@ -34,91 +39,72 @@ namespace {
 
 constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
 
-using Values = std::vector<std::pair<std::string, float>>;
-
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
+using Values = ParamValues;
+using Change = ParamChange;
 
 int64_t at(double seconds, double rate = kSampleRate) { return static_cast<int64_t>(seconds * rate); }
 
-// A Multiband Dynamics on its own, outside an engine, at any sample rate:
-// processed in blocks, its changes handed over as automation (so its blocks
-// split there) as the renderer does, a sidechain if given.
-class Multiband {
-public:
-    explicit Multiband(const Values& values = {}, double rate = kSampleRate)
-        : processor_(sub::BuiltinRegistry::instance().create("multiband")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+// A Multiband Dynamics on its own, outside an engine (harness/Standalone.h), with a sidechain if
+// given, and its displays.
+struct Multiband : Standalone {
+    explicit Multiband(const Values& values = {}, double rate = kSampleRate) : Standalone("multiband", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a
-    // time; `key` (two channels as long, or none) is its sidechain while `keyed`.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256,
-             const std::vector<const Samples*>& key = {}, bool keyed = false) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        processor_->setSidechainConnected(keyed);
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
+    // Processes one or two channels of equal length in place, `block` frames at a time, keyed by `key`
+    // (two channels as long) while `keyed`.
+    void runKeyed(const std::vector<Samples*>& channels, const std::vector<const Samples*>& key, bool keyed,
+                  int block = 256) {
+        processor().setSidechainConnected(keyed);
+        for (size_t start = 0; start < channels[0]->size(); start += static_cast<size_t>(block)) {
+            const size_t n = std::min(static_cast<size_t>(block), channels[0]->size() - start);
+            std::vector<Samples> parts;
+            for (Samples* c : channels) {
+                const auto from = c->begin() + static_cast<int64_t>(start);
+                parts.emplace_back(from, from + static_cast<int64_t>(n));
             }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            if (key.size() == 2) processor_->setSidechain(key[0]->data() + start, key[1]->data() + start);
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-            processor_->setSidechain(nullptr, nullptr);
+            std::vector<Samples*> pointers;
+            for (Samples& part : parts) pointers.push_back(&part);
+            processor().setSidechain(key[0]->data() + start, key[1]->data() + start);
+            run(pointers, {}, block);
+            processor().setSidechain(nullptr, nullptr);
+            for (size_t c = 0; c < channels.size(); ++c)
+                std::copy(parts[c].begin(), parts[c].end(), channels[c]->begin() + static_cast<int64_t>(start));
         }
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
-        run({&mono}, changes, block);
-        return mono;
     }
 
     // Every value of a display so far.
-    std::vector<float> display(const std::string& id) const {
-        const std::vector<sub::DisplayInfo> displays = processor_->displays();
+    std::vector<float> display(const std::string& id) {
+        const std::vector<sub::DisplayInfo> displays = processor().displays();
         for (size_t i = 0; i < displays.size(); ++i) {
             if (displays[i].id != id) continue;
             std::vector<float> values;
-            processor_->readDisplay(static_cast<int>(i), 0, values);
+            processor().readDisplay(static_cast<int>(i), 0, values);
             return values;
         }
         INFO(id);
         REQUIRE(false);
         return {};
     }
-
-private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
 };
+
+// A change of a parameter that isn't automatable (a split switch, a solo, Listen): set between
+// blocks, as the editor sets it.
+Change direct(int64_t frame, const std::string& id, float value) { return {frame, id, value, true}; }
+
+// The CPU time this thread has had (s): what a cost check measures, whatever else the machine runs.
+double threadSeconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user);
+    const auto ticks = [](const FILETIME& t) {
+        return static_cast<double>((static_cast<uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime);
+    };
+    return 1e-7 * (ticks(kernel) + ticks(user));  // (100 ns ticks)
+#else
+    timespec t{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return static_cast<double>(t.tv_sec) + 1e-9 * static_cast<double>(t.tv_nsec);
+#endif
+}
 
 // The setting the tests start from unless they say otherwise: Peak, attack 1 ms, release 50 ms on every band.
 Values base(Values extra = {}) {
@@ -246,10 +232,11 @@ TEST_CASE("multiband dynamics is listed with its parameters") {
     std::vector<std::string> ids = {"xover_low", "xover_high", "low_on", "high_on"};
     for (const char* band : {"low", "mid", "high"})
         for (const char* field :
-             {"in", "out", "above", "above_ratio", "below", "below_ratio", "attack", "release", "solo"})
+             {"active", "in", "out", "above", "above_ratio", "below", "below_ratio", "attack", "release", "solo"})
             ids.push_back(std::string(band) + "_" + field);
-    for (const char* id : {"amount", "time", "output", "soft_knee", "mode", "sc_gain", "sc_mix"}) ids.push_back(id);
-    REQUIRE(ids.size() == 38);
+    for (const char* id : {"amount", "time", "output", "soft_knee", "mode", "sc_gain", "sc_mix", "sc_listen"})
+        ids.push_back(id);
+    REQUIRE(ids.size() == 42);
     CHECK(paramIds(info.params) == ids);
 
     const auto param = [&](const std::string& id) {
@@ -258,14 +245,18 @@ TEST_CASE("multiband dynamics is listed with its parameters") {
         REQUIRE(false);
         return sub::ParamInfo{};
     };
+    // Live's ranges: the Low-Mid crossover 30 Hz..3 kHz, the Mid-High 300 Hz..15 kHz.
     const sub::ParamInfo low = param("xover_low");
     CHECK_EQ(low.name, std::string("Low-Mid Crossover"));
     CHECK_EQ(low.unit, std::string("Hz"));
     CHECK_EQ(low.minValue, 30.f);
-    CHECK_EQ(low.maxValue, 18000.f);
+    CHECK_EQ(low.maxValue, 3000.f);
     CHECK_EQ(low.defaultValue, 120.f);
     CHECK(low.isLog());
-    CHECK_EQ(param("xover_high").defaultValue, 2500.f);
+    const sub::ParamInfo high = param("xover_high");
+    CHECK_EQ(high.minValue, 300.f);
+    CHECK_EQ(high.maxValue, 15000.f);
+    CHECK_EQ(high.defaultValue, 2500.f);
     const sub::ParamInfo ratio = param("mid_above_ratio");
     CHECK_EQ(ratio.name, std::string("Mid Above Ratio"));
     CHECK_EQ(ratio.unit, std::string("ratio"));
@@ -278,10 +269,15 @@ TEST_CASE("multiband dynamics is listed with its parameters") {
     CHECK_EQ(param("high_below").maxValue, 0.f);
     CHECK_EQ(param("high_below").defaultValue, -40.f);
     CHECK_EQ(param("low_above").defaultValue, -20.f);
+    // Attack and release 0.1 ms..5 s, as Live's.
+    for (const char* id : {"low_attack", "mid_release"}) {
+        INFO(id);
+        CHECK_EQ(param(id).minValue, 0.1f);
+        CHECK_EQ(param(id).maxValue, 5000.f);
+        CHECK(param(id).isLog());
+    }
     CHECK_EQ(param("low_attack").defaultValue, 10.f);
-    CHECK(param("low_attack").isLog());
     CHECK_EQ(param("low_release").defaultValue, 100.f);
-    CHECK_EQ(param("low_release").maxValue, 3000.f);
     const sub::ParamInfo mode = param("mode");
     CHECK_EQ(mode.name, std::string("Peak/RMS"));
     CHECK(mode.valueLabels == (std::vector<std::string>{"Peak", "RMS"}));
@@ -293,12 +289,24 @@ TEST_CASE("multiband dynamics is listed with its parameters") {
     CHECK(time.isLog());
     CHECK(param("low_on").valueLabels == (std::vector<std::string>{"Off", "On"}));
     CHECK_EQ(param("high_on").defaultValue, 1.f);
+    CHECK_EQ(param("mid_active").name, std::string("Mid Activator"));
+    CHECK(param("mid_active").valueLabels == (std::vector<std::string>{"Off", "On"}));
+    CHECK_EQ(param("high_active").defaultValue, 1.f);
     CHECK_EQ(param("amount").defaultValue, 100.f);
+    // The sidechain's, named as the Gate's (Live's): S/C Gain -70..+24 dB.
+    CHECK_EQ(param("sc_gain").name, std::string("S/C Gain"));
+    CHECK_EQ(param("sc_gain").minValue, -70.f);
+    CHECK_EQ(param("sc_gain").maxValue, 24.f);
+    CHECK_EQ(param("sc_gain").defaultValue, 0.f);
+    CHECK_EQ(param("sc_mix").name, std::string("S/C Mix"));
     CHECK_EQ(param("sc_mix").defaultValue, 100.f);
+    CHECK_EQ(param("sc_listen").name, std::string("S/C Listen"));
+    CHECK_EQ(param("sc_listen").defaultValue, 0.f);
+    // Not automatable, as Live's: the split switches, and the solos and Listen (ways of listening).
     for (const sub::ParamInfo& p : info.params) {
         INFO(p.id);
         const bool solo = p.id.size() > 5 && p.id.substr(p.id.size() - 5) == "_solo";
-        CHECK_EQ(p.automatable, !solo);
+        CHECK_EQ(p.automatable, !solo && p.id != "low_on" && p.id != "high_on" && p.id != "sc_listen");
     }
 
     // Its displays, and no latency (no lookahead, as Ableton's).
@@ -308,7 +316,8 @@ TEST_CASE("multiband dynamics is listed with its parameters") {
         displays.emplace_back(display.id, display.samplesPerValue);
     std::vector<std::pair<std::string, int>> want;
     for (const char* band : {"low", "mid", "high"})
-        for (const char* kind : {"_in", "_out", "_gain"}) want.emplace_back(std::string(band) + kind, 256);
+        for (const char* kind : {"_in", "_out", "_gain"})
+            want.emplace_back(std::string(band) + kind, mb::kDisplaySamples);
     CHECK(displays == want);
     CHECK(d.processor().hasSidechain());
     CHECK_EQ(d.processor().latencySamples(), 0);
@@ -338,8 +347,8 @@ TEST_CASE("multiband: doing nothing, it is flat: its bands add up to an all-pass
     CHECK(worstDb(neutral) < 0.01);
     // Any crossovers: wide apart, together, and the Low-Mid above the Mid-High (both split there).
     for (const Values& values :
-         {Values{{"xover_low", 30.f}, {"xover_high", 18000.f}}, Values{{"xover_low", 1000.f}, {"xover_high", 1000.f}},
-          Values{{"xover_low", 5000.f}, {"xover_high", 500.f}}}) {
+         {Values{{"xover_low", 30.f}, {"xover_high", 15000.f}}, Values{{"xover_low", 1000.f}, {"xover_high", 1000.f}},
+          Values{{"xover_low", 3000.f}, {"xover_high", 300.f}}}) {
         INFO(std::to_string(values[0].second) + " / " + std::to_string(values[1].second));
         Multiband d(values);
         const Samples h = d.play(impulse(65536));
@@ -554,12 +563,12 @@ TEST_CASE("multiband: each band is its own, and a band switched off belongs to t
                       {"high_above_ratio", 0.5f},
                       {"mid_below", -10.f},
                       {"mid_below_ratio", 2.f}}));
-    const Samples out = d.play(x, {{at(0.5), "high_on", 0.f},
-                                   {at(1.0), "low_on", 0.f},
-                                   {at(1.5), "high_on", 1.f},
-                                   {at(2.0), "low_on", 1.f},
-                                   {at(2.5), "low_on", 0.f},
-                                   {at(2.51), "low_on", 1.f}});
+    const Samples out = d.play(x, {direct(at(0.5), "high_on", 0.f),
+                                   direct(at(1.0), "low_on", 0.f),
+                                   direct(at(1.5), "high_on", 1.f),
+                                   direct(at(2.0), "low_on", 1.f),
+                                   direct(at(2.5), "low_on", 0.f),
+                                   direct(at(2.51), "low_on", 1.f)});
     CHECK(allFinite(out));
     INFO("through the switches " + std::to_string(clickiness(out, at(0.2))));
     CHECK(clickiness(out, at(0.2)) < 2e-4);
@@ -593,11 +602,83 @@ TEST_CASE("multiband: solo lets only the soloed bands be heard") {
     // Toggling solos mid-tone: no click.
     const Samples s = smoothSine(220.0, 2.0);
     Multiband d({{"xover_high", 400.f}});
-    const Samples out = d.play(s, {{at(0.4), "mid_solo", 1.f},
-                                   {at(0.8), "low_solo", 1.f},
-                                   {at(1.2), "mid_solo", 0.f},
-                                   {at(1.6), "low_solo", 0.f}});
+    const Samples out = d.play(s, {direct(at(0.4), "mid_solo", 1.f),
+                                   direct(at(0.8), "low_solo", 1.f),
+                                   direct(at(1.2), "mid_solo", 0.f),
+                                   direct(at(1.6), "low_solo", 0.f)});
     INFO("through the solos " + std::to_string(clickiness(out, at(0.2))));
+    CHECK(clickiness(out, at(0.2)) < 2e-4);
+}
+
+TEST_CASE("multiband: a band's activator bypasses its gains and dynamics, and keeps its split") {
+    // One band (High and Low off), compressing, with its Input and Output: bypassed, its sound passes as it
+    // came (through the split's all-pass) and its displays show the level as it comes, and no change.
+    const Values one = single({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}, {"mid_in", 6.f}, {"mid_out", -12.f}});
+    Multiband bypassed(one + Values{{"mid_active", 0.f}});
+    CHECK_APPROX_TOL(levelDb(bypassed.play(tone(1000.0, 1.0, 0.5))), db(0.5), 0.0, 0.02);
+    CHECK_APPROX_TOL(bypassed.display("mid_in").back(), db(0.5), 0.0, 0.05);
+    CHECK_EQ(bypassed.display("mid_gain").back(), 0.f);
+    CHECK_EQ(bypassed.display("mid_out").back(), bypassed.display("mid_in").back());
+    Multiband working(one);
+    const double driven = db(0.5) + 6.0;
+    CHECK_APPROX_TOL(levelDb(working.play(tone(1000.0, 1.0, 0.5))), driven + (driven + 20.0) * -0.75 - 12.0, 0.0, 0.05);
+
+    // The low band bypassed keeps its frequencies its own: the mid band, compressing, doesn't take them
+    // (as it does with the low band switched off), and the other bands work on.
+    const Values midWorks = base({{"mid_above", -30.f}, {"mid_above_ratio", 4.f}, {"high_above", -30.f},
+                                  {"high_above_ratio", 4.f}, {"low_above", -30.f}, {"low_above_ratio", 4.f}});
+    Multiband lowBypassed(midWorks + Values{{"low_active", 0.f}});
+    CHECK_APPROX_TOL(levelDb(lowBypassed.play(tone(40.0, 2.0, 0.1))), -20.0, 0.0, 0.05);
+    Multiband lowMerged(midWorks + Values{{"low_on", 0.f}});
+    CHECK_APPROX_TOL(levelDb(lowMerged.play(tone(40.0, 2.0, 0.1))), -20.0 - 10.0 * 0.75, 0.0, 0.1);
+    Multiband highWorks(midWorks + Values{{"low_active", 0.f}});
+    CHECK_APPROX_TOL(levelDb(highWorks.play(tone(10000.0, 1.0, 0.1))), -27.42, 0.0, 0.15);
+
+    // A band switched off takes the mid band's gains: the mid band bypassed, nothing shapes them.
+    Multiband highOff(midWorks + Values{{"high_on", 0.f}, {"mid_active", 0.f}});
+    CHECK_APPROX_TOL(levelDb(highOff.play(tone(10000.0, 1.0, 0.1))), -20.0, 0.0, 0.02);
+
+    // Bypassing and activating again glides: no click (a band cut 12 dB and lifted 12 dB in turn).
+    const Samples x = smoothSine(220.0, 2.0);
+    Multiband d(base({{"xover_high", 400.f}, {"low_out", -12.f}, {"mid_in", 12.f}, {"high_above_ratio", 0.5f}}));
+    const Samples out = d.play(x, {{at(0.4), "low_active", 0.f},
+                                   {at(0.8), "mid_active", 0.f},
+                                   {at(1.2), "low_active", 1.f},
+                                   {at(1.21), "high_active", 0.f},
+                                   {at(1.6), "mid_active", 1.f}});
+    INFO("through the activators " + std::to_string(clickiness(out, at(0.2))));
+    CHECK(clickiness(out, at(0.2)) < 2e-4);
+    CHECK(std::abs(levelDb(slice(out, 0, at(0.8))) - levelDb(slice(out, 0, at(1.2)))) > 6.0);  // (they did something)
+}
+
+TEST_CASE("multiband: Listen puts out what the detectors hear") {
+    // Unkeyed: its own input, through the split's all-pass (as the defaults put it out), whatever the
+    // bands do.
+    const Values squashing = base(everyBand("above", -40.f) + everyBand("above_ratio", 8.f));
+    const Samples x = mix({noise(kSampleRate / 2, 24, 0.2f), tone(300.0, 0.5, 0.3)});
+    Multiband plain, listening(squashing + Values{{"sc_listen", 1.f}});
+    CHECK_ALLCLOSE(listening.play(x), plain.play(x), 0.0, 1e-6);
+
+    // Keyed: the key after S/C Gain, as much of it as S/C Mix takes, the rest its own input.
+    const Samples key = mix({noise(kSampleRate / 2, 25, 0.3f), tone(60.0, 0.5, 0.4)});
+    for (const auto& [gain, share] : std::vector<std::pair<float, float>>{{0.f, 1.f}, {-12.f, 1.f}, {0.f, 0.5f}}) {
+        INFO("S/C Gain " + std::to_string(gain) + ", S/C Mix " + std::to_string(share));
+        Multiband keyed(squashing + Values{{"sc_listen", 1.f}, {"sc_gain", gain}, {"sc_mix", 100.f * share}});
+        Samples l = x, r = x;
+        keyed.runKeyed({&l, &r}, {&key, &key}, true);
+        Samples trigger(x.size());
+        for (size_t i = 0; i < x.size(); ++i)
+            trigger[i] = share * amplitude(gain) * key[i] + (1.f - share) * x[i];
+        Multiband reference;
+        CHECK_ALLCLOSE(l, reference.play(trigger), 0.0, 1e-5);
+        CHECK_ARRAY_EQUAL(r, l);
+    }
+
+    // Switched on and off mid-tone: a crossfade, no click.
+    const Samples s = smoothSine(220.0, 1.5);
+    Multiband d(base({{"xover_high", 400.f}, {"mid_out", -12.f}, {"low_in", 12.f}}));
+    const Samples out = d.play(s, {direct(at(0.5), "sc_listen", 1.f), direct(at(1.0), "sc_listen", 0.f)});
+    INFO("through Listen " + std::to_string(clickiness(out, at(0.2))));
     CHECK(clickiness(out, at(0.2)) < 2e-4);
 }
 
@@ -651,13 +732,13 @@ TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     // band, after the band's Input; at Sidechain Mix 0 the device's own.
     for (const float scMix : {100.f, 0.f}) {
         INFO("sc_mix " + std::to_string(scMix));
-        Multiband direct(base({{"mid_in", 6.f}, {"sc_mix", scMix}}));
+        Multiband keyed(base({{"mid_in", 6.f}, {"sc_mix", scMix}}));
         Samples l = tone(1000.0, 0.5, 0.1), r = l;
         const Samples key = tone(1000.0, 0.5, 0.5);
-        direct.run({&l, &r}, {}, 256, {&key, &key}, true);
+        keyed.runKeyed({&l, &r}, {&key, &key}, true);
         const double trigger = scMix > 0.f ? 0.5 : 0.1;
-        CHECK_APPROX_TOL(direct.display("mid_in").back(), db(trigger * lowShare(1000.0, 2500.0)) + 6.0, 0.0, 0.1);
-        CHECK_EQ(direct.display("mid_out").back(), direct.display("mid_in").back());  // (1:1: no change)
+        CHECK_APPROX_TOL(keyed.display("mid_in").back(), db(trigger * lowShare(1000.0, 2500.0)) + 6.0, 0.0, 0.1);
+        CHECK_EQ(keyed.display("mid_out").back(), keyed.display("mid_in").back());  // (1:1: no change)
     }
 }
 
@@ -668,7 +749,7 @@ TEST_CASE("multiband: one channel is keyed by both of the key's, and a key conne
     Multiband d(values);
     Samples x = tone(1000.0, 1.0, 0.1);
     const Samples silent(x.size(), 0.f), right = tone(1000.0, 1.0, 1.0);
-    d.run({&x}, {}, 256, {&silent, &right}, true);
+    d.runKeyed({&x}, {&silent, &right}, true);
     const double want = db(lowShare(1000.0, 2500.0) * amplitude((db(0.5 * lowShare(1000.0, 2500.0)) + 25.0) * -0.75) +
                            highShare(1000.0, 2500.0));
     CHECK_APPROX_TOL(levelDb(x) + 20.0, want, 0.0, 0.5);  // -13.2
@@ -680,29 +761,31 @@ TEST_CASE("multiband: one channel is keyed by both of the key's, and a key conne
     Multiband again(values), fresh(values);
     for (Multiband* device : {&again, &fresh}) {
         Samples a = main, b = main;
-        device->run({&a, &b}, {}, 256, {&key, &key}, device == &again);  // (fresh: not connected)
-        for (int i = 0; i < 2; ++i) {                                    // two seconds of its own input
+        device->runKeyed({&a, &b}, {&key, &key}, device == &again);  // (fresh: not connected)
+        for (int i = 0; i < 2; ++i) {                                // two seconds of its own input
             a = main;
             b = main;
-            device->run({&a, &b}, {}, 256, {&key, &key}, false);
+            device->runKeyed({&a, &b}, {&key, &key}, false);
         }
     }
     Samples a1 = main, b1 = main, a2 = main, b2 = main;
-    again.run({&a1, &b1}, {}, 256, {&key, &key}, true);
-    fresh.run({&a2, &b2}, {}, 256, {&key, &key}, true);
+    again.runKeyed({&a1, &b1}, {&key, &key}, true);
+    fresh.runKeyed({&a2, &b2}, {&key, &key}, true);
     CHECK_ALLCLOSE(slice(a1, 0, at(0.05)), slice(a2, 0, at(0.05)), 0.0, 1e-6);
     CHECK(maxAbs(slice(a1, 0, at(0.05))) > 0.05);
 }
 
 TEST_CASE("multiband: every control changes without a click") {
     // A 220 Hz tone split three ways (Mid-High at 400 Hz, so every band carries part of it), every control
-    // jumping in turn, as automation's steps make them, and several at once.
-    const Samples x = smoothSine(220.0, 5.0);
+    // jumping in turn, as automation's steps make them (the split switches, the solos and Listen, which
+    // aren't automatable, set between blocks as the editor sets them), and several at once.
+    const Samples x = smoothSine(220.0, 6.0);
     std::vector<Change> changes;
     double t = 0.3;
     const auto add = [&](const std::string& id, float value, bool sameFrame = false) {
         if (!sameFrame) t += 0.09;
-        changes.push_back({at(t), id, value});
+        const bool editorOnly = id == "low_on" || id == "high_on" || id == "sc_listen" || id.ends_with("_solo");
+        changes.push_back({at(t), id, value, editorOnly});
     };
     for (const char* band : {"low", "mid", "high"}) {
         const std::string b = band;
@@ -714,6 +797,8 @@ TEST_CASE("multiband: every control changes without a click") {
         add(b + "_below", -40.f);
         add(b + "_in", 12.f);
         add(b + "_out", -12.f);
+        add(b + "_active", 0.f);
+        add(b + "_active", 1.f);
         add(b + "_above_ratio", 1.f);
     }
     for (const auto& [id, value] : std::vector<std::pair<std::string, float>>{
@@ -721,17 +806,18 @@ TEST_CASE("multiband: every control changes without a click") {
              {"xover_high", 1000.f},  {"high_on", 0.f},  {"low_on", 0.f},   {"high_on", 1.f},     {"low_on", 1.f},
              {"mid_solo", 1.f},       {"low_solo", 1.f}, {"mid_solo", 0.f}, {"low_solo", 0.f},    {"mode", 0.f},
              {"soft_knee", 1.f},      {"time", 1000.f},  {"time", 10.f},    {"mode", 1.f},        {"soft_knee", 0.f},
-             {"mid_below_ratio", 8.f}})
+             {"mid_below_ratio", 8.f}, {"sc_listen", 1.f}, {"sc_listen", 0.f}})
         add(id, value);
-    // Several at the same frame.
-    add("mid_above_ratio", 4.f);
+    // Several at the same frame (what is set between blocks first: a block starts there).
+    add("high_on", 0.f);
+    add("mid_above_ratio", 4.f, true);
     add("mid_above", -35.f, true);
     add("xover_low", 200.f, true);
     add("xover_high", 500.f, true);
     add("amount", 100.f, true);
-    add("high_on", 0.f, true);
+    add("mid_active", 0.f, true);
     add("mode", 0.f, true);
-    REQUIRE(t < 4.8);
+    REQUIRE(t < 5.8);
 
     Multiband d(everyBand("attack", 1.f) + Values{{"xover_high", 400.f}});
     const Samples out = d.play(x, changes);
@@ -834,22 +920,24 @@ TEST_CASE("multiband: silence rings out to exact zeros") {
 TEST_CASE("multiband: it stays stable at the extremes and at any sample rate") {
     const auto band = [](const std::string& field, float value) { return everyBand(field, value); };
     const std::vector<Values> extremes = {
-        {{"xover_low", 30.f}, {"xover_high", 18000.f}},
-        {{"xover_low", 18000.f}, {"xover_high", 30.f}},
-        {{"xover_low", 18000.f}, {"xover_high", 18000.f}},
-        {{"xover_low", 30.f}, {"xover_high", 30.f}},
+        {{"xover_low", 30.f}, {"xover_high", 15000.f}},
+        {{"xover_low", 3000.f}, {"xover_high", 300.f}},
+        {{"xover_low", 3000.f}, {"xover_high", 15000.f}},
+        {{"xover_low", 30.f}, {"xover_high", 300.f}},
         band("above", -80.f) + band("above_ratio", 0.25f) + band("below", -80.f) + band("below_ratio", 100.f) +
-            band("in", 24.f) + band("out", 24.f) + band("attack", 0.1f) + band("release", 1.f) +
+            band("in", 24.f) + band("out", 24.f) + band("attack", 0.1f) + band("release", 0.1f) +
             Values{{"output", 24.f}, {"time", 10.f}, {"soft_knee", 1.f}, {"mode", 0.f}},
         band("above", 0.f) + band("above_ratio", 100.f) + band("below", 0.f) + band("below_ratio", 0.25f) +
-            band("in", -24.f) + band("out", -24.f) + band("attack", 1000.f) + band("release", 3000.f) +
+            band("in", -24.f) + band("out", -24.f) + band("attack", 5000.f) + band("release", 5000.f) +
             Values{{"output", -24.f}, {"time", 1000.f}, {"mode", 1.f}},
         band("above", -80.f) + band("above_ratio", 0.25f) + band("below", 0.f) + band("below_ratio", 100.f) +
-            band("in", 24.f) + band("out", 24.f) + band("attack", 0.1f) + band("release", 1.f) +
-            Values{{"output", 24.f}, {"time", 10.f}, {"xover_low", 30.f}, {"xover_high", 18000.f}},
+            band("in", 24.f) + band("out", 24.f) + band("attack", 0.1f) + band("release", 0.1f) +
+            Values{{"output", 24.f}, {"time", 10.f}, {"xover_low", 30.f}, {"xover_high", 15000.f}},
         band("above", -80.f) + band("above_ratio", 0.25f) + band("in", 24.f) + band("out", 24.f) +
-            band("attack", 0.1f) + band("release", 1.f) +
+            band("attack", 0.1f) + band("release", 0.1f) +
             Values{{"output", 24.f}, {"time", 10.f}, {"low_on", 0.f}, {"high_on", 0.f}, {"soft_knee", 1.f}},
+        band("active", 0.f) + band("in", 24.f) + band("above_ratio", 0.25f) +
+            Values{{"sc_listen", 1.f}, {"sc_gain", -70.f}, {"output", 24.f}},
     };
     for (const double rate : {44100.0, 192000.0}) {
         for (size_t e = 0; e < extremes.size(); ++e) {
@@ -867,28 +955,73 @@ TEST_CASE("multiband: it stays stable at the extremes and at any sample rate") {
     }
 }
 
-TEST_CASE("multiband: it gets over a broken input's NaNs and infinities") {
-    // 10 ms of them in noise: once the input is finite again, so is the output (within its 25 ms
-    // window and a 32-sample flush); then it plays as if they had never come (an infinite level
-    // compressed it fully, and that lets go at the release time).
+TEST_CASE("multiband: it gets over a broken input's NaNs and infinities, and its key's") {
+    // 10 ms of them in noise, as the input (which BuiltinProcessor::process() takes as silence) or as the
+    // key (which the device takes so itself): the output stays finite, and soon plays as if they had
+    // never come.
     const Values values = base(everyBand("above_ratio", 4.f) + everyBand("below_ratio", 4.f));
+    const auto broken = [](Samples x, bool oneSide) {
+        for (int64_t i = at(0.3); i < at(0.31); ++i)
+            x[static_cast<size_t>(i)] = oneSide ? -std::numeric_limits<float>::infinity()
+                                        : i % 3 == 0 ? std::numeric_limits<float>::quiet_NaN()
+                                                     : (i % 3 == 1 ? std::numeric_limits<float>::infinity() : 1e38f);
+        return x;
+    };
     for (const float mode : {0.f, 1.f}) {
         INFO(mode == 0.f ? "Peak" : "RMS");
         const Samples left = noise(kSampleRate, 18, 0.3f), right = noise(kSampleRate, 19, 0.3f);
+        Samples l = broken(left, false), r = broken(right, true);
+        Multiband d(values + Values{{"mode", mode}}), clean(values + Values{{"mode", mode}});
+        d.run({&l, &r});
+        Samples cl = left, cr = right;
+        clean.run({&cl, &cr});
+        CHECK(allFinite(l) && allFinite(r));
+        CHECK(maxAbs(l) < 10.0);
+        CHECK_ALLCLOSE(slice(l, at(0.9)), slice(cl, at(0.9)), 0.0, 1e-5);
+        CHECK_ALLCLOSE(slice(r, at(0.9)), slice(cr, at(0.9)), 0.0, 1e-5);
+
+        // The key's, heard by the detectors and by Listen.
+        for (const float listen : {0.f, 1.f}) {
+            INFO("listening " + std::to_string(listen));
+            const Values keyed = values + Values{{"mode", mode}, {"sc_listen", listen}};
+            const Samples keyLeft = noise(kSampleRate, 20, 0.3f), keyRight = noise(kSampleRate, 21, 0.3f);
+            const Samples badLeft = broken(keyLeft, false), badRight = broken(keyRight, true);
+            Multiband k(keyed), kClean(keyed);
+            Samples kl = left, kr = right, ql = left, qr = right;
+            k.runKeyed({&kl, &kr}, {&badLeft, &badRight}, true);
+            kClean.runKeyed({&ql, &qr}, {&keyLeft, &keyRight}, true);
+            CHECK(allFinite(kl) && allFinite(kr));
+            CHECK(maxAbs(kl) < 10.0);
+            CHECK_ALLCLOSE(slice(kl, at(0.9)), slice(ql, at(0.9)), 0.0, 1e-5);
+            CHECK_ALLCLOSE(slice(kr, at(0.9)), slice(qr, at(0.9)), 0.0, 1e-5);
+            Samples mono = left;
+            Multiband one(keyed);
+            one.runKeyed({&mono}, {&badLeft, &badRight}, true);
+            CHECK(allFinite(mono));
+        }
+    }
+}
+
+TEST_CASE("multiband: the loudest input it is given leaves it finite, and it comes back") {
+    // 10 ms at 1e30 (+600 dBFS, the most BuiltinProcessor::process() lets in) in noise, every band
+    // compressing and lifting: no state overflows (a square of it would), and once the RMS detector has
+    // come down from its +100 dB ceiling (about a second) the output is what it would have been.
+    const Values values = base(everyBand("above_ratio", 4.f) + everyBand("below_ratio", 4.f));
+    for (const float mode : {0.f, 1.f}) {
+        INFO(mode == 0.f ? "Peak" : "RMS");
+        const Samples left = noise(3 * kSampleRate, 22, 0.3f), right = noise(3 * kSampleRate, 23, 0.3f);
         Samples l = left, r = right;
         for (int64_t i = at(0.3); i < at(0.31); ++i) {
-            l[static_cast<size_t>(i)] = i % 3 == 0 ? std::numeric_limits<float>::quiet_NaN()
-                                                   : (i % 3 == 1 ? std::numeric_limits<float>::infinity() : 1e38f);
-            r[static_cast<size_t>(i)] = -std::numeric_limits<float>::infinity();
+            l[static_cast<size_t>(i)] = i % 2 ? 1e30f : -1e30f;
+            r[static_cast<size_t>(i)] = 1e30f;
         }
         Multiband d(values + Values{{"mode", mode}}), clean(values + Values{{"mode", mode}});
         d.run({&l, &r});
         Samples cl = left, cr = right;
         clean.run({&cl, &cr});
-        CHECK(allFinite(slice(l, at(0.36))) && allFinite(slice(r, at(0.36))));
-        CHECK(maxAbs(slice(l, at(0.36))) < 10.0);
-        CHECK_ALLCLOSE(slice(l, at(0.9)), slice(cl, at(0.9)), 0.0, 1e-5);
-        CHECK_ALLCLOSE(slice(r, at(0.9)), slice(cr, at(0.9)), 0.0, 1e-5);
+        CHECK(allFinite(l) && allFinite(r));
+        CHECK_ALLCLOSE(slice(l, at(2.0)), slice(cl, at(2.0)), 0.0, 1e-5);
+        CHECK_ALLCLOSE(slice(r, at(2.0)), slice(cr, at(2.0)), 0.0, 1e-5);
     }
 }
 
@@ -982,15 +1115,20 @@ TEST_CASE("multiband: its displays show each band's level in and out and its gai
 }
 
 TEST_CASE("multiband: what it costs") {
-    Multiband d(everyBand("above_ratio", 4.f) + everyBand("below_ratio", 4.f));
-    Samples l = noise(static_cast<size_t>(10 * kSampleRate), 15, 0.3f), r = noise(l.size(), 16, 0.3f);
-    const auto start = std::chrono::steady_clock::now();
-    d.run({&l, &r});
-    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    std::printf("multiband: 10 s of stereo at 48 kHz in %.3f s (%.2f %% of a core)\n", seconds, seconds * 10.0);
-    CHECK(allFinite(l));
 #ifdef NDEBUG
-    CHECK(seconds < 0.5);  // (a bound for pathologies only)
+    // 10 s of stereo at 48 kHz, every band's sides working, in this thread's CPU time (what else the machine
+    // runs doesn't count), the best of three. A bound for pathologies only: it takes about 0.07 s.
+    double best = 1e9;
+    for (int run = 0; run < 3; ++run) {
+        Multiband d(everyBand("above_ratio", 4.f) + everyBand("below_ratio", 4.f));
+        Samples l = noise(static_cast<size_t>(10 * kSampleRate), 15, 0.3f), r = noise(l.size(), 16, 0.3f);
+        const double start = threadSeconds();
+        d.run({&l, &r});
+        best = std::min(best, threadSeconds() - start);
+        CHECK(allFinite(l));
+    }
+    INFO("10 s in " + std::to_string(best) + " s");
+    CHECK(best < 0.5);
 #endif
 }
 
@@ -1001,7 +1139,7 @@ TEST_CASE("multiband: the output doesn't depend on how blocks are cut") {
     const Values values = everyBand("above_ratio", 4.f) + everyBand("below_ratio", 4.f);
     const std::vector<Change> changes = {{at(0.2), "xover_high", 600.f},
                                          {at(0.4), "mid_above", -35.f},
-                                         {at(0.6), "high_on", 0.f},
+                                         direct(at(0.6), "high_on", 0.f),
                                          {at(0.7), "mode", 0.f}};
     std::vector<Samples> outs;
     std::vector<std::vector<float>> displays;

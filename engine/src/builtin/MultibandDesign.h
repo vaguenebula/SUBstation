@@ -22,7 +22,8 @@
 //
 // Shared by the device (builtin/devices/Multiband.cpp), which runs these per
 // sample on its detectors' levels, and its editor (through the application
-// layer's multibandGainDb()), so the curve and readouts drawn are the sound.
+// layer's multibandGainDb() and the ranges and display rate it hands on), so
+// the curve and readouts drawn are the sound.
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +39,7 @@ inline constexpr float kKneeDb = 6.f;  // Soft Knee's width
 inline constexpr float kUpwardFloorDb = -96.f, kUpwardFadeDb = 24.f;
 inline constexpr float kMaxBoostDb = 30.f, kMaxCutDb = -96.f;
 inline constexpr float kDisplayFloorDb = -90.f;  // the displays' levels' floor
+inline constexpr int kDisplaySamples = 256;      // audio per display value
 // The detectors' windows (seconds): a band's lowest period, within these; RMS at least kMinRmsSeconds.
 inline constexpr double kMaxWindowSeconds = 0.025, kMinWindowSeconds = 0.001, kMinRmsSeconds = 0.010;
 
