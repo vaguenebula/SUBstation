@@ -472,7 +472,8 @@ public:
         indices_[tail_ & mask_] = count_;
         ++tail_;
         while (indices_[head_ & mask_] + static_cast<uint64_t>(maxWindow_) <= count_) ++head_;
-        const uint64_t oldest = count_ + 1 >= static_cast<uint64_t>(window) ? count_ + 1 - static_cast<uint64_t>(window) : 0;
+        const auto span = static_cast<uint64_t>(window);
+        const uint64_t oldest = count_ + 1 >= span ? count_ + 1 - span : 0;
         ++count_;
         if (indices_[head_ & mask_] >= oldest) return values_[head_ & mask_];
         size_t low = head_, high = tail_ - 1;  // (the value just pushed is always recent enough)
@@ -529,7 +530,8 @@ public:
     void prepare(int maxBlock, int maxFactorLog2 = kMaxFactorLog2) {
         maxBlock_ = std::max(1, maxBlock);
         maxFactorLog2_ = std::clamp(maxFactorLog2, 0, kMaxFactorLog2);
-        for (int s = 0; s < maxFactorLog2_; ++s) stages_[static_cast<size_t>(s)].design(kStageTaps[s], kStageBeta[s], maxBlock_ << s);
+        for (int s = 0; s < maxFactorLog2_; ++s)
+            stages_[static_cast<size_t>(s)].design(kStageTaps[s], kStageBeta[s], maxBlock_ << s);
         const size_t most = static_cast<size_t>(maxBlock_) << maxFactorLog2_;
         work_[0].assign(most, 0.f);
         work_[1].assign(most, 0.f);

@@ -1084,7 +1084,8 @@ The editors:
 4. Draw anything else in a `DeviceCanvas` subclass in `ui/src/devices` (`QML_ELEMENT`; a new header in a build folder
    configured before it may be skipped by AUTOMOC: see [building.md](../building.md#gotchas)): read what you draw in
    `sync()`, the device's displays in `refreshDisplays()` (`readDisplay("<id>")`, `readRecent()` for only the newest
-   values, or `readDisplayAt()` for streams that must line up), write with `setParams()`. Animate in `refreshDisplays()` by the time since the last tick, with
+   values, or `readDisplayAt()` for streams that must line up), write with `setParams()`. Animate in
+   `refreshDisplays()` by the time since the last tick (`tickSeconds()`), with
    [EditorPaint](../../ui/src/devices/EditorPaint.h)'s helpers (`MeterBallistics` for a meter's fall and held peak,
    `Eased` stepped by `easeFraction(dt, seconds)` for a value easing towards its target), so it looks the same
    whatever the tick's rate; `paint()` only reads them, and draws with `dbToY()`, `drawLevelMeter()`,

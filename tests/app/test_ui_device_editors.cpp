@@ -206,8 +206,9 @@ private Q_SLOTS:
     // --- The registry -----------------------------------------------------------------------
 
     void registry() {
-        for (const char* kind : {"amp", "chorus", "compressor", "delay", "disperser", "eq", "erosion", "gate", "limiter",
-                                 "multiband", "phaser", "reverb", "sampler", "saturator", "sidechain", "spectral"}) {
+        for (const char* kind : {"amp", "chorus", "compressor", "delay", "disperser", "eq", "erosion", "gate",
+                                 "limiter", "multiband", "phaser", "reverb", "sampler", "saturator", "sidechain",
+                                 "spectral"}) {
             QVariant url;
             QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url),
                                       Q_ARG(QVariant, QString::fromLatin1(kind)));
@@ -1230,7 +1231,8 @@ private Q_SLOTS:
         auto* ratioParam = qvariant_cast<sub::ui::DeviceParam*>(ratio);
         QVERIFY(ratioParam);
         QCOMPARE(ratioParam->value(), 4.0);
-        QVERIFY(!qvariant_cast<sub::ui::DeviceParam*>(nothing) || !qvariant_cast<sub::ui::DeviceParam*>(nothing)->valid());
+        auto* nothingParam = qvariant_cast<sub::ui::DeviceParam*>(nothing);
+        QVERIFY(!nothingParam || !nothingParam->valid());
 
         QQuickItem* cell = find(item, QStringLiteral("threshold"));
         QVERIFY(cell);

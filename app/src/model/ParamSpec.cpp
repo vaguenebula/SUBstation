@@ -43,7 +43,8 @@ QString formatValue(double value, const QString& unit) {
         if (beats > 0 && beats % 4 == 0) return countText(beats / 4, QStringLiteral("Bar"), QStringLiteral("Bars"));
         return countText(beats, QStringLiteral("Beat"), QStringLiteral("Beats"));
     }
-    if (unit == u"\u00B0") return formatFixed(value, 0) + QStringLiteral("\u00B0");  // an angle (a phase offset): "180°"
+    // An angle (a phase offset): "180°".
+    if (unit == u"\u00B0") return formatFixed(value, 0) + QStringLiteral("\u00B0");
     // A slope (the Spectral Compressor's Tilt): "-1.5 dB/oct".
     if (unit == u"dB/oct") return formatFixed(value, 1) + QStringLiteral(" dB/oct");
     if (unit == u"ratio") {  // a ratio either side of 1, as Live writes it: "1:4.00", "1:66.7", "1:100", "1:0.500"

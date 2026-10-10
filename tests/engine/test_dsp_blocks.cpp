@@ -99,7 +99,8 @@ TEST_CASE("dsp blocks: noise is uniform, repeatable, and fast tanh is tanh") {
     CHECK_NEAR(square / 100000, 1.0 / 3.0, 0.01);  // uniform in -1..1
 
     double worst = 0.0;
-    for (float x = -8.f; x <= 8.f; x += 0.001f) worst = std::max(worst, std::abs(double(dsp::fastTanh(x)) - std::tanh(x)));
+    for (float x = -8.f; x <= 8.f; x += 0.001f)
+        worst = std::max(worst, std::abs(double(dsp::fastTanh(x)) - std::tanh(x)));
     CHECK(worst < 2e-4);
     CHECK_EQ(dsp::fastTanh(100.f), 1.f);
     CHECK_EQ(dsp::fastTanh(-100.f), -1.f);
@@ -236,7 +237,8 @@ TEST_CASE("dsp blocks: oversampling is transparent in band, delayed by its laten
             INFO("at " + std::to_string(freq) + " Hz");
             os.reset();
             std::vector<float> in(48000), out(48000);
-            for (size_t i = 0; i < in.size(); ++i) in[i] = static_cast<float>(0.5 * std::sin(2 * kPi * freq * double(i) / kRate));
+            for (size_t i = 0; i < in.size(); ++i)
+                in[i] = static_cast<float>(0.5 * std::sin(2 * kPi * freq * double(i) / kRate));
             for (size_t at = 0; at < in.size();) {
                 const int n = std::min<int>(197, static_cast<int>(in.size() - at));
                 float* up = os.up(in.data() + at, n);
@@ -264,7 +266,8 @@ TEST_CASE("dsp blocks: oversampled saturation folds back far less") {
         std::vector<double> out(static_cast<size_t>(n));
         std::vector<float> block(512), result(512);
         for (int at = 0; at < n; at += 512) {
-            for (int i = 0; i < 512; ++i) block[size_t(i)] = static_cast<float>(std::sin(2 * kPi * 7000.0 * (at + i) / kRate));
+            for (int i = 0; i < 512; ++i)
+                block[size_t(i)] = static_cast<float>(std::sin(2 * kPi * 7000.0 * (at + i) / kRate));
             float* up = os.up(block.data(), 512);
             for (int i = 0; i < 512 * os.factor(); ++i) up[i] = std::clamp(3.f * up[i], -1.f, 1.f);
             os.down(up, 512, result.data());
