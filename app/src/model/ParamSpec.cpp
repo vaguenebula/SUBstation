@@ -54,6 +54,7 @@ QString formatValue(double value, const QString& unit) {
     }
     if (unit == u"dial") return formatFixed(value, 1);  // an amp's 0..10 dial: "5.0"
     if (unit == u"size") return formatFixed(value, 2);  // a room's size, a bare number (the Reverb's, as Live's)
+    if (unit == u"°") return formatFixed(value, 0) + QStringLiteral("°");  // an angle (a phase offset)
     return formatFixed(value, 2) + u' ' + unit;
 }
 

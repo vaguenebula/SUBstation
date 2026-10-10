@@ -1305,6 +1305,23 @@ TEST_CASE("the reverb's silence rings out to exact zeros") {
             CHECK(maxAbs(slice(ax, wake)) > 0.01);
             CHECK_ARRAY_EQUAL(slice(ax, wake), slice(by, wake));
         }
+        // And with the delays jumping as it wakes (at each Smooth, turning back and on mid-glide): what the
+        // reads reach is cleared as far as their glides have come, a sub-chunk ahead, and it plays the same.
+        for (const float smooth : {0.f, 1.f, 2.f}) {
+            INFO("woken as the delays jump, Smooth " + std::to_string(static_cast<int>(smooth)));
+            const int64_t wake = asleep + 100;
+            Samples a = heard, b(heard.size(), 0.f);
+            for (size_t i = static_cast<size_t>(wake); i < a.size(); ++i)
+                a[i] = b[i] = 0.3f * static_cast<float>(std::sin(0.01 * static_cast<double>(i)));
+            const std::vector<Change> jump = {{wake, "size", 500.f},  {wake, "predelay", 250.f},
+                                              {wake, "scale", 100.f}, {wake + 2000, "size", 1.f},
+                                              {wake + 4000, "size", 400.f}};
+            const Values smoothed = with(values, {{"smooth", smooth}});
+            Reverb x(smoothed), y(smoothed);
+            const Samples ax = x.play(a, jump), by = y.play(b, jump);
+            CHECK(maxAbs(slice(ax, wake)) > 0.01);
+            CHECK_ARRAY_EQUAL(slice(ax, wake), slice(by, wake));
+        }
     }
 
     // Asleep with Spin on, its phase goes on (the editor's particles drift on).

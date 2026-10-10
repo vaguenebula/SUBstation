@@ -1552,18 +1552,16 @@ private:
         for (int j = 0; j < diffusersRunning(); ++j) diffusers_.letGo(j);
     }
     // Before a sub-chunk's reads: what they can reach of a buffer let go is cleared (LineBank::ensure()),
-    // each read's delay bounded over the sub-chunk by its glides' (each moves between where it is, where
-    // it was heading, and its target) and its ramps' ends.
+    // each read's delay bounded over the sub-chunk by where its glides go in it (travel()) and its ramps'
+    // ends. So a jump (Size's, say) clears only as far as its glide has come, not to its target at once.
     void clearAhead(int n) noexcept {
-        const auto bounds = [](const Smooth& g) {
-            return std::pair{std::min({g.first, g.value, g.target}), std::max({g.first, g.value, g.target})};
-        };
-        const auto [sLo, sHi] = bounds(size_);
-        const auto [cLo, cHi] = bounds(scale_);
+        if (!input_.anyStale() && !lines_.anyStale() && !allpasses_.anyStale() && !diffusers_.anyStale()) return;
+        const auto [sLo, sHi] = travel(size_, n, sizeRatio_);
+        const auto [cLo, cHi] = travel(scale_, n);
         if (input_.anyStale()) {
             // The first reflection's at the predelay (and drifts later only); the last's, or the network's.
-            const auto [pLo, pHi] = bounds(predelay_);
-            const double onset = bounds(onset_).second;
+            const auto [pLo, pHi] = travel(predelay_, n);
+            const double onset = travel(onset_, n).second;
             const double drift = 2.0 * reverb::kSpinDepthMs * sampleRate_ / 1000.0;  // (at most)
             input_.ensure(0, pLo, pHi + std::max(tap_[kMaxTaps - 1].time * sHi, onset) + drift, n);
         }
@@ -1584,6 +1582,19 @@ private:
                 diffusers_.ensure(j, diffuserDelay(diffuser, sLo * cLo), diffuserDelay(diffuser, sHi * cHi), n);
             }
         }
+    }
+    // The least and most a per-sample glide's value is over the next `n` samples, from where it is now: it is
+    // moved on a copy exactly as front() moves it (its coefficient times `ratio` a sample: Size's pace).
+    static std::pair<double, double> travel(Smooth g, int n, double ratio = 1.0) noexcept {
+        double lo = g.value, hi = g.value;
+        if (g.settled()) return {lo, hi};
+        for (int i = 0; i < n; ++i) {
+            g.c *= ratio;
+            const double v = g.next();
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+        return {lo, hi};
     }
 
     // The 256-sample displays, at sample `i` of the sub-chunk: the input's and

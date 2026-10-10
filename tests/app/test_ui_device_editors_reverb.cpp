@@ -296,6 +296,9 @@ private Q_SLOTS:
         QCOMPARE(paramOf(control(s.view, "sizeKnob"))->text(), QStringLiteral("100.00"));
         QCOMPARE(formatValue(0.22, QStringLiteral("size")), QStringLiteral("0.22"));
         QCOMPARE(formatValue(500.0, QStringLiteral("size")), QStringLiteral("500.00"));
+        // Stereo in whole degrees.
+        QCOMPARE(paramOf(control(s.view, "stereoKnob"))->text(), QStringLiteral("100°"));
+        QCOMPARE(formatValue(119.6, QStringLiteral("°")), QStringLiteral("120°"));
         QCOMPARE(box(s.view, "inFreqBox")->text(), QStringLiteral("830 Hz"));
         QCOMPARE(box(s.view, "hiFreqBox")->text(), QStringLiteral("4.50 kHz"));
 
