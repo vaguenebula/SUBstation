@@ -1,11 +1,11 @@
 #include "controls/KnobItem.h"
 
+#include "input/Modifiers.h"
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
 #include <QKeyEvent>
 #include <QMouseEvent>
-#include <QUuid>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -29,8 +29,6 @@ std::optional<double> parsedNumber(const QJSValue& result) {
 }
 
 }  // namespace
-
-QString newGestureKey() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
 void drawAutomationDot(SgPainter& p, const QString& state, const QPointF& at) {
     const QColor color = Theme::automationDotColor(state);
@@ -321,7 +319,7 @@ void KnobItem::wheelEvent(QWheelEvent* event) {
 
 bool KnobItem::typesInto(const QKeyEvent* event) const {
     return typeable() && !event->text().isEmpty() && kTypingKeys.contains(event->text()) &&
-           !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+           !hasShortcutModifier(event->modifiers());
 }
 
 void KnobItem::keyPressEvent(QKeyEvent* event) {

@@ -61,6 +61,13 @@ inline std::string makeWav(const std::vector<float>& interleaved, int channels =
     return writeWav(tempDir() / ("clip" + std::to_string(counter++) + ".wav"), interleaved, channels, sampleRate);
 }
 
+// A click: one sample at `level` (at frame `at`) in `frames` of mono silence.
+inline std::string clickWav(double level, size_t frames = 1000, size_t at = 0) {
+    std::vector<float> click(frames, 0.f);
+    click[at] = static_cast<float>(level);
+    return makeWav(click);
+}
+
 // One second of constant 0.5 in both channels.
 inline std::string dcWav() { return makeWav(std::vector<float>(kSampleRate * 2, 0.5f), 2); }
 
@@ -108,6 +115,19 @@ inline uint32_t addTestPlugin(sub::Engine& engine, uint32_t chain, const std::st
     return engine.addPluginProcessor(chain, "VST3", testPluginsBundle(), testPluginUids().at(name), index);
 }
 
+// SUB Test Effect's parameters (tests/vst3_plugins/test_effect.cpp): its gain
+// (0..1 is 0..2 times), its latency in samples, and bypass.
+enum { FX_GAIN, FX_LATENCY, FX_BYPASS };
+
+// SUB Test Effect on a track (or the master), `latency` samples late (the test skips without the plug-ins).
+inline uint32_t latentEffect(sub::Engine& engine, uint32_t track, int latency) {
+    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
+    engine.setProcessorParam(effect, FX_LATENCY, static_cast<float>(latency));
+    engine.idle();  // the plug-in asked for a restart to change its latency
+    CHECK_EQ(engine.processorInfo(effect).latency, latency);
+    return effect;
+}
+
 // --- What the Python tests' helpers did ----------------------------------------------
 
 inline sub::ClipDesc clip(const std::string& path, double startBeat, double durationSec, double offsetSec = 0.0,
@@ -149,6 +169,24 @@ inline uint32_t utilityOn(sub::Engine& engine, uint32_t chain, float gainDb = 0.
     const uint32_t processor = engine.addBuiltinProcessor(chain, "utility", -1);
     setParam(engine, processor, "gain", gainDb);
     return processor;
+}
+
+// A Utility on a track's chain, at `gainDb`.
+inline uint32_t utility(sub::Engine& engine, uint32_t track, double gainDb = 0.0) {
+    return utilityOn(engine, engine.trackChain(track), static_cast<float>(gainDb));
+}
+
+// SUB Test Sidechain on a track (its output: its input plus its sidechain; the test skips without the plug-ins).
+inline uint32_t keyed(sub::Engine& engine, uint32_t track) {
+    return addTestPlugin(engine, engine.trackChain(track), "SUB Test Sidechain");
+}
+
+// A track playing a stereo click (`left` and `right` at frame `at`) in `seconds` of silence.
+inline uint32_t stereoClickTrack(sub::Engine& engine, float left, float right, int64_t at, double seconds) {
+    std::vector<float> samples(static_cast<size_t>(seconds * kSampleRate) * 2, 0.f);
+    samples[static_cast<size_t>(at) * 2] = left;
+    samples[static_cast<size_t>(at) * 2 + 1] = right;
+    return clipTrack(engine, makeWav(samples, 2), 0.0, seconds);
 }
 
 // A built-in device type as the registry lists it.

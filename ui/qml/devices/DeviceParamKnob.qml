@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import SUBstation
 
 // A built-in device's parameter, as a cell of the device view shows it: its
@@ -14,21 +13,32 @@ import SUBstation
 // step per drag.
 //
 //   DeviceParamKnob { trackId: track; deviceId: device; paramId: "threshold" }
-Item {
+ParamCell {
     id: cell
 
     property string trackId
     property string deviceId
     property string paramId
     readonly property DeviceParam param: parameter
-    property real cellWidth: 84  // PARAM_WIDTH
-    property real knobSize: 34   // KNOB_SIZE
-    readonly property alias knob: knob
-    readonly property alias list: list
-    readonly property alias menu: area.menu
 
-    implicitWidth: cellWidth
-    implicitHeight: column.implicitHeight
+    menuParam: parameter
+    name: parameter.name
+    minimum: parameter.minimum
+    maximum: parameter.maximum
+    defaultValue: parameter.defaultValue
+    bipolar: parameter.bipolar
+    logScale: parameter.logScale
+    stepped: parameter.steps > 0
+    value: parameter.value
+    text: parameter.text
+    automation: parameter.automation
+    isList: parameter.isList
+    labels: parameter.labels
+    listIndex: parameter.index
+    formatter: v => parameter.format(v)
+    onMoved: (v, key) => parameter.set(v, key)
+    onChosen: index => parameter.set(index)
+    onTouched: parameter.touch()
 
     DeviceParam {
         id: parameter
@@ -36,75 +46,5 @@ Item {
         trackId: cell.trackId
         deviceId: cell.deviceId
         paramId: cell.paramId
-    }
-
-    ParamArea {
-        id: area
-        anchors.fill: parent
-        param: parameter
-    }
-
-    Column {
-        id: column
-        width: cell.cellWidth
-        spacing: 1
-
-        Text {
-            id: name
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
-            text: parameter.name
-            color: Theme.textDim
-            font: Theme.uiFont(8)
-
-            HoverHandler {
-                id: nameHover
-            }
-            ToolTip.visible: nameHover.hovered && name.truncated
-            ToolTip.text: parameter.name
-            ToolTip.delay: 700
-        }
-
-        Knob {
-            id: knob
-            visible: !parameter.isList
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: cell.knobSize
-            height: cell.knobSize
-            from: parameter.minimum
-            to: parameter.maximum
-            defaultValue: parameter.defaultValue
-            bipolar: parameter.bipolar
-            logScale: parameter.logScale
-            step: parameter.steps > 0 ? 1 : 0
-            value: parameter.value
-            automation: parameter.automation
-            formatter: v => parameter.format(v)
-            onMoved: (v, key) => parameter.set(v, key)
-            onTouched: parameter.touch()
-        }
-
-        Text {
-            id: readout
-            visible: !parameter.isList
-            width: parent.width
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
-            text: parameter.text
-            color: Theme.text
-            font: Theme.uiFont(8)
-        }
-
-        ComboBox {
-            id: list
-            visible: parameter.isList
-            width: cell.cellWidth
-            focusPolicy: Qt.NoFocus
-            model: parameter.labels
-            currentIndex: parameter.index
-            onActivated: index => parameter.set(index)
-            onPressedChanged: if (pressed) parameter.touch()
-        }
     }
 }

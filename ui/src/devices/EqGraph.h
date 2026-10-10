@@ -23,6 +23,7 @@
 // call the invokables here.
 
 #include "devices/DeviceCanvas.h"
+#include "devices/EditorPaint.h"
 
 #include "analysis/Spectrum.h"
 
@@ -138,6 +139,7 @@ public:
 
     // Geometry, for the tests too.
     QRectF plot() const;
+    LogAxis frequencyAxis() const;
     double xOf(double freq) const;
     double freqAt(double x) const;
     double yOf(double db) const;

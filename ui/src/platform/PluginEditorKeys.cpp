@@ -6,6 +6,7 @@
 #include <QVariant>
 #include <QVariantList>
 
+#include "input/Shortcuts.h"
 #include "session/ComputerKeyboard.h"
 #include "session/RenderProgress.h"
 
@@ -139,21 +140,6 @@ int PluginEditorKeys::qtKey(int vk) {
     }
 }
 
-QList<QKeySequence> PluginEditorKeys::sequences(const QVariant& shortcut) {
-    QList<QKeySequence> out;
-    if (!shortcut.isValid()) return out;
-    if (shortcut.typeId() == QMetaType::QVariantList) {
-        for (const QVariant& each : shortcut.toList()) out << sequences(each);
-    } else if (shortcut.typeId() == QMetaType::QKeySequence) {
-        out << shortcut.value<QKeySequence>();
-    } else if (shortcut.typeId() == QMetaType::QString) {
-        out << QKeySequence::fromString(shortcut.toString(), QKeySequence::PortableText);
-    } else if (shortcut.canConvert<int>()) {
-        out << QKeySequence::keyBindings(static_cast<QKeySequence::StandardKey>(shortcut.toInt()));
-    }
-    return out;
-}
-
 QObject* PluginEditorKeys::actionFor(int virtualKey, int modifiers, bool textField) const {
     const int key = qtKey(virtualKey);
     if (key == 0 || !target_) return nullptr;
@@ -176,7 +162,7 @@ QObject* PluginEditorKeys::actionFor(int virtualKey, int modifiers, bool textFie
         else
             continue;
         if (!candidate->property("enabled").toBool()) continue;
-        if (matches(pressed, sequences(shortcut))) return candidate;
+        if (matches(pressed, keySequences(shortcut))) return candidate;
     }
     return nullptr;
 }

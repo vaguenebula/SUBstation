@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include "input/DoubleClicks.h"
 #include "model/OrderedMap.h"
 #include "session/Session.h"
 
@@ -131,10 +132,7 @@ private:
     QMap<QString, int> displays_;     // display id -> index
     QHash<QString, quint64> positions_;  // "<processor>:<display>" -> where to read from
     QList<QMetaObject::Connection> connections_;
-    ulong lastPress_ = 0;  // the last press's timestamp, where and with which button
-    QPointF lastPressAt_;
-    Qt::MouseButton lastButton_ = Qt::NoButton;
-    bool lastWasSecond_ = false;
+    DoubleClicks doubleClicks_;
 };
 
 }  // namespace sub::ui

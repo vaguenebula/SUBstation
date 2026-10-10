@@ -18,8 +18,10 @@ The backend shares nothing with the audio engine: no locks, no threads, no code.
 
 Neither thread calls into the application, except for the **wake callback**: when there are results, or the index
 changed, the backend calls it (from one of its threads), and the application takes them on its own thread. The
-backend is portable: what it needs from the operating system is in one header, [Platform.h](../browser/src/Platform.h),
-with a Win32 implementation and a POSIX one (Linux watches with inotify).
+backend is portable: what it needs from the operating system is the platform layer's ([platform.md](platform.md): paths
+and their keys, background priority, files) and, for listing and watching folders, one header of its own,
+[Platform.h](../browser/src/Platform.h), with a Win32 implementation and a POSIX one, and a folder watcher per system
+(Linux watches with inotify).
 
 The backend is held item for item to a plain, single-threaded reference kept with the tests
 ([tests/app/support/BrowserReference.h](../tests/app/support/BrowserReference.h)): the same files from a folder tree,
@@ -54,16 +56,18 @@ measurements and the profile that led to the design.
 | [Model.h](../browser/src/Model.h) / [Model.cpp](../browser/src/Model.cpp) | What a search reads: `FolderFiles` (one folder's file names, packed), `SnapFolder`, `Snapshot`, `ExternalItem`/`ExternalGroup` (devices, plug-ins, presets), `UsageRecord`/`Usage` (use counts and `rank()`), `Sort`, `Query` (with `score` for `Sort::Score`), `Hit`, `Result` (with `find()`), `placePrefix()`. |
 | [Indexer.h](../browser/src/Indexer.h) / [Indexer.cpp](../browser/src/Indexer.cpp) | The indexer thread: the folder tree, the walk, folder times, watching, publishing snapshots, the saved index (`save()`/`load()`). Also `Limits`, `PlaceSpec`, `IndexStatus`. |
 | [Search.h](../browser/src/Search.h) / [Search.cpp](../browser/src/Search.cpp) | Filtering and ordering: `runSearch()`, `matchQuality()`, `UsageCache`, `SearchInputs`. |
-| [Text.h](../browser/src/Text.h) / [Text.cpp](../browser/src/Text.cpp) | Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex word starts (`pyLower`, `pyCasefold`, `pySplit`, `wordStarts`), WTF-8 and UTF-16 conversion (`toUtf8`, `toWide`), `unicodeVersion()`. |
+| [Text.h](../browser/src/Text.h) / [Text.cpp](../browser/src/Text.cpp) | Python's `str.lower()`, `str.casefold()`, `str.split()` and the regex word starts (`pyLower`, `pyCasefold`, `pySplit`, `wordStarts`), `unicodeVersion()`; on the platform layer's WTF-8 (`platform/Unicode.h`). |
 | [UnicodeTables.inc](../browser/src/UnicodeTables.inc) | Tables generated from Python itself: `kLower`, `kFold`, `kSpace`, `kWord`, `kCaseIgnorable`, `kCased`, `kUnicodeVersion`. Do not edit. |
 | [Browser.h](../browser/src/Browser.h) / [Browser.cpp](../browser/src/Browser.cpp) | `Browser`: owns the indexer and the search thread, the wake callback, and the hand-over of results. |
-| [Platform.h](../browser/src/Platform.h) | What the index needs from the system: `NativeString`, `kSeparator`, `kCaseSensitivePaths`, `nameKey()`/`pathKey()`, `listFolder`, `folderTime`, `enterBackgroundMode`, `replaceFile`, `Event` (auto-reset), `FolderWatcher`, `Waiter`. |
-| [Platform.cpp](../browser/src/Platform.cpp) | Windows: the wide (`W`) file calls, `LCMapStringEx` for keys, `THREAD_MODE_BACKGROUND_BEGIN`, `MoveFileExW`, Win32 events, `ReadDirectoryChangesW`, `WaitForMultipleObjects`. |
-| [PlatformPosix.cpp](../browser/src/PlatformPosix.cpp) | Elsewhere: `opendir`/`readdir`, `stat`, per-thread nice value and idle I/O class (Linux), `rename`, a pipe as the event, inotify (Linux), `poll`. |
+| [Platform.h](../browser/src/Platform.h) | What the index needs from the system besides the platform layer's (whose names, `NativeString`, `kSeparator`, `kCaseSensitivePaths`, `nameKey()`/`pathKey()`, `enterBackgroundMode`..., are this namespace's too: [platform.md](platform.md)): `hiddenName`, `listFolder`, `folderTime`, `Event` (auto-reset), `FolderWatcher`, `Waiter`. |
+| [Platform.cpp](../browser/src/Platform.cpp) | Windows: `FindFirstFileExW`, `GetFileAttributesExW`, Win32 events, `ReadDirectoryChangesW`, `WaitForMultipleObjects`. |
+| [PlatformPosix.cpp](../browser/src/PlatformPosix.cpp), [PlatformPosix.h](../browser/src/PlatformPosix.h) | Elsewhere: `opendir`/`readdir`, `stat`, a pipe as the event, `poll`. |
+| [FolderWatcherInotify.cpp](../browser/src/FolderWatcherInotify.cpp), [FolderWatcherNone.cpp](../browser/src/FolderWatcherNone.cpp) | `FolderWatcher` on Linux (an inotify watch per folder), and on POSIX systems without a way to watch yet (nothing is watched). |
 | [browser/tools/gen_unicode_tables.py](../browser/tools/gen_unicode_tables.py) | Writes `UnicodeTables.inc` from the running Python (a generator; not part of the build). |
 
-The backend is built as the static library `sub_browser` ([browser/CMakeLists.txt](../browser/CMakeLists.txt)): the
-Win32 platform layer on Windows, the POSIX one elsewhere. See [building.md](building.md).
+The backend is built as the static library `sub_browser` ([browser/CMakeLists.txt](../browser/CMakeLists.txt)) on
+`sub_platform`: the Win32 platform layer on Windows, the POSIX one elsewhere, with inotify's folder watcher on Linux.
+See [building.md](building.md).
 
 ### Application layer (`app/src/browser`)
 
@@ -78,7 +82,7 @@ Win32 platform layer on Windows, the POSIX one elsewhere. See [building.md](buil
 | [BrowserMime.h](../app/src/browser/BrowserMime.h) | The drag formats and their readers (`pluginRefs`, `deviceKinds`, `presetPaths`, `movedDevices`). |
 | [Library.h](../app/src/browser/Library.h) | `Library`: use counts kept in `library.json`, and `rank()`. |
 | [PresetIndex.h](../app/src/browser/PresetIndex.h) | `PresetIndex`: the presets in the user's library as items, listed again when they change. |
-| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`. |
+| [PathKeys.h](../app/src/browser/PathKeys.h) | Paths as the browser compares them: `normalPath`, `toBackendPath`/`fromBackendPath`, `pathKey`, `caseKey`, `audioKey`, `localDataDir()`, `localDataFile()` (a file there, or where an environment variable says: the tests' way to keep the user's files out of their runs). Its keys match what the Python version wrote (the system's separators and Windows' own lower case); the rest of the application tells whether two paths are one file with `pathIdentity`/`samePath` ([model/Paths.h](../app/src/model/Paths.h)). |
 
 The plug-ins the browser lists come from the plug-in index ([app/src/plugins](../app/src/plugins),
 [app/plugin-scanner.md](app/plugin-scanner.md)).
@@ -318,10 +322,10 @@ The index is saved to `browser-index.bin` in `localDataDir()` (`%LOCALAPPDATA%\S
 `~/.local/share/SUBstation` elsewhere: `FileIndex::defaultIndexPath()`; the environment variable
 `SUBSTATION_BROWSER_INDEX` overrides it, as the tests do). An empty store path means nothing is saved. It is written 5 s
 after a pass that changed something, and when the backend closes; it goes to `browser-index.bin.tmp` first and is
-moved over the old one (`platform::replaceFile`: `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING |
-MOVEFILE_WRITE_THROUGH` on Windows, `rename` elsewhere).
+moved over the old one (`platform::writeFileAtomically`, which replaces it with `MoveFileExW` and
+`MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH` on Windows, `rename` elsewhere).
 
-Format (little-endian, as written by `Writer` in `Indexer.cpp`):
+Format (little-endian, as written by the platform layer's `ByteWriter`, `platform/Bytes.h`):
 
 ```
 "GILBIDX1"                     8 bytes magic
@@ -392,7 +396,7 @@ fresh, other items are the ones handed over with `setItems()`, by key.
 `ItemListModel` roles: `name`, `path`, `kind`, `detail`, `key`, `display` (the name, and for a plug-in or a preset its
 detail: "Name   (Vendor)"), `toolTip` (the item's tooltip or path, and how often it was used), `icon` ("waveform",
 "plugin" or "preset"), `uses`, `instrument`, `plugin` (a plug-in's `PluginRef` fields). `get(row)` returns every role
-of a row by name.
+of a row by name (`rowMap()`, [ListModels.h](../app/src/ListModels.h), as the plug-ins' and the File Manager's lists do).
 
 [SidebarModel](../app/src/browser/SidebarModel.h) is the sidebar as a flat list: *CATEGORIES* (All, Samples, Built-in
 and its categories, Plug-ins with Instruments and Audio Effects, Presets with a sub-entry per device they are for) and
@@ -558,8 +562,9 @@ Item kinds are numbered alike in `sub::browser::Kind` and `sub::app::ItemKind` (
   made with, so the next start lists everything again.
 - **Changing the saved format**: bump `kFormat` in `Indexer.cpp`; old files are then ignored.
 - **A newer Unicode version**: re-run `gen_unicode_tables.py` with a newer Python and rebuild.
-- **Another platform**: implement [Platform.h](../browser/src/Platform.h); nothing else in the backend is
-  platform-specific.
+- **Another platform**: implement [Platform.h](../browser/src/Platform.h) (listing, events, waiting) and a
+  `FolderWatcher` of its own (FSEvents on macOS, say) beside `FolderWatcherInotify.cpp`, and the platform layer
+  ([platform.md](platform.md)); nothing else in the backend is platform-specific.
 
 ## Gotchas
 

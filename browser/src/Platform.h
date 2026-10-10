@@ -1,8 +1,10 @@
-// What the index needs from the operating system: listing folders and their
-// times, background priority, waking its thread, watching folder trees for
-// changes, and how file names compare. Platform.cpp is Windows' (the Win32
-// calls the browser always used), PlatformPosix.cpp everyone else's (Linux:
-// inotify; other POSIX systems list and check folder times but don't watch).
+// What the index needs from the operating system besides what every layer
+// shares (sub_platform: paths in the system's form and their keys, background
+// priority, replacing files): listing folders and their times, waking its
+// thread, and watching folder trees for changes. Platform.cpp is Windows' (the
+// Win32 calls the browser always used), PlatformPosix.cpp everyone else's;
+// watching is FolderWatcherInotify.cpp on Linux and FolderWatcherNone.cpp on
+// other POSIX systems (which list and check folder times but don't watch).
 //
 // Paths and names cross the rest of the library as UTF-8 (WTF-8 on Windows:
 // it may hold unpaired surrogates, which Windows file names can contain); here
@@ -18,40 +20,25 @@
 #include <string_view>
 #include <vector>
 
+#include "platform/Files.h"
+#include "platform/Paths.h"
+#include "platform/Threads.h"
+
 namespace sub::browser::platform {
 
+// The shared layer's names are this one's too (platform::pathKey, NativeString...).
+using namespace sub::platform;
+
 #ifdef _WIN32
-using NativeString = std::wstring;  // UTF-16, as the wide (W) calls take it
-using WaitHandle = void*;           // a HANDLE
-inline constexpr char kSeparator = '\\';
-// Names that differ only in case are the same file.
-inline constexpr bool kCaseSensitivePaths = false;
+using WaitHandle = void*;  // a HANDLE
 #else
-using NativeString = std::string;  // bytes, as the file system has them (UTF-8 in practice)
-using WaitHandle = int;            // a file descriptor
-inline constexpr char kSeparator = '/';
-// Names that differ only in case are different files (Linux file systems).
-inline constexpr bool kCaseSensitivePaths = true;
+using WaitHandle = int;  // a file descriptor
 #endif
 
-std::string toUtf8(const NativeString& s);
-NativeString fromUtf8(std::string_view s);
-
-// Whether `c` separates folders in a path: '\' and '/' on Windows, '/' elsewhere.
-bool isSeparator(char c);
-
-// Item keys (os.path.normcase), for use counts.
-//
-// On Windows a name in a key is Windows' own lower case (LCMapStringEx with the
-// invariant locale), which is what os.path.normcase() used: names that differ
-// only in case are the same file there, so they have one key. Elsewhere a name
-// is as it is: file systems there are case-sensitive, so "Kick.wav" and
-// "kick.wav" are two files and must keep two keys (and two use counts). This
-// is also what os.path.normcase() does on POSIX.
-std::string nameKey(std::string_view name);
-// A whole path (already normalised, as os.path.normpath does): on Windows '/'
-// becomes '\' and every name goes to Windows' lower case; elsewhere it is as it is.
-std::string pathKey(std::string_view path);
+// Names the index never lists (and so never watches): starting with '.' or '$'.
+inline bool hiddenName(NativeStringView name) {
+    return !name.empty() && (name[0] == NativeChar('.') || name[0] == NativeChar('$'));
+}
 
 struct Entry {
     NativeString name;
@@ -68,15 +55,6 @@ bool listFolder(const NativeString& path, std::vector<Entry>& out);
 // When a folder's entries last changed (its last-write time, following
 // junctions and links); nothing if it's gone, 0 if it's there but can't be read.
 std::optional<uint64_t> folderTime(const NativeString& path);
-
-// The calling thread's CPU, I/O and memory priority to background: it yields to
-// everything else, the audio thread and disk reads for playback first. (Linux:
-// the lowest nice value and the idle I/O class, for this thread only.)
-void enterBackgroundMode();
-
-// Moves `from` over `to`, replacing it at once (the saved index is written to a
-// temporary file first, so a crash never leaves half of one). False on failure.
-bool replaceFile(const NativeString& from, const NativeString& to);
 
 // An auto-reset event: set by any thread, waited for (with a Waiter) by one.
 class Event {

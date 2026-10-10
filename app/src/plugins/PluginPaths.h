@@ -16,9 +16,10 @@ inline constexpr double kPluginScanTimeout = 60.0;  // seconds one file may take
 
 // The standard VST3 folders, or those in SUBSTATION_VST3_PATH when it is set
 // (separated by the system's list separator; empty for none: the tests point
-// it at the test plug-ins, so they never see the installed ones). On Windows
-// %CommonProgramFiles%\VST3 and %LOCALAPPDATA%\Programs\Common\VST3; elsewhere
-// the engine's (Vst3Format::defaultSearchPaths(): ~/.vst3, /usr/lib/vst3,
+// it at the test plug-ins, so they never see the installed ones). Else the
+// system's, as the engine knows them (Vst3Format::defaultSearchPaths(): on
+// Windows C:\Program Files\Common Files\VST3 and
+// %LOCALAPPDATA%\Programs\Common\VST3; ~/.vst3, /usr/lib/vst3 and
 // /usr/local/lib/vst3 on Linux).
 QStringList standardPluginFolders();
 
@@ -37,8 +38,9 @@ QStringList findPluginFiles();  // under pluginSearchFolders()
 QString pluginCachePath();
 
 // The file a VST3 bundle's code is in (the path itself for a single file, or a
-// bundle without it): Contents/x86_64-win/<name>.vst3 on Windows,
-// Contents/<arch>-linux/<name>.so on Linux.
+// bundle without it), where the engine says it is on this system
+// (Vst3Format::binaryInBundle(): Contents/x86_64-win/<name>.vst3 on Windows,
+// Contents/<arch>-linux/<name>.so on Linux).
 QString pluginBinary(const QString& path);
 
 // When the file a plug-in's code is in changed, and its size: [modification

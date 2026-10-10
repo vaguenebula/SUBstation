@@ -17,14 +17,9 @@
 
 using namespace sub::app;
 using test::EditorFixture;
+using test::ids;
 
 namespace {
-
-QStringList ids(const std::vector<const Track*>& tracks) {
-    QStringList result;
-    for (const Track* t : tracks) result.append(t->id);
-    return result;
-}
 
 // A device to take a sidechain (the model doesn't ask whether it has a sidechain input).
 QString device(EditorFixture& f, const QString& trackId) { return f.editor.addDevice(trackId, "utility"); }

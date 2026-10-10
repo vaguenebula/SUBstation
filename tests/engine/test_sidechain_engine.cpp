@@ -16,7 +16,6 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 constexpr int KEY_SILENT = 0;  // SUB Test Sidechain's (read-only)
 constexpr double kClick = 0.25;
 
@@ -30,19 +29,9 @@ struct SidechainEngine {
 };
 
 // A click of kClick at the start of 1000 samples.
-std::string clickWav() {
-    Samples click(1000, 0.f);
-    click[0] = static_cast<float>(kClick);
-    return makeWav(click);
-}
-
 uint32_t clickTrack(sub::Engine& engine, const std::string& path, double startBeat = 1.0,
                     std::optional<uint32_t> output = std::nullopt, double seconds = 1000.0 / kSampleRate) {
-    engine.loadSource(path);
-    const uint32_t track = engine.addTrack();
-    engine.setTrackClips(track, {clip(path, startBeat, seconds)});
-    if (output) engine.setTrackOutput(track, *output);
-    return track;
+    return clipTrack(engine, path, startBeat, seconds, output);
 }
 
 // SUB Test Effect: `gain` times its input, `latency` samples late.
@@ -55,11 +44,6 @@ uint32_t effect(sub::Engine& engine, uint32_t track, int latency = 0, double gai
     return pid;
 }
 
-// SUB Test Sidechain on a track (its output: its input plus its sidechain).
-uint32_t keyed(sub::Engine& engine, uint32_t track) {
-    return addTestPlugin(engine, engine.trackChain(track), "SUB Test Sidechain");
-}
-
 Clicks render(sub::Engine& engine, double beats = 2.0) {
     return clicksOf(channel(engine.renderOffline(0.0, static_cast<int64_t>(beats * kBeat)), 0));
 }
@@ -69,7 +53,7 @@ Clicks render(sub::Engine& engine, double beats = 2.0) {
 TEST_CASE("a device hears its sidechain") {
     SidechainEngine e;
     auto& engine = e.engine;
-    const uint32_t source = clickTrack(engine, clickWav());
+    const uint32_t source = clickTrack(engine, clickWav(kClick));
     const uint32_t track = engine.addTrack();  // no clips: what its device puts out is what it hears on its sidechain
     const uint32_t pid = keyed(engine, track);
     CHECK(engine.processorInfo(pid).hasSidechain);
@@ -104,7 +88,7 @@ TEST_CASE("taps") {
     // After the source's fader, before it, before its devices, or after one of them.
     SidechainEngine e;
     auto& engine = e.engine;
-    const uint32_t source = clickTrack(engine, clickWav());
+    const uint32_t source = clickTrack(engine, clickWav(kClick));
     const uint32_t first = effect(engine, source, 0, 0.5);
     const uint32_t second = effect(engine, source, 0, 0.5);
     engine.setTrackGain(source, 0.5f);
@@ -133,7 +117,7 @@ TEST_CASE("taps") {
 TEST_CASE("a tap after a device that leaves the source is before the fader") {
     SidechainEngine e;
     auto& engine = e.engine;
-    const uint32_t source = clickTrack(engine, clickWav());
+    const uint32_t source = clickTrack(engine, clickWav(kClick));
     const uint32_t fx = effect(engine, source, 0, 0.5);
     engine.setTrackGain(source, 0.5f);
     const uint32_t pid = keyed(engine, engine.addTrack());
@@ -164,7 +148,7 @@ TEST_CASE("the sidechain lines up with the signal at its device") {
                  ", before the device " + std::to_string(beforeDevice) + ", after it " + std::to_string(afterDevice));
             SidechainEngine e;
             auto& engine = e.engine;
-            const std::string wav = clickWav();
+            const std::string wav = clickWav(kClick);
             const uint32_t source = clickTrack(engine, wav);
             const uint32_t tapped = effect(engine, source, beforeTap);
             effect(engine, source, afterTap);
@@ -195,7 +179,7 @@ TEST_CASE("a tap before a device waiting for its own sidechain") {
             INFO(tap + (waitsFirst ? " tap, the waiting device first" : " tap, the waiting device second"));
             SidechainEngine e;
             auto& engine = e.engine;
-            const std::string wav = clickWav();
+            const std::string wav = clickWav(kClick);
             const uint32_t late = clickTrack(engine, wav);
             effect(engine, late, 300);
             const uint32_t source = clickTrack(engine, wav);
@@ -224,7 +208,7 @@ TEST_CASE("a tap before a device waiting for its own sidechain") {
 TEST_CASE("a sidechain into a group and into the master") {
     SidechainEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     effect(engine, source, 250);
     const uint32_t group = engine.addTrack();
@@ -293,7 +277,7 @@ TEST_CASE("sidechain cycles are refused") {
 TEST_CASE("the sidechain goes with its source") {
     SidechainEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     const uint32_t track = engine.addTrack();
     const uint32_t pid = keyed(engine, track);
@@ -313,7 +297,7 @@ TEST_CASE("sidechains, mute and solo") {
     // and solo silence it only after the source's fader.
     SidechainEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     const uint32_t track = engine.addTrack();
     const uint32_t pid = keyed(engine, track);
@@ -367,7 +351,7 @@ TEST_CASE("the source renders before the device on any threads") {
     // Many tracks keyed by one source, rendered on several threads: each waits for it.
     SidechainEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t source = clickTrack(engine, wav);
     effect(engine, source, 33);
     for (int i = 0; i < 12; ++i) {

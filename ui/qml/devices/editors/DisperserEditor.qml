@@ -46,18 +46,6 @@ Item {
         }
     }
 
-    component Caption: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.textDim
-        font: Theme.uiFont(8)
-    }
-
-    component Readout: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: enabled ? Theme.text : Theme.textDisabled
-        font: Theme.uiFont(8)
-    }
-
     // A knob with its name above and its value below.
     component LabelledKnob: Column {
         id: cell
@@ -70,7 +58,7 @@ Item {
         width: editor.knobWidth
         spacing: 1
 
-        Caption {
+        EditorCaption {
             width: parent.width
             text: cell.title
         }
@@ -82,7 +70,7 @@ Item {
             step: cell.step
             param: editor.params[cell.paramId] || null
         }
-        Readout {
+        EditorReadout {
             width: parent.width
             text: knob.param ? knob.param.text : ""
         }

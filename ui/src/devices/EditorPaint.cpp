@@ -1,6 +1,7 @@
 #include "devices/EditorPaint.h"
 
 #include "sg/SgPainter.h"
+#include "theme/Theme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +22,19 @@ QString pythonSigned(double value, int decimals) {
 }
 
 QString pythonGeneral(double value) { return QString::number(value, 'g', 6); }
+
+void drawDecadeGrid(SgPainter& p, const QRectF& plot, const LogAxis& axis) {
+    for (double decade = std::pow(10.0, std::floor(std::log10(axis.low))); decade < axis.high; decade *= 10.0) {
+        for (int multiple = 1; multiple < 10; ++multiple) {
+            const double value = decade * multiple;
+            if (axis.low < value && value < axis.high) {
+                const double x = axis.position(value);
+                p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()),
+                           withAlpha(Theme::kGridBeat, multiple == 1 ? 200 : 90));
+            }
+        }
+    }
+}
 
 void drawDashedPolyline(SgPainter& p, const std::vector<QPointF>& points, const QColor& color, double width) {
     const double dash = 4.0 * width, gap = 2.0 * width;

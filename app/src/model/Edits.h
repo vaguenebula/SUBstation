@@ -18,6 +18,9 @@
 
 namespace sub::app::edits {
 
+// Sorts clips by where they start, those starting together in the order they were.
+void sortByStart(std::vector<Clip>& clips);
+
 inline constexpr double kMinClipSec = 0.005;
 inline constexpr double kMinMidiClipBeats = 1.0 / 64;
 inline constexpr double kEps = 1e-9;
@@ -86,11 +89,9 @@ bool playsWholeFile(const Clip& clip);
 // reversed any more). A MIDI clip as it is.
 Clip replaceFile(const Clip& clip, const QString& path, double totalSec);
 // `clip` with a file found somewhere else: `to` wherever it played `from`, or
-// was reversed from it (paths compared as the system compares them). Nothing
+// was reversed from it (paths compared by samePath(), model/Paths.h). Nothing
 // else changes: it is the same audio.
 Clip relinkFile(const Clip& clip, const QString& from, const QString& to);
-// Whether two paths are the same file: absolute and clean, and on Windows in any case.
-bool samePath(const QString& a, const QString& b);
 // (earliest start, latest end) of some clips (there must be some).
 std::pair<double, double> selectionSpan(const std::vector<Clip>& clips, double tempo);
 // Ableton's Consolidate (Ctrl+J): one MIDI clip from the first clip's start to

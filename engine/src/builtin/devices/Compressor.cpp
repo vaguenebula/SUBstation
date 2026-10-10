@@ -14,6 +14,7 @@
 
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -71,13 +72,13 @@ protected:
             } else if (keyL != nullptr) {
                 key = std::max(std::abs(keyL[i]), std::abs(keyR[i]));
             }
-            envelope_ = key >= envelope_ ? key : key + release * (envelope_ - key);
-            const float level = 20.f * std::log10(envelope_ + 1e-9f);
+            envelope_ = dsp::followPeak(envelope_, key, release);
+            const float level = gainToDb(envelope_);
             const float target = level - curve(level, threshold, slope, knee);
             reductionDb_ = target > reductionDb_ ? target + attack * (reductionDb_ - target) : target;
 
             const float mix = mix_.next();
-            const float gain = 1.f + mix * (std::exp((makeup_.next() - reductionDb_) * kDbToLog) - 1.f);
+            const float gain = 1.f + mix * (expDbToGain(makeup_.next() - reductionDb_) - 1.f);
             float out = 0.f;
             for (int c = 0; c < n; ++c) {
                 ch[c][i] *= gain;
@@ -100,7 +101,6 @@ protected:
 private:
     static constexpr int kMeterSamples = 256;  // audio per meter value
     static constexpr float kFloorDb = -90.f;
-    static constexpr float kDbToLog = 0.11512925f;  // ln(10) / 20
 
     // The level out for `level` in (dB): unchanged below the knee, the ratio's
     // slope above it, and a quadratic blend across it.
@@ -114,10 +114,10 @@ private:
         return level + slope * over;
     }
 
-    static float toDb(float peak) noexcept { return std::max(kFloorDb, 20.f * std::log10(peak + 1e-9f)); }
+    static float toDb(float peak) noexcept { return std::max(kFloorDb, gainToDb(peak)); }
 
     float onePole(float ms) const noexcept {
-        return static_cast<float>(std::exp(-1.0 / (std::max(0.01f, ms) * 0.001 * sampleRate_)));
+        return static_cast<float>(onePoleCoefficient(std::max(0.01f, ms) * 0.001, sampleRate_));
     }
 
     static const std::vector<ParamInfo>& infos() {

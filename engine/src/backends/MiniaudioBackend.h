@@ -1,9 +1,9 @@
 #pragma once
-// WASAPI output through miniaudio, shared or exclusive. Output only for now:
-// a capture device (for recording) would open as miniaudio's duplex mode and
-// fill AudioIO::inputs. On platforms other than Windows the same backend opens
-// miniaudio's default backend instead (ALSA, PulseAudio, Core Audio...), as the
-// "System" driver.
+// Audio through miniaudio: on Windows WASAPI, shared or exclusive (the
+// "WASAPI" driver); elsewhere miniaudio's own choice of the system's backends
+// (PulseAudio, ALSA, Core Audio...), as the "System" driver. Output only for
+// now: a capture device (for recording) would open as miniaudio's duplex mode
+// and fill AudioIO::inputs.
 
 #include <array>
 #include <atomic>
@@ -18,10 +18,10 @@ struct ma_device;
 
 namespace sub {
 
-class WasapiBackend final : public AudioBackend {
+class MiniaudioBackend final : public AudioBackend {
 public:
-    WasapiBackend();
-    ~WasapiBackend() override;
+    MiniaudioBackend();
+    ~MiniaudioBackend() override;
 
     static constexpr const char* kName = kDefaultDriver;
     std::string name() const override { return kName; }
@@ -33,7 +33,7 @@ public:
     DeviceState state() const override;
 
 private:
-    friend struct WasapiCallbacks;
+    friend struct MiniaudioCallbacks;
     void process(float* interleaved, uint32_t frames, uint32_t channels) noexcept;
 
     static constexpr uint32_t kChunk = 4096;  // frames per engine callback; longer device buffers take several

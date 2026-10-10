@@ -1,5 +1,7 @@
 #include "plugins/PluginListModel.h"
 
+#include "ListModels.h"
+
 namespace sub::app {
 
 PluginListModel::PluginListModel(QObject* parent) : QAbstractListModel(parent) {}
@@ -13,14 +15,7 @@ void PluginListModel::setPlugins(std::vector<PluginInfo> plugins) {
     if (counted) Q_EMIT countChanged();
 }
 
-QVariantMap PluginListModel::get(int row) const {
-    QVariantMap out;
-    if (row < 0 || row >= count()) return out;
-    const QHash<int, QByteArray> names = roleNames();
-    for (auto it = names.cbegin(); it != names.cend(); ++it)
-        out.insert(QString::fromUtf8(it.value()), data(index(row), it.key()));
-    return out;
-}
+QVariantMap PluginListModel::get(int row) const { return rowMap(*this, row); }
 
 int PluginListModel::rowCount(const QModelIndex& parent) const { return parent.isValid() ? 0 : count(); }
 

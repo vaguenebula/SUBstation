@@ -1,11 +1,12 @@
 #include "Recorder.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
 
-#include "PathUtils.h"
+#include "MiniaudioFiles.h"
 #include "miniaudio.h"
 
 namespace sub {
@@ -14,8 +15,7 @@ namespace sub {
 // SampleRing
 
 SampleRing::SampleRing(size_t minCapacity) {
-    size_t capacity = 1;
-    while (capacity < minCapacity) capacity <<= 1;
+    const size_t capacity = std::bit_ceil(minCapacity);
     data_.assign(capacity, 0.f);
     mask_ = capacity - 1;
 }
@@ -23,10 +23,7 @@ SampleRing::SampleRing(size_t minCapacity) {
 bool SampleRing::write(const float* samples, size_t count) noexcept {
     const size_t head = head_.load(std::memory_order_relaxed);
     if (data_.size() - (head - tail_.load(std::memory_order_acquire)) < count) return false;
-    const size_t start = head & mask_;
-    const size_t first = std::min(count, data_.size() - start);
-    std::copy_n(samples, first, data_.data() + start);
-    std::copy_n(samples + first, count - first, data_.data());
+    copyIntoRing(data_.data(), data_.size(), head & mask_, samples, count);
     head_.store(head + count, std::memory_order_release);
     return true;
 }
@@ -34,10 +31,7 @@ bool SampleRing::write(const float* samples, size_t count) noexcept {
 size_t SampleRing::read(float* out, size_t count) noexcept {
     const size_t tail = tail_.load(std::memory_order_relaxed);
     count = std::min(count, head_.load(std::memory_order_acquire) - tail);
-    const size_t start = tail & mask_;
-    const size_t first = std::min(count, data_.size() - start);
-    std::copy_n(data_.data() + start, first, out);
-    std::copy_n(data_.data(), count - first, out + first);
+    copyOutOfRing(data_.data(), data_.size(), tail & mask_, out, count);
     tail_.store(tail + count, std::memory_order_release);
     return count;
 }
@@ -127,14 +121,14 @@ RecordingSession::RecordingSession(std::vector<std::unique_ptr<RecordingTake>> t
       midiPlacement_(midiPlacement) {
     try {
         for (auto& take : takes_) {
-            const std::filesystem::path path = pathFromUtf8(take->path);
+            const std::filesystem::path path = platform::toPath(take->path);
             std::error_code ignored;
             if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ignored);
             auto* encoder = new ma_encoder;
             const ma_encoder_config config = ma_encoder_config_init(
                 ma_encoding_format_wav, ma_format_f32, static_cast<ma_uint32>(take->channels),
                 static_cast<ma_uint32>(sampleRate));
-            if (ma_encoder_init_file_w(widen(take->path).c_str(), &config, encoder) != MA_SUCCESS) {
+            if (initEncoderFile(take->path, config, encoder) != MA_SUCCESS) {
                 delete encoder;
                 throw std::runtime_error("Could not create " + take->path);
             }
@@ -147,7 +141,7 @@ RecordingSession::RecordingSession(std::vector<std::unique_ptr<RecordingTake>> t
                 delete encoder;
                 take->encoder = nullptr;
                 std::error_code ignored;
-                std::filesystem::remove(pathFromUtf8(take->path), ignored);
+                std::filesystem::remove(platform::toPath(take->path), ignored);
             }
         }
         throw;
@@ -239,7 +233,7 @@ std::vector<RecordedTake> RecordingSession::finish() {
         result.startSample = start == RecordingTake::kNotStarted ? 0 : start - take->placement;
         if (result.frames == 0) {
             std::error_code ignored;
-            std::filesystem::remove(pathFromUtf8(take->path), ignored);
+            std::filesystem::remove(platform::toPath(take->path), ignored);
         }
         results.push_back(std::move(result));
     }

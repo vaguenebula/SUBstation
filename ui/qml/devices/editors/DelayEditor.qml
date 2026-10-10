@@ -54,18 +54,6 @@ Item {
         }
     }
 
-    component Caption: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.textDim
-        font: Theme.uiFont(8)
-    }
-
-    component Readout: Text {
-        horizontalAlignment: Text.AlignHCenter
-        color: enabled ? Theme.text : Theme.textDisabled
-        font: Theme.uiFont(8)
-    }
-
     // One side's time: Sync, then the sixteenths and the offset (or, unsynced, the time).
     component Side: Column {
         id: side
@@ -78,7 +66,7 @@ Item {
         width: editor.sideWidth
         spacing: 2
 
-        Caption {
+        EditorCaption {
             width: parent.width
             text: side.title
         }
@@ -143,7 +131,7 @@ Item {
                     size: 34
                     param: editor.params[side.prefix + "_time"] || null
                 }
-                Readout {
+                EditorReadout {
                     width: parent.width
                     text: timeKnob.param ? timeKnob.param.text : ""
                 }
@@ -234,7 +222,7 @@ Item {
                     sampleText: "18.00 kHz"
                     tooltip: qsTr("Filter frequency")
                 }
-                Caption {
+                EditorCaption {
                     id: widthLabel
                     anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("Width")
@@ -257,7 +245,7 @@ Item {
             width: editor.modeWidth
             spacing: 2
 
-            Caption {
+            EditorCaption {
                 width: parent.width
                 text: qsTr("Mode")
             }
@@ -301,7 +289,7 @@ Item {
                 width: parent.width
                 spacing: 1
 
-                Caption {
+                EditorCaption {
                     width: parent.width
                     text: qsTr("Feedback")
                 }
@@ -324,7 +312,7 @@ Item {
                         tooltip: qsTr("Freeze: what is in the delay goes round for ever, new input is ignored")
                     }
                 }
-                Readout {
+                EditorReadout {
                     width: parent.width
                     text: feedback.param ? feedback.param.text : ""
                 }
@@ -335,7 +323,7 @@ Item {
                 width: parent.width
                 spacing: 1
 
-                Caption {
+                EditorCaption {
                     width: parent.width
                     text: qsTr("Dry/Wet")
                 }
@@ -346,7 +334,7 @@ Item {
                     size: 30
                     param: editor.params["mix"] || null
                 }
-                Readout {
+                EditorReadout {
                     width: parent.width
                     text: mix.param ? mix.param.text : ""
                 }

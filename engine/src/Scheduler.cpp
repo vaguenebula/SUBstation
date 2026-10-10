@@ -2,13 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <xmmintrin.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <avrt.h>
-#endif
-
+#include "platform/Threads.h"
 #include "rt/RtUtils.h"
 
 namespace sub {
@@ -131,11 +126,11 @@ void Scheduler::run(TaskGraph& graph, Job job, void* context, bool parallel) noe
     if (sleepers_.load(std::memory_order_seq_cst) > 0) state_.notify_all();
 
     work(0);
-    while (graph.done_.load(std::memory_order_acquire) < size) _mm_pause();  // the last nodes on the workers
+    while (graph.done_.load(std::memory_order_acquire) < size) cpuRelax();  // the last nodes on the workers
     // Close it, and wait for the workers still inside to leave: a worker that
     // joins counts itself first and then checks that the run is still open.
     state_.store(open & ~uint64_t{1}, std::memory_order_seq_cst);
-    while (active_.load(std::memory_order_seq_cst) > 0) _mm_pause();
+    while (active_.load(std::memory_order_seq_cst) > 0) cpuRelax();
 }
 
 void Scheduler::work(int worker) noexcept {
@@ -148,7 +143,7 @@ void Scheduler::work(int worker) noexcept {
         const int node = graph.queue_[head].load(std::memory_order_acquire);
         if (node < 0) {  // none ready: the nodes running will queue the next
             if (++idle < kPausesBeforeYield) {
-                _mm_pause();
+                cpuRelax();
             } else {
                 std::this_thread::yield();
             }
@@ -169,17 +164,14 @@ void Scheduler::work(int worker) noexcept {
 }
 
 void Scheduler::workerMain(int worker) noexcept {
-#ifdef _WIN32
-    DWORD task = 0;
-    HANDLE mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task);
-#endif
+    const platform::ScopedRealtimePriority realtime;  // (MMCSS's "Pro Audio" on Windows, as the driver's thread)
     uint64_t joined = 0;  // the last run it took part in
     for (;;) {
         uint64_t state = state_.load(std::memory_order_seq_cst);
         const auto deadline = std::chrono::steady_clock::now() + kSpinBeforeSleep;
         for (int spins = 1; state != kQuit && (!(state & 1) || state == joined); ++spins) {
             if (spins % 64 == 0 && std::chrono::steady_clock::now() > deadline) break;
-            _mm_pause();
+            cpuRelax();
             state = state_.load(std::memory_order_seq_cst);
         }
         if (state == kQuit) break;
@@ -197,9 +189,6 @@ void Scheduler::workerMain(int worker) noexcept {
         state_.wait(state, std::memory_order_seq_cst);  // returns at once if a run opened meanwhile
         sleepers_.fetch_sub(1, std::memory_order_seq_cst);
     }
-#ifdef _WIN32
-    if (mmcss) AvRevertMmThreadCharacteristics(mmcss);
-#endif
 }
 
 }  // namespace sub

@@ -1,15 +1,10 @@
 #include "plugins/PluginScanner.h"
 
 #include <QCoreApplication>
-#include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QMap>
 #include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonParseError>
 #include <QProcess>
-#include <QSaveFile>
 #include <QSet>
 
 #include <algorithm>
@@ -22,6 +17,7 @@
 
 #include "Text.h"
 #include "browser/PathKeys.h"
+#include "io/Json.h"
 
 namespace sub::app {
 
@@ -50,13 +46,6 @@ QByteArray jsonString(const QString& text) {
         }
     }
     return out + "\"";
-}
-
-std::optional<QJsonObject> jsonObject(const QByteArray& line) {
-    QJsonParseError error;
-    const QJsonDocument document = QJsonDocument::fromJson(line, &error);
-    if (error.error != QJsonParseError::NoError || !document.isObject()) return std::nullopt;
-    return document.object();
 }
 
 QJsonValue signatureJson(const std::optional<std::array<int64_t, 2>>& signature) {
@@ -104,7 +93,7 @@ public:
     Wait next(QJsonObject& out, Clock::time_point deadline, const PluginScanner::Cancelled& cancelled) {
         for (;;) {
             while (process_.canReadLine()) {
-                if (auto object = jsonObject(process_.readLine())) {
+                if (auto object = parseJsonObject(process_.readLine())) {
                     out = std::move(*object);
                     return Wait::Answer;
                 }
@@ -112,7 +101,7 @@ public:
             if (process_.state() == QProcess::NotRunning) {
                 // A last line without its line break.
                 if (process_.bytesAvailable() > 0) {
-                    if (auto object = jsonObject(process_.readAll())) {
+                    if (auto object = parseJsonObject(process_.readAll())) {
                         out = std::move(*object);
                         return Wait::Answer;
                     }
@@ -180,21 +169,12 @@ QString PluginScanner::defaultProgram() {
 }
 
 QJsonObject PluginScanner::loadCache() const {
-    QFile file(cacheFile_);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    const auto data = jsonObject(file.readAll());
-    if (!data || data->value(QStringLiteral("version")).toInteger(-1) != kPluginCacheVersion) return {};
-    const QJsonValue files = data->value(QStringLiteral("files"));
-    return files.isObject() ? files.toObject() : QJsonObject();
+    return readVersionedObject(cacheFile_, kPluginCacheVersion, QStringLiteral("files"));
 }
 
 void PluginScanner::saveCache(const QJsonObject& files) const {
-    QDir().mkpath(QFileInfo(cacheFile_).absolutePath());
-    QSaveFile file(cacheFile_);
-    if (!file.open(QIODevice::WriteOnly)) return;  // a cache we can't write only costs time
-    const QJsonObject data{{QStringLiteral("version"), kPluginCacheVersion}, {QStringLiteral("files"), files}};
-    file.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
-    file.commit();
+    // (A cache that can't be written only costs time.)
+    writeVersionedObject(cacheFile_, kPluginCacheVersion, QStringLiteral("files"), files);
 }
 
 ScanResult PluginScanner::scan(const std::optional<QStringList>& filesGiven, bool rescan, const Progress& progress,

@@ -61,11 +61,12 @@ workers rendered since the scheduler started (tests and benchmarks use it to see
 
 `Scheduler(threads)` starts `threads - 1` workers; `threads` counts the caller's.
 
-- On Windows each worker joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`, linked with `avrt`)
-  for its life; elsewhere workers keep the default priority. Every worker flushes denormals while it renders
-  (`ScopedNoDenormals`).
-- Between runs a worker spins (with `_mm_pause`) for about 50 microseconds: consecutive chunks of
-  one callback come within microseconds. Then it sleeps on `state_` (`std::atomic::wait`) until
+- Each worker holds the platform layer's `ScopedRealtimePriority` for its life ([platform.md](../platform.md)): on
+  Windows it joins MMCSS as "Pro Audio" (`AvSetMmThreadCharacteristicsW`); elsewhere workers keep the default
+  priority for now (Linux's `SCHED_FIFO` and macOS's audio workgroups go there). Every worker flushes denormals
+  while it renders (`ScopedNoDenormals`).
+- Between runs a worker spins (with `cpuRelax()`: `PAUSE` on x86-64, `ISB` on arm64) for about 50 microseconds:
+  consecutive chunks of one callback come within microseconds. Then it sleeps on `state_` (`std::atomic::wait`) until
   the next run opens. The caller only calls `notify_all()` if some worker is sleeping
   (`sleepers_`).
 - Inside a run, a worker waiting for a node to become ready pauses 2000 times, then yields.

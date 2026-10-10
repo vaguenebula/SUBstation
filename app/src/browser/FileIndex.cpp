@@ -8,9 +8,10 @@
 #include <cmath>
 #include <limits>
 
-#include "Platform.h"
+#include "platform/Paths.h"
 #include "browser/BrowserSearch.h"
 #include "browser/PathKeys.h"
+#include "io/Json.h"
 
 namespace sub::app {
 
@@ -72,7 +73,7 @@ std::vector<browser::UsageRecord> usageRecords(const Library& library) {
     for (auto it = all.begin(); it != all.end(); ++it) {
         const QJsonObject record = it.value().toObject();
         double score = 0.0;
-        if (Library::truthy(record.value(QStringLiteral("score")))) {
+        if (truthy(record.value(QStringLiteral("score")))) {
             const auto number = Library::number(record.value(QStringLiteral("score")));
             if (!number) continue;  // not a number: left out
             score = *number;
@@ -92,7 +93,7 @@ std::vector<browser::UsageRecord> usageRecords(const Library& library) {
 browser::PlaceSpec placeSpec(const QString& root) {
     const QString normal = normalPath(root);
     const std::string native = toBackendPath(normal);
-    return {native, browser::platform::pathKey(native), toBackendPath(QFileInfo(normal).fileName())};
+    return {native, platform::pathKey(native), toBackendPath(QFileInfo(normal).fileName())};
 }
 
 // --- FileIndex ---------------------------------------------------------------------------
@@ -108,9 +109,7 @@ bool FileIndex::isAudioFile(const QString& path) {
 }
 
 QString FileIndex::defaultIndexPath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_BROWSER_INDEX");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/browser-index.bin");
+    return localDataFile("SUBSTATION_BROWSER_INDEX", QStringLiteral("browser-index.bin"));
 }
 
 FileIndex::FileIndex(QObject* parent, std::optional<QString> indexPath, uint32_t maxFiles, uint32_t maxDepth)

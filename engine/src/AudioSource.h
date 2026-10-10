@@ -39,6 +39,9 @@ public:
     // Planar storage: channel c occupies [c * frames, (c + 1) * frames).
     const float* data() const { return data_.data(); }
     const float* channelData(uint32_t channel) const { return data_.data() + static_cast<size_t>(channel) * frames_; }
+    // Channel `side` of the source played as stereo (0 left, 1 right): a mono
+    // file's one channel on both sides.
+    const float* stereoChannel(uint32_t side) const { return channelData(channels_ > 1 ? side : 0u); }
 
     int numPeakLevels() const { return kNumPeakLevels; }
     static int samplesPerPeak(int level);

@@ -6,6 +6,7 @@
 // Hann FFT of the latest samples, falling 1 dB a refresh).
 
 #include "devices/DeviceCanvas.h"
+#include "devices/EditorPaint.h"
 
 #include "analysis/Spectrum.h"
 
@@ -37,6 +38,7 @@ public:
     const sub::app::analysis::FallingSpectrum& spectrum() const { return spectrum_; }
 
     QRectF plot() const;
+    LogAxis frequencyAxis() const;
     double xOf(double freq) const;
     double freqAt(double x) const;
 

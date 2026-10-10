@@ -53,8 +53,6 @@ public:
     // Python's float() of a record's field: a number, or a string of one;
     // nothing for anything else (null, missing, a list...).
     static std::optional<double> number(const QJsonValue& value);
-    // Python's truthiness of a field: missing, null, false, 0, "" and empty containers are false.
-    static bool truthy(const QJsonValue& value);
 
 private:
     QJsonObject load() const;

@@ -747,6 +747,10 @@ private:
     void dropGoneOutputSidechainsLocked();
     // Throws std::invalid_argument if a sidechain from `source` into a device on `strip` would close a cycle.
     void checkSidechainLocked(uint32_t source, uint32_t strip) const;
+    // The device a tap of track `source` (a sidechain's, a track's input) reads after: `tapProcessorId`
+    // for an AfterDevice tap, which must be on that track (in its chain or a rack's there; else
+    // std::invalid_argument), 0 for any other.
+    uint32_t tapProcessorLocked(SidechainTap tap, uint32_t tapProcessorId, uint32_t source);
     // The same for every sidechained device in a rack's chains (it moves to `strip`).
     void checkRackSidechainsLocked(uint32_t rackId, uint32_t strip);
     // Throws std::invalid_argument if an edge from `from` into `to` would close a cycle.

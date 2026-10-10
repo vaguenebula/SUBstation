@@ -1,24 +1,22 @@
 #pragma once
-// A top-level window holding a VST3 plug-in's editor (IPlugView). It is a plain
-// Win32 window owned by the main window, so it floats above it; the
-// application's event loop dispatches its messages like any other window's. It sizes itself to the view,
+// A top-level window holding a VST3 plug-in's editor (IPlugView). It is owned
+// by the main window, so it floats above it; the application's event loop
+// dispatches its events like any other window's. It sizes itself to the view,
 // follows the view's resize requests (IPlugFrame), lets the user resize it when
-// the view can resize, and tells the view about DPI changes.
+// the view can resize, and tells the view its content scale (the screen's DPI).
 //
-// Main thread only. Windows only (EditorWindow.cpp): on other platforms
-// (EditorWindowNone.cpp) it never opens, so plug-ins show no editor.
+// Main thread only. The window is the system's: one file per system holds it
+// (`Native`): EditorWindowWin32.cpp, a Win32 window; EditorWindowNone.cpp
+// where plug-ins show no editor yet (it never opens). What every system's
+// window does with the view is EditorWindow.cpp's.
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "pluginterfaces/base/smartpointer.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "plugins/Vst3Support.h"
-
-#ifdef _WIN32
-struct HWND__;
-using HWND = HWND__*;
-#endif
 
 namespace sub::vst3 {
 
@@ -29,15 +27,20 @@ public:
         int y = 0;
     };
 
+    // Whether this system's window can hold the view (the view supports its
+    // platform type: an HWND on Windows).
+    static bool canHold(Steinberg::IPlugView& view);
+
     // Opens the window and attaches the view to it; check isOpen() afterwards. It
-    // goes at `position` (kept on screen) if given, else over the owner.
+    // goes at `position` (kept on screen) if given, else over the owner (the
+    // main window's native handle).
     EditorWindow(Steinberg::IPtr<Steinberg::IPlugView> view, void* ownerWindow, const std::string& title,
                  const Position* position = nullptr);
     ~EditorWindow();
     EditorWindow(const EditorWindow&) = delete;
     EditorWindow& operator=(const EditorWindow&) = delete;
 
-    bool isOpen() const noexcept { return hwnd_ != nullptr; }
+    bool isOpen() const noexcept;
     // The user closed the window; the owner deletes this object when it notices.
     bool wasClosed() const noexcept { return closed_; }
     void setTitle(const std::string& title);
@@ -53,37 +56,22 @@ public:
     tresult PLUGIN_API resizeView(Steinberg::IPlugView* view, Steinberg::ViewRect* newSize) override;
     SUB_HOST_OWNED_FUNKNOWN(Steinberg::IPlugFrame)
 
-#ifdef _WIN32
-    // The window procedure's work (called by it, from the message loop).
-    intptr_t handleMessage(HWND hwnd, unsigned message, uintptr_t wParam, intptr_t lParam);
-#endif
-
 private:
-#ifdef _WIN32
-    void setClientSize(int width, int height);
-    void placeOverOwner(HWND owner);
-    void placeAt(Position position);
-    void rememberPosition();
-    void updateContentScale();
-    void detachView();
-    void yieldActivation();
-#endif
+    struct Native;  // the system's window and what only it needs (EditorWindowWin32.cpp...)
 
-    struct Size {
-        int cx = 0;
-        int cy = 0;
-    };
+    // What every system's window does with the view (EditorWindow.cpp):
+    // Detaches the view from the window (the window closing, or going).
+    void detachView();
+    // Tells the view the size it now has (the window was resized), unless it is
+    // that size already.
+    void sizeView(Steinberg::ViewRect& size);
+    // Tells the view the scale its window's screen draws at.
+    void setContentScale(float scale);
 
     Steinberg::IPtr<Steinberg::IPlugView> view_;
-#ifdef _WIN32
-    HWND hwnd_ = nullptr;
-#else
-    void* hwnd_ = nullptr;  // never set: no window opens
-#endif
+    std::unique_ptr<Native> native_;
     bool resizable_ = false;
-    bool resizing_ = false;     // inside resizeView: our own WM_SIZE must not call onSize
-    bool inDpiChange_ = false;  // between WM_GETDPISCALEDSIZE and WM_DPICHANGED
-    Size dpiChangeSize_;        // the size the view asked for during a DPI change
+    bool resizing_ = false;  // inside resizeView: the window resizing itself mustn't size the view back
     bool closed_ = false;
     float scale_ = 1.f;
     Position position_;  // kept when the window goes

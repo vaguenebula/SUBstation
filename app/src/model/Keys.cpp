@@ -1,6 +1,7 @@
 #include "model/Keys.h"
 
 #include "model/Clip.h"
+#include "model/Numbers.h"
 
 #include <QRegularExpression>
 
@@ -21,7 +22,7 @@ int tonicOf(QChar letter) {
     }
 }
 
-int pitchClass(int value) { return ((value % 12) + 12) % 12; }
+int pitchClass(int value) { return floorMod(value, 12); }
 
 // --- Reading file names ---
 // Not in the middle of a word or number.

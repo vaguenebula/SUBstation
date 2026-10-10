@@ -2,6 +2,7 @@
 
 #include "audio/BridgeTypes.h"
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
 #include "model/Device.h"
@@ -56,12 +57,8 @@ QString RackChain::panKey() const {
     return sub::app::automation::chainKey(rackId_, chainId_, sub::app::automation::kChainPan);
 }
 
-// "on" while its automation plays, "off" when overridden (mixer_controls.automation_state).
 QString RackChain::automationStateOf(const QString& key) const {
-    const EngineBridge* bridge = session_->bridge();
-    if (bridge->isOverridden(trackId_, key))
-        return QStringLiteral("off");
-    return bridge->isAutomated(trackId_, key) ? QStringLiteral("on") : QString();
+    return automationState(*session_->bridge(), trackId_, key);
 }
 
 void RackChain::connectSession() {

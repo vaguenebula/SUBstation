@@ -1,6 +1,7 @@
 #include "editor/ProjectEditor.h"
 
 #include "model/Errors.h"
+#include "model/Ids.h"
 
 #include <QUndoCommand>
 #include <QUndoStack>
@@ -60,7 +61,7 @@ bool ProjectEditor::trySetTrackInput(const QString& trackId, const QList<int>& c
 bool ProjectEditor::trySetTrackInputTrack(const QString& trackId, const QString& sourceId) {
     if (!project_->hasOwner(trackId)) return false;
     return reportRefusal([&] {
-        setTrackInputTrack(trackId, sourceId.isEmpty() ? std::nullopt : std::optional<QString>(sourceId));
+        setTrackInputTrack(trackId, optionalId(sourceId));
     });
 }
 

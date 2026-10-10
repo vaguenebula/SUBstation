@@ -33,16 +33,14 @@ DispersionGraph::DispersionGraph(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QRectF DispersionGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 16, -1, -1); }
 
-double DispersionGraph::xOf(double freq) const {
+LogAxis DispersionGraph::frequencyAxis() const {
     const QRectF r = plot();
-    return r.left() + std::log(freq / kLow) / std::log(kHigh / kLow) * r.width();
+    return {kLow, kHigh, r.left(), r.width()};
 }
 
-double DispersionGraph::freqAt(double x) const {
-    const QRectF r = plot();
-    const double fraction = std::clamp((x - r.left()) / r.width(), 0.0, 1.0);
-    return kLow * std::pow(kHigh / kLow, fraction);
-}
+double DispersionGraph::xOf(double freq) const { return frequencyAxis().position(freq); }
+
+double DispersionGraph::freqAt(double x) const { return frequencyAxis().valueAt(x); }
 
 double DispersionGraph::yOf(double ms) const {
     const QRectF r = plot();
@@ -134,16 +132,7 @@ void DispersionGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
     p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
-    for (double decade : {10.0, 100.0, 1000.0, 10000.0}) {  // a line per decade, fainter ones between
-        for (int multiple = 1; multiple < 10; ++multiple) {
-            const double freq = decade * multiple;
-            if (kLow < freq && freq < kHigh) {
-                const double x = xOf(freq);
-                p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()),
-                           withAlpha(Theme::kGridBeat, multiple == 1 ? 200 : 90));
-            }
-        }
-    }
+    drawDecadeGrid(p, r, frequencyAxis());
     const QFont font = uiFont(7);
     for (const double ms : {1.0, 10.0, 100.0, 1000.0, 10000.0}) {  // the delay axis: a line per decade, figures under
         const double y = yOf(ms);

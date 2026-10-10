@@ -1,9 +1,12 @@
 #pragma once
-// Helpers the editor's source files share (not for other code).
+// Helpers the editor's source files share. Not for other code, but for Macro:
+// the session's commands that make several of the editor's edits one undo
+// step open one too.
 
 #include "model/Device.h"
 #include "model/Track.h"
 
+#include <QList>
 #include <QString>
 #include <QUndoStack>
 
@@ -26,9 +29,20 @@ private:
     QUndoStack* stack_;
 };
 
-// An id, or none for "" (no chain: a track's own; no group).
-inline std::optional<QString> optionalId(const QString& id) {
-    return id.isEmpty() ? std::nullopt : std::optional<QString>(id);
+// The items of a list (ids, lanes), each once, in their order.
+template <typename T>
+QList<T> distinct(const QList<T>& items) {
+    QList<T> result;
+    for (const T& item : items) {
+        if (!result.contains(item)) result.append(item);
+    }
+    return result;
+}
+
+// What a frozen track (named `name`) says when an edit of `what` ("its
+// clips", "what is in it") is refused: its audio holds it.
+inline QString frozenText(const QString& name, const QString& what) {
+    return QStringLiteral("%1 is frozen: unfreeze it to change %2").arg(name, what);
 }
 
 // An index into a list of `size` (< 0: past its end), held to it.

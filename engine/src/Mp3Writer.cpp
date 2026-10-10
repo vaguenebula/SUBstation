@@ -8,11 +8,10 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
-#include "PathUtils.h"
+#include "platform/Paths.h"
 #include "lame.h"
 
 namespace sub {
@@ -20,8 +19,8 @@ namespace {
 
 class Mp3Writer final : public AudioFileWriter {
 public:
-    Mp3Writer(std::string path, double sampleRate, int kbps) : path_(std::move(path)) {
-        if (kbps < 32 || kbps > 320) throw std::invalid_argument("MP3 bitrate must be 32 to 320 kbps");
+    Mp3Writer(std::string path, double sampleRate, int kbps) : AudioFileWriter(std::move(path)) {
+        checkMp3Bitrate(kbps);
         const int rate = static_cast<int>(std::lround(sampleRate));
         lame_ = lame_init();
         if (lame_ == nullptr) throw std::runtime_error("Could not start the MP3 encoder");
@@ -39,7 +38,7 @@ public:
             throw std::runtime_error("The MP3 encoder can't encode at " + std::to_string(rate) + " Hz, " +
                                      std::to_string(kbps) + " kbps");
         }
-        file_.open(pathFromUtf8(path_), std::ios::binary | std::ios::trunc);
+        file_.open(platform::toPath(path_), std::ios::binary | std::ios::trunc);
         if (!file_) {
             lame_close(lame_);
             throw std::runtime_error("Could not create " + path_);
@@ -49,10 +48,7 @@ public:
     ~Mp3Writer() override {
         lame_close(lame_);
         if (file_.is_open()) file_.close();
-        if (!kept_) {
-            std::error_code ignored;
-            std::filesystem::remove(pathFromUtf8(path_), ignored);
-        }
+        deleteUnlessKept();
     }
 
     Mp3Writer(const Mp3Writer&) = delete;
@@ -96,14 +92,16 @@ private:
         if (!file_) throw std::runtime_error("Could not write " + path_);
     }
 
-    std::string path_;
     lame_global_flags* lame_ = nullptr;
     std::ofstream file_;
     std::vector<unsigned char> encoded_;
-    bool kept_ = false;
 };
 
 }  // namespace
+
+void checkMp3Bitrate(int kbps) {
+    if (kbps < 32 || kbps > 320) throw std::invalid_argument("MP3 bitrate must be 32 to 320 kbps");
+}
 
 std::unique_ptr<AudioFileWriter> makeMp3Writer(const std::string& path, double sampleRate, int kbps) {
     return std::make_unique<Mp3Writer>(path, sampleRate, kbps);

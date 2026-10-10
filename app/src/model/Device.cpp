@@ -28,6 +28,19 @@ void collectChains(Devices& devices, Out& out) {
     }
 }
 
+// The first rack chain of this id in the order collectChains() has them.
+template <typename Devices, typename Found>
+Found searchChain(Devices& devices, const QString& chainId) {
+    for (auto& device : devices) {
+        for (auto& chain : device.chains) {
+            if (chain.id == chainId) return {&device, &chain};
+            const Found inner = searchChain<Devices, Found>(chain.devices, chainId);
+            if (inner.chain != nullptr) return inner;
+        }
+    }
+    return {nullptr, nullptr};
+}
+
 }  // namespace
 
 QString macroParam(int index) { return QStringLiteral("macro%1").arg(index + 1); }
@@ -126,20 +139,31 @@ const Device* findDevice(const std::vector<Device>& devices, const QString& devi
     return path ? &deviceAt(devices, *path) : nullptr;
 }
 
+RackChain findChain(std::vector<Device>& devices, const QString& chainId) {
+    return searchChain<std::vector<Device>, RackChain>(devices, chainId);
+}
+
+ConstRackChain findChain(const std::vector<Device>& devices, const QString& chainId) {
+    return searchChain<const std::vector<Device>, ConstRackChain>(devices, chainId);
+}
+
+int chainIndex(const Device& rack, const QString& chainId) {
+    for (int i = 0; i < static_cast<int>(rack.chains.size()); ++i) {
+        if (rack.chains[i].id == chainId) return i;
+    }
+    return -1;
+}
+
 std::vector<Device>* chainDevices(std::vector<Device>& devices, const std::optional<QString>& chain) {
     if (!chain) return &devices;
-    for (const RackChain& rc : iterChains(devices)) {
-        if (rc.chain->id == *chain) return &rc.chain->devices;
-    }
-    return nullptr;
+    Chain* found = findChain(devices, *chain).chain;
+    return found != nullptr ? &found->devices : nullptr;
 }
 
 const std::vector<Device>* chainDevices(const std::vector<Device>& devices, const std::optional<QString>& chain) {
     if (!chain) return &devices;
-    for (const ConstRackChain& rc : iterChains(devices)) {
-        if (rc.chain->id == *chain) return &rc.chain->devices;
-    }
-    return nullptr;
+    const Chain* found = findChain(devices, *chain).chain;
+    return found != nullptr ? &found->devices : nullptr;
 }
 
 std::optional<QString> containerOf(const std::vector<Device>& devices, const QString& deviceId) {
@@ -152,10 +176,8 @@ std::optional<QString> containerOf(const std::vector<Device>& devices, const QSt
 
 int rackDepth(const std::vector<Device>& devices, const std::optional<QString>& chain) {
     if (!chain) return 0;
-    for (const ConstRackChain& rc : iterChains(devices)) {
-        if (rc.chain->id == *chain) return 1 + rackDepth(devices, containerOf(devices, rc.rack->id));
-    }
-    return 0;
+    const Device* rack = findChain(devices, *chain).rack;
+    return rack != nullptr ? 1 + rackDepth(devices, containerOf(devices, rack->id)) : 0;
 }
 
 void refreshIds(Device& device) {

@@ -2,13 +2,12 @@
 
 #include <algorithm>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iterator>
 #include <numeric>
 #include <utility>
 
 #include "Text.h"
+#include "platform/Bytes.h"
 
 namespace sub::browser {
 
@@ -17,8 +16,8 @@ using namespace std::chrono_literals;
 namespace {
 
 using NativeString = platform::NativeString;
-using NativeChar = NativeString::value_type;
-using NativeView = std::basic_string_view<NativeChar>;
+using NativeChar = platform::NativeChar;
+using NativeView = platform::NativeStringView;
 
 constexpr auto kSettle = 250ms;         // after the last change seen, before looking
 constexpr auto kSettleAtMost = 1000ms;  // after the first
@@ -28,20 +27,9 @@ constexpr double kPublishEveryMs = 150.0;  // while scanning; more if building t
 constexpr std::chrono::milliseconds kWaitAtMost = 60s;  // it looks at its deadlines again at least this often
 constexpr NativeChar kSeparator = static_cast<NativeChar>(platform::kSeparator);
 
-bool hidden(NativeView name) {
-    return !name.empty() && (name[0] == static_cast<NativeChar>('.') || name[0] == static_cast<NativeChar>('$'));
-}
-
 NativeString joinPath(const NativeString& folder, NativeView name) {
     NativeString path = folder;
-    const NativeChar last = path.empty() ? NativeChar() : path.back();
-#ifdef _WIN32
-    const bool separated = last == L'\\' || last == L'/' || last == L':';
-#else
-    const bool separated = last == '/';
-#endif
-    if (!separated) path += kSeparator;
-    path += name;
+    platform::appendName(path, name);
     return path;
 }
 
@@ -49,7 +37,7 @@ NativeString joinPath(const NativeString& folder, NativeView name) {
 std::string joinKey(const std::string& folderKey, NativeView name) {
     std::string key = folderKey;
     if (key.empty() || key.back() != platform::kSeparator) key += platform::kSeparator;
-    key += platform::pathKey(platform::toUtf8(NativeString(name)));
+    key += platform::pathKey(platform::fromNative(name));
     return key;
 }
 
@@ -65,63 +53,14 @@ const std::shared_ptr<const FolderFiles>& noFiles() {
 constexpr char kMagic[8] = {'G', 'I', 'L', 'B', 'I', 'D', 'X', '1'};
 constexpr uint32_t kFormat = 1;
 
-uint64_t fnv1a(std::string_view data) {
-    uint64_t hash = 0xcbf29ce484222325ull;
-    for (const char c : data) hash = (hash ^ static_cast<unsigned char>(c)) * 0x100000001b3ull;
-    return hash;
-}
-
-class Writer {
-public:
-    std::string data;
-    void u8(uint8_t v) { data.push_back(static_cast<char>(v)); }
-    void u32(uint32_t v) { data.append(reinterpret_cast<const char*>(&v), sizeof v); }
-    void u64(uint64_t v) { data.append(reinterpret_cast<const char*>(&v), sizeof v); }
-    void str(std::string_view s) {
-        u32(static_cast<uint32_t>(s.size()));
-        data.append(s);
-    }
-};
-
-class Reader {
-public:
-    explicit Reader(std::string_view data) : p_(data.data()), end_(data.data() + data.size()) {}
-    bool ok() const { return ok_; }
-    uint8_t u8() { return take<uint8_t>(); }
-    uint32_t u32() { return take<uint32_t>(); }
-    uint64_t u64() { return take<uint64_t>(); }
-    std::string str() {
-        const uint32_t n = u32();
-        if (!ok_ || static_cast<size_t>(end_ - p_) < n) {
-            ok_ = false;
-            return {};
-        }
-        std::string s(p_, n);
-        p_ += n;
-        return s;
-    }
-
-private:
-    template <typename T>
-    T take() {
-        T v{};
-        if (static_cast<size_t>(end_ - p_) < sizeof(T)) {
-            ok_ = false;
-            return v;
-        }
-        std::memcpy(&v, p_, sizeof(T));
-        p_ += sizeof(T);
-        return v;
-    }
-    const char* p_;
-    const char* end_;
-    bool ok_ = true;
-};
+using platform::ByteReader;
+using platform::ByteWriter;
+using platform::fnv1a;
 
 }  // namespace
 
 Indexer::Indexer(std::string store, Limits limits, std::function<void()> changed)
-    : store_(platform::fromUtf8(store)), limits_(std::move(limits)), changed_(std::move(changed)) {
+    : store_(std::move(store)), limits_(std::move(limits)), changed_(std::move(changed)) {
     status_.busy = true;
     thread_ = std::thread([this] { run(); });
 }
@@ -310,7 +249,7 @@ uint32_t Indexer::addNode(NativeString path, NativeString name, std::string key,
 
 void Indexer::setPath(Node& n, NativeString path) {
     n.path = std::move(path);
-    n.pathUtf8 = platform::toUtf8(n.path);
+    n.pathUtf8 = platform::fromNative(n.path);
     n.pathLower = pyLower(n.pathUtf8);
 }
 
@@ -353,7 +292,7 @@ void Indexer::applyPlaces(std::vector<PlaceSpec> specs) {
             place.spec = std::move(spec);
         } else {
             place.spec = std::move(spec);
-            const NativeString root = platform::fromUtf8(place.spec.root);
+            const NativeString root = platform::toNative(place.spec.root);
             const auto known = byKey_.find(place.spec.key);
             if (known != byKey_.end()) {
                 place.node = known->second;
@@ -412,12 +351,12 @@ bool Indexer::list(uint32_t id) {
     std::vector<NativeString> folders;
     if (time && platform::listFolder(n.path, entries)) {
         for (auto& entry : entries) {
-            if (hidden(entry.name)) continue;
+            if (platform::hiddenName(entry.name)) continue;
             if (entry.folder) {
                 folders.push_back(std::move(entry.name));
                 continue;
             }
-            std::string name = platform::toUtf8(entry.name);
+            std::string name = platform::fromNative(entry.name);
             std::string lower = pyLower(name);
             const bool audio = std::any_of(limits_.extensions.begin(), limits_.extensions.end(),
                                            [&](const std::string& ext) { return lower.ends_with(ext); });
@@ -441,7 +380,7 @@ bool Indexer::list(uint32_t id) {
             if (child.parent < 0 && known->second != id) child.parent = static_cast<int32_t>(id);
             children.push_back(known->second);
         } else {
-            std::string detail = platform::toUtf8(name);
+            std::string detail = platform::fromNative(name);
             children.push_back(addNode(joinPath(n.path, name), name, std::move(key), std::move(detail),
                                        static_cast<int32_t>(id)));
         }
@@ -586,7 +525,7 @@ void Indexer::markChanged(const Place& place, const NativeString& relative) {
     size_t cut = leaf.find_last_of(kSeparator);
     NativeView folder = cut == NativeView::npos ? NativeView() : leaf.substr(0, cut);
     leaf = cut == NativeView::npos ? leaf : leaf.substr(cut + 1);
-    if (hidden(leaf)) return;  // never listed
+    if (platform::hiddenName(leaf)) return;  // never listed
     for (;;) {
         const std::string key = folder.empty() ? place.spec.key : joinKey(place.spec.key, folder);
         const auto known = byKey_.find(key);
@@ -597,7 +536,7 @@ void Indexer::markChanged(const Place& place, const NativeString& relative) {
         if (folder.empty()) return;
         cut = folder.find_last_of(kSeparator);
         const NativeView below = cut == NativeView::npos ? folder : folder.substr(cut + 1);
-        if (hidden(below)) return;  // inside a folder that is never listed
+        if (platform::hiddenName(below)) return;  // inside a folder that is never listed
         folder = cut == NativeView::npos ? NativeView() : folder.substr(0, cut);
     }
 }
@@ -622,8 +561,8 @@ void Indexer::save() {
     for (uint32_t id = 0; id < nodes_.size(); ++id)
         if (nodes_[id]) index[id] = static_cast<int32_t>(count++);
 
-    Writer w;
-    w.data.append(kMagic, sizeof kMagic);
+    ByteWriter w;
+    w.raw(kMagic, sizeof kMagic);
     w.u32(kFormat);
     w.u32(static_cast<uint32_t>(limits_.extensions.size()));
     for (const auto& ext : limits_.extensions) w.str(ext);
@@ -632,7 +571,7 @@ void Indexer::save() {
         if (!n) continue;
         w.u32(static_cast<uint32_t>(n->parent >= 0 ? index[static_cast<size_t>(n->parent)] : -1));
         w.str(n->pathUtf8);
-        w.str(platform::toUtf8(n->name));
+        w.str(platform::fromNative(n->name));
         w.str(n->key);
         w.str(n->detail);
         w.u64(n->time);
@@ -642,36 +581,21 @@ void Indexer::save() {
         w.u32(static_cast<uint32_t>(n->files->size()));
         for (size_t f = 0; f < n->files->size(); ++f) w.str(n->files->name(f));
     }
-    w.u64(fnv1a(w.data));
+    w.u64(fnv1a(w.bytes));
 
-    const std::filesystem::path path(store_);
-    std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
-    NativeString temp = store_;
-    for (const char c : std::string_view(".tmp")) temp += static_cast<NativeChar>(c);
-    {
-        std::ofstream out(std::filesystem::path(temp), std::ios::binary | std::ios::trunc);
-        out.write(w.data.data(), static_cast<std::streamsize>(w.data.size()));
-        if (!out) return;
-    }
-    platform::replaceFile(temp, store_);  // a store that can't be written only costs a scan
+    platform::writeFileAtomically(store_, w.bytes);  // a store that can't be written only costs a scan
 }
 
 bool Indexer::load() {
     if (store_.empty()) return false;
-    std::string data;
-    {
-        std::ifstream in(std::filesystem::path(store_), std::ios::binary);
-        if (!in) return false;
-        data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    }
+    const std::optional<std::string> read = platform::readFile(store_);
+    if (!read) return false;
+    const std::string& data = *read;
     if (data.size() < sizeof kMagic + 12 || std::memcmp(data.data(), kMagic, sizeof kMagic) != 0) return false;
     const std::string_view body(data.data(), data.size() - 8);
-    uint64_t checksum;
-    std::memcpy(&checksum, data.data() + body.size(), sizeof checksum);
-    if (checksum != fnv1a(body)) return false;
+    if (ByteReader(std::string_view(data).substr(body.size())).u64() != fnv1a(body)) return false;
 
-    Reader r(body.substr(sizeof kMagic));
+    ByteReader r(body.substr(sizeof kMagic));
     if (r.u32() != kFormat) return false;
     std::vector<std::string> extensions(r.u32());
     for (auto& ext : extensions) ext = r.str();
@@ -713,7 +637,7 @@ bool Indexer::load() {
             return false;
     }
     for (auto& l : loaded) {
-        const uint32_t id = addNode(platform::fromUtf8(l.path), platform::fromUtf8(l.name), std::move(l.key),
+        const uint32_t id = addNode(platform::toNative(l.path), platform::toNative(l.name), std::move(l.key),
                                     std::move(l.detail), l.parent);
         Node& n = node(id);
         n.children = std::move(l.children);

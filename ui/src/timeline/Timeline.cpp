@@ -5,6 +5,7 @@
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
+#include <QPolygonF>
 #include <QRectF>
 
 #include <algorithm>
@@ -160,6 +161,17 @@ void drawLoopRegion(SgPainter& painter, const Timeline& view, double x0, double 
     const double left = std::max(x0, view.beatToX(project->loopStart()));
     const double right = std::min(x1, view.beatToX(project->loopEnd()));
     if (right > left) painter.fillRect(QRectF(left, top, right - left, bottom - top), Theme::kLoopRegion);
+}
+
+void drawPlayhead(SgPainter& painter, const Timeline& view, double beat, double height, bool ruler) {
+    const double x = app::roundHalfEven(view.beatToX(beat));
+    if (ruler) {
+        painter.fillPolygon(
+            QPolygonF({QPointF(x - 5, height - 8), QPointF(x + 6, height - 8), QPointF(x + 0.5, height - 1)}),
+            Theme::kPlayhead);
+    } else {
+        painter.fillRect(QRectF(x, 0, 1, height), Theme::kPlayhead);
+    }
 }
 
 }  // namespace sub::ui::timeline

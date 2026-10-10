@@ -5,7 +5,9 @@
 #include <limits>
 
 #include "core/AudioReader.h"
-#include "core/Hash.h"
+#include "platform/Bytes.h"
+#include "platform/Paths.h"
+#include "platform/Threads.h"
 #include "similarity/SoundStore.h"
 
 namespace sub::intelligence {
@@ -30,7 +32,7 @@ Clock::duration seconds(double s) { return std::chrono::duration_cast<Clock::dur
 // --- SimilarityResult ------------------------------------------------------------------
 
 uint64_t SimilarityResult::pathHash(std::string_view path) {
-    const uint64_t h = fnv1a(path);
+    const uint64_t h = platform::fnv1a(path);
     return h ? h : 1;  // (0 marks an empty slot)
 }
 

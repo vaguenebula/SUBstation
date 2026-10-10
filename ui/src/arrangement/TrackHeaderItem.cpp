@@ -3,6 +3,7 @@
 #include "arrangement/Arrangement.h"
 #include "arrangement/Envelopes.h"
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "controls/Meter.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
@@ -475,10 +476,7 @@ void TrackHeaderItem::refreshRow() {
 }
 
 QString TrackHeaderItem::automationState(const QString& key) const {
-    // How a control shows its automation: "on" while it plays, "off" when overridden.
-    const app::EngineBridge& bridge = *session_->bridge();
-    if (bridge.isOverridden(trackId_, key)) return QStringLiteral("off");
-    return bridge.isAutomated(trackId_, key) ? QStringLiteral("on") : QString();
+    return ui::automationState(*session_->bridge(), trackId_, key);
 }
 
 void TrackHeaderItem::refreshMixer() {

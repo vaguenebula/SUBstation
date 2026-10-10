@@ -32,8 +32,6 @@ std::optional<QByteArray> fromBase64(const QString& text) {
     return *decoded;
 }
 
-std::vector<uint8_t> bytes(const QByteArray& data) { return {data.begin(), data.end()}; }
-
 }  // namespace
 
 // Every chain in the project the engine has, by key: (its track, its devices).
@@ -448,16 +446,20 @@ std::optional<quint32> EngineBridge::loadPlugin(quint32 chainId, const Device& d
     // Its state as it was when the device went away (undo), else as saved.
     const std::optional<QString> saved = device.state;
     quint32 processorId = 0;
-    ++d_->busy;
-    try {
-        processorId = engine_.addPluginProcessor(chainId, plugin.format.toStdString(), path->toStdString(),
-                                                 plugin.uid.toStdString(), -1);
-    } catch (const std::exception& error) {
-        --d_->busy;
-        pluginFailed(deviceId, plugin.name + QStringLiteral(" could not be loaded: ") + QString::fromStdString(error.what()));
+    std::optional<QString> failure;
+    {
+        const BusyScope busy(d_->busy);
+        try {
+            processorId = engine_.addPluginProcessor(chainId, plugin.format.toStdString(), path->toStdString(),
+                                                     plugin.uid.toStdString(), -1);
+        } catch (const std::exception& error) {
+            failure = QString::fromStdString(error.what());
+        }
+    }
+    if (failure) {
+        pluginFailed(deviceId, plugin.name + QStringLiteral(" could not be loaded: ") + *failure);
         return std::nullopt;
     }
-    --d_->busy;
     d_->pluginIds.insert(processorId, *path);
     d_->pluginErrors.remove(deviceId);
     std::optional<QByteArray> state;
@@ -473,14 +475,13 @@ void EngineBridge::pluginFailed(const QString& deviceId, const QString& message)
 }
 
 void EngineBridge::setPluginState(quint32 processorId, const QString& name, const QByteArray& state) {
-    ++d_->busy;
+    const BusyScope busy(d_->busy);
     try {
-        engine_.setProcessorState(processorId, bytes(state));
+        engine_.setProcessorState(processorId, stateBytes(state));
     } catch (const std::exception& error) {
         Q_EMIT statusMessage(name + QStringLiteral(": its settings could not be restored (") +
                              QString::fromStdString(error.what()) + u')');
     }
-    --d_->busy;
 }
 
 // A device's processor goes away (with its track if not `remove`; a rack with
@@ -506,9 +507,7 @@ void EngineBridge::forgetProcessor(const QString& deviceId, std::optional<quint3
     d.hiddenEditors.erase(std::remove(d.hiddenEditors.begin(), d.hiddenEditors.end(), id), d.hiddenEditors.end());
     if (d.pluginIds.contains(id)) {
         try {
-            const std::vector<uint8_t> state = engine_.processorState(id);
-            d.pluginStates.insert(deviceId, QByteArray(reinterpret_cast<const char*>(state.data()),
-                                                       static_cast<qsizetype>(state.size())));
+            d.pluginStates.insert(deviceId, stateData(engine_.processorState(id)));
         } catch (const std::exception&) {
         }
         d.pluginIds.remove(id);
@@ -584,7 +583,7 @@ void EngineBridge::pushDeviceState(const QString& trackId, const QString& device
 void EngineBridge::setBuiltinState(quint32 processorId, const Device& device) {
     std::vector<uint8_t> state;
     if (device.state && !device.state->isEmpty()) {
-        if (const auto decoded = fromBase64(*device.state)) state = bytes(*decoded);
+        if (const auto decoded = fromBase64(*device.state)) state = stateBytes(*decoded);
     }
     const QString name = deviceName(device);
     // (The bridge waits for these before it goes: a failure is said on the main thread, if it is still there.)

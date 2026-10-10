@@ -207,14 +207,7 @@ Samples impulseResponse(const Setting& s, size_t length = 0) {
 
 // A click at frame `at` of a track's left and/or right channel.
 uint32_t clickTrack(sub::Engine& engine, float left, float right, int64_t at, double seconds = 2.0) {
-    Samples samples(static_cast<size_t>(seconds * kSampleRate) * 2, 0.f);
-    samples[static_cast<size_t>(at) * 2] = left;
-    samples[static_cast<size_t>(at) * 2 + 1] = right;
-    const std::string path = makeWav(samples, 2);
-    engine.loadSource(path);
-    const uint32_t track = engine.addTrack();
-    engine.setTrackClips(track, {clip(path, 0.0, seconds, 0.0, 1.f)});
-    return track;
+    return stereoClickTrack(engine, left, right, at, seconds);
 }
 
 }  // namespace

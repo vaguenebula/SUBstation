@@ -1,22 +1,22 @@
-#include "WasapiBackend.h"
+#include "MiniaudioBackend.h"
 
 #include <algorithm>
-#include <chrono>
 #include <iterator>
 #include <stdexcept>
 
 #include "miniaudio.h"
+#include "rt/RtUtils.h"
 
 namespace sub {
 
-struct WasapiCallbacks {
+struct MiniaudioCallbacks {
     static void data(ma_device* device, void* output, const void*, ma_uint32 frames) {
-        auto* self = static_cast<WasapiBackend*>(device->pUserData);
+        auto* self = static_cast<MiniaudioBackend*>(device->pUserData);
         self->process(static_cast<float*>(output), frames, device->playback.channels);
     }
 
     static void notification(const ma_device_notification* notification) {
-        auto* self = static_cast<WasapiBackend*>(notification->pDevice->pUserData);
+        auto* self = static_cast<MiniaudioBackend*>(notification->pDevice->pUserData);
         if (self->closing_.load()) return;
         switch (notification->type) {
             case ma_device_notification_type_stopped: self->callback_->deviceEvent(DeviceEvent::Stopped); break;
@@ -26,7 +26,7 @@ struct WasapiCallbacks {
     }
 };
 
-WasapiBackend::WasapiBackend() : context_(std::make_unique<ma_context>()) {
+MiniaudioBackend::MiniaudioBackend() : context_(std::make_unique<ma_context>()) {
 #ifdef _WIN32
     const ma_backend backends[] = {ma_backend_wasapi};
     contextReady_ = ma_context_init(backends, 1, nullptr, context_.get()) == MA_SUCCESS;
@@ -44,12 +44,12 @@ WasapiBackend::WasapiBackend() : context_(std::make_unique<ma_context>()) {
     for (size_t c = 0; c < outputs_.size(); ++c) outputs_[c] = scratch_.data() + c * kChunk;
 }
 
-WasapiBackend::~WasapiBackend() {
+MiniaudioBackend::~MiniaudioBackend() {
     close();
     if (contextReady_) ma_context_uninit(context_.get());
 }
 
-std::vector<AudioDeviceInfo> WasapiBackend::devices() {
+std::vector<AudioDeviceInfo> MiniaudioBackend::devices() {
     std::vector<AudioDeviceInfo> result;
     if (!contextReady_) return result;
     ma_device_info* playback = nullptr;
@@ -59,7 +59,7 @@ std::vector<AudioDeviceInfo> WasapiBackend::devices() {
     return result;
 }
 
-void WasapiBackend::open(const DeviceConfig& config, AudioCallback* callback) {
+void MiniaudioBackend::open(const DeviceConfig& config, AudioCallback* callback) {
     close();
     if (!contextReady_) throw std::runtime_error("No audio backend is available");
 
@@ -92,8 +92,8 @@ void WasapiBackend::open(const DeviceConfig& config, AudioCallback* callback) {
     maConfig.noPreSilencedOutputBuffer = MA_TRUE;  // the engine writes every frame
     maConfig.noFixedSizedCallback = MA_TRUE;       // the renderer handles any block size
     maConfig.wasapi.usage = ma_wasapi_usage_pro_audio;
-    maConfig.dataCallback = &WasapiCallbacks::data;
-    maConfig.notificationCallback = &WasapiCallbacks::notification;
+    maConfig.dataCallback = &MiniaudioCallbacks::data;
+    maConfig.notificationCallback = &MiniaudioCallbacks::notification;
     maConfig.pUserData = this;
 
     callback_ = callback;
@@ -112,7 +112,7 @@ void WasapiBackend::open(const DeviceConfig& config, AudioCallback* callback) {
     name_ = deviceName;
 }
 
-void WasapiBackend::start() {
+void MiniaudioBackend::start() {
     if (!device_) return;
     const ma_result result = ma_device_start(device_.get());
     if (result != MA_SUCCESS) {
@@ -121,7 +121,7 @@ void WasapiBackend::start() {
     }
 }
 
-void WasapiBackend::close() {
+void MiniaudioBackend::close() {
     if (!device_) return;
     closing_.store(true);
     ma_device_uninit(device_.get());  // blocks until the audio thread has exited
@@ -129,9 +129,8 @@ void WasapiBackend::close() {
     name_.clear();
 }
 
-void WasapiBackend::process(float* interleaved, uint32_t frames, uint32_t channels) noexcept {
-    const int64_t hostTime = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+void MiniaudioBackend::process(float* interleaved, uint32_t frames, uint32_t channels) noexcept {
+    const int64_t hostTime = hostTimeNs();
     const uint32_t used = std::min<uint32_t>(channels, static_cast<uint32_t>(outputs_.size()));
     for (uint32_t done = 0; done < frames;) {
         const uint32_t n = std::min(kChunk, frames - done);
@@ -153,7 +152,7 @@ void WasapiBackend::process(float* interleaved, uint32_t frames, uint32_t channe
     }
 }
 
-DeviceState WasapiBackend::state() const {
+DeviceState MiniaudioBackend::state() const {
     DeviceState state;
     if (!device_) return state;
     state.driver = name();

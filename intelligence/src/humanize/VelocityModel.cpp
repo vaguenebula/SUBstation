@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
+#include <optional>
+#include <utility>
 
 #include <humanbro/humanbro.hpp>
 
-#include "core/Platform.h"
+#include "platform/Files.h"
 
 namespace sub::intelligence::humanize {
 
@@ -16,24 +17,17 @@ namespace {
 // millisecond at 120 BPM); it snaps notes to a 1/16 or triplet grid anyway.
 constexpr int kTicksPerQuarter = 960;
 
-std::vector<char> readFile(const std::string& path) {
-    std::FILE* file = platform::openFile(path, false);
-    if (!file) throw ModelError("can't open the model file " + path);
-    std::vector<char> data;
-    if (const auto stamp = platform::stamp(path)) data.reserve(static_cast<size_t>(stamp->size));
-    char buffer[1 << 16];
-    for (size_t read; (read = std::fread(buffer, 1, sizeof buffer, file)) > 0;) data.insert(data.end(), buffer, buffer + read);
-    const bool failed = std::ferror(file) != 0;
-    std::fclose(file);
-    if (failed) throw ModelError("can't read the model file " + path);
-    return data;
+std::vector<char> readModel(const std::string& path) {
+    std::optional<std::vector<char>> data = platform::readFile<std::vector<char>>(path);
+    if (!data) throw ModelError((platform::stamp(path) ? "can't read the model file " : "can't open the model file ") + path);
+    return std::move(*data);
 }
 
 }  // namespace
 
 VelocityModel::VelocityModel(const std::string& path) {
     try {
-        model_ = std::make_unique<humanbro::Humanizer>(readFile(path));
+        model_ = std::make_unique<humanbro::Humanizer>(readModel(path));
     } catch (const std::exception& error) {  // (humanbro::Error, or whatever else a damaged file makes it throw)
         throw ModelError(path + ": " + error.what());
     }

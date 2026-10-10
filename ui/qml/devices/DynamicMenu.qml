@@ -38,6 +38,16 @@ Menu {
         return action
     }
 
+    // A parameter's automation entries (`param`: a DeviceParam or a RackMacro):
+    // Show Automation (if it can be automated), Delete Automation (if it has an
+    // envelope) and Re-Enable Automation (while its automation is overridden).
+    function automationEntries(param) {
+        entry(qsTr("Show Automation"), () => param.showAutomation(), undefined, param.canAutomate())
+        entry(qsTr("Delete Automation"), () => param.deleteAutomation(), undefined, param.hasEnvelope())
+        if (param.isOverridden())
+            entry(qsTr("Re-Enable Automation"), () => param.reEnableAutomation())
+    }
+
     function separator(target) {
         const into = target || menu
         into.addItem(separatorComponent.createObject(into.contentItem))

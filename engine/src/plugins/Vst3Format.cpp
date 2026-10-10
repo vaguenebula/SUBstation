@@ -1,18 +1,10 @@
 #include "plugins/Vst3Format.h"
 
-#ifdef _WIN32
-#include <windows.h>
-#include <objbase.h>
-#include <shlobj.h>
-#endif
-
 #include <algorithm>
-#include <cstdlib>
-#include <cwctype>
-#include <filesystem>
 #include <stdexcept>
 
-#include "PathUtils.h"
+#include "platform/Paths.h"
+#include "plugins/Vst3Platform.h"
 #include "plugins/Vst3Processor.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
@@ -35,42 +27,6 @@ Steinberg::FUnknown* hostContext() {
     return host;
 }
 
-// Some plug-ins need COM on the thread that loads them (Windows). Qt has set it
-// up on the UI thread already; the scanner process has not.
-void ensureComInitialized() {
-#ifdef _WIN32
-    thread_local bool initialized = false;
-    if (!initialized) {
-        OleInitialize(nullptr);
-        initialized = true;
-    }
-#endif
-}
-
-std::string utf8(const std::filesystem::path& path) {
-    const std::u8string text = path.u8string();
-    return {reinterpret_cast<const char*>(text.data()), text.size()};
-}
-
-// One module per file: paths compare as the file system does (Windows ignores case).
-std::string moduleKey(const std::string& path) {
-    std::wstring wide = pathFromUtf8(path).lexically_normal().make_preferred().wstring();
-#ifdef _WIN32
-    std::transform(wide.begin(), wide.end(), wide.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
-#endif
-    return utf8(std::filesystem::path(wide));
-}
-
-#ifdef _WIN32
-std::string knownFolder(REFKNOWNFOLDERID id) {
-    PWSTR folder = nullptr;
-    std::string result;
-    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &folder))) result = utf8(std::filesystem::path(folder));
-    CoTaskMemFree(folder);
-    return result;
-}
-#endif
-
 bool isInstrument(const VST3::Hosting::ClassInfo& info) {
     const auto& categories = info.subCategories();
     return std::find(categories.begin(), categories.end(), Steinberg::Vst::PlugType::kInstrument) != categories.end();
@@ -83,24 +39,13 @@ Vst3Format& Vst3Format::instance() {
     return format;
 }
 
-std::vector<std::string> Vst3Format::defaultSearchPaths() const {
-    std::vector<std::string> paths;
-#ifdef _WIN32
-    for (const auto& folder : {knownFolder(FOLDERID_ProgramFilesCommon), knownFolder(FOLDERID_UserProgramFilesCommon)}) {
-        if (!folder.empty()) paths.push_back(utf8(pathFromUtf8(folder) / "VST3"));
-    }
-#else
-    // The VST 3 locations on Linux: the user's, then the system's.
-    if (const char* home = std::getenv("HOME"); home && *home) paths.push_back(utf8(pathFromUtf8(home) / ".vst3"));
-    paths.push_back("/usr/lib/vst3");
-    paths.push_back("/usr/local/lib/vst3");
-#endif
-    return paths;
-}
+std::vector<std::string> Vst3Format::defaultSearchPaths() const { return systemPluginFolders(); }
+
+std::string Vst3Format::binaryInBundle(const std::string& bundleName) { return vst3::binaryInBundle(bundleName); }
 
 VST3::Hosting::Module::Ptr Vst3Format::loadModule(const std::string& path) {
     std::lock_guard lock(mutex_);
-    auto& slot = modules_[moduleKey(path)];
+    auto& slot = modules_[platform::fileKey(path)];  // one module per file
     if (auto module = slot.lock()) return module;
     std::string error;
     auto module = VST3::Hosting::Module::create(path, error);
@@ -111,7 +56,7 @@ VST3::Hosting::Module::Ptr Vst3Format::loadModule(const std::string& path) {
 }
 
 std::vector<PluginDescription> Vst3Format::scanFile(const std::string& path) {
-    ensureComInitialized();
+    prepareThreadForModules();
     const auto module = loadModule(path);
     const auto& factory = module->getFactory();
     const std::string factoryVendor = factory.info().vendor();
@@ -134,7 +79,7 @@ std::vector<PluginDescription> Vst3Format::scanFile(const std::string& path) {
 
 std::shared_ptr<Processor> Vst3Format::instantiate(const std::string& path, const std::string& uid, double sampleRate,
                                                    int maxBlockSize) {
-    ensureComInitialized();
+    prepareThreadForModules();
     const auto id = VST3::UID::fromString(uid, false);
     if (!id) throw std::invalid_argument("Not a VST3 class id: " + uid);
     const auto module = loadModule(path);
@@ -145,7 +90,7 @@ std::shared_ptr<Processor> Vst3Format::instantiate(const std::string& path, cons
             return processor;
         }
     }
-    throw std::runtime_error(utf8(pathFromUtf8(path).filename()) + " does not contain this plug-in any more.");
+    throw std::runtime_error(platform::fromPath(platform::toPath(path).filename()) + " does not contain this plug-in any more.");
 }
 
 }  // namespace sub::vst3

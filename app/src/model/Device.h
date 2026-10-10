@@ -168,6 +168,12 @@ const Device& deviceAt(const std::vector<Device>& devices, const std::vector<int
 // A device by id (in racks too); null: not there.
 Device* findDevice(std::vector<Device>& devices, const QString& deviceId);
 const Device* findDevice(const std::vector<Device>& devices, const QString& deviceId);
+// A rack chain by id, in a chain or in the racks in it (depth first, as
+// iterChains), with its rack; both null: not there.
+RackChain findChain(std::vector<Device>& devices, const QString& chainId);
+ConstRackChain findChain(const std::vector<Device>& devices, const QString& chainId);
+// Where a rack's own chain of this id is among its chains (-1: none of its own).
+int chainIndex(const Device& rack, const QString& chainId);
 // The devices of a chain (the vector itself): `devices` (no chain: a track's
 // own) or the rack chain with that id in it; null: not there.
 std::vector<Device>* chainDevices(std::vector<Device>& devices, const std::optional<QString>& chain);

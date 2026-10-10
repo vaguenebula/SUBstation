@@ -19,7 +19,7 @@ What the user does with it: [guide/arrangement.md](../guide/arrangement.md),
 | [Arrangement](../../ui/src/arrangement/Arrangement.h) | The view's state (the old `ArrangementView` and `ViewState`): the time axis (a `timeline::Timeline`: zoom, scroll, the adaptive grid, snapping), following the playhead, the `TrackLayout` and the row models QML lays out, the scroll bars, the playhead, dragging headers to move tracks, Alt+wheel resizing, Ctrl+R |
 | [TrackLayout](../../ui/src/arrangement/TrackLayout.h) | `TrackLayout`, `Row`, `LaneRow`, `AutomationRows`, `automationRows()`, `returnRows()`, `masterRows()`; the layout constants |
 | [RowModels](../../ui/src/arrangement/RowModels.h) | `TrackRowModel` (a header per track, where it sits) and `ReturnRowModel` (a lane and a header per return) |
-| [Timeline](../../ui/src/timeline/Timeline.h) (`ui/src/timeline`) | `timeline::Timeline`, `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`: shared with the piano roll |
+| [Timeline](../../ui/src/timeline/Timeline.h) (`ui/src/timeline`) | `timeline::Timeline`, `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`, `drawPlayhead()`: shared with the piano roll |
 | [ArrangementItem](../../ui/src/arrangement/ArrangementItem.h) | The base of the drawn parts: `session` and `arrangement` properties, `repaint()` |
 | [ArrangementRuler](../../ui/src/arrangement/ArrangementRuler.h) | The loop brace and the scrub area |
 | [ArrangementLanes](../../ui/src/arrangement/ArrangementLanes.h) | The track lanes: painting clips, group summaries, the selection, markers; hit-testing; mouse, wheel, keys, context menus, drops |
@@ -185,7 +185,8 @@ How the session dispatches Delete, Cut, Copy, Paste and Ctrl+D on these fields i
 [Timeline.cpp](../../ui/src/timeline/Timeline.cpp): `gridLines(view, x0, x1, step)` gives `(x, beat, kind)` with kind
 `Bar`, `Beat` or `Sub` against the time signature. `drawGrid(..., overClip = true)` draws faint dark lines instead,
 so the grid shows through a clip body of any colour. `labelStep()` picks how often the ruler labels: the grid step
-or a coarser musical unit, at least 44 px apart. `drawLoopRegion()` tints the loop while it is on.
+or a coarser musical unit, at least 44 px apart. `drawLoopRegion()` tints the loop while it is on. `drawPlayhead()`
+draws the playhead (a line, or a triangle on a ruler) for `ArrangementPlayhead` and `RollPlayhead` alike.
 
 [ArrangementRuler](../../ui/src/arrangement/ArrangementRuler.h), 40 px high:
 

@@ -14,6 +14,7 @@
 // it lies along the bottom.
 
 #include "devices/DeviceCanvas.h"
+#include "devices/EditorPaint.h"
 
 #include <QtQml/qqmlregistration.h>
 
@@ -46,6 +47,7 @@ public:
     QPointF dot() const;
 
     QRectF plot() const;
+    LogAxis frequencyAxis() const;
     double xOf(double freq) const;
     double freqAt(double x) const;
     double yOf(double ms) const;

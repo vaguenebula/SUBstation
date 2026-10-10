@@ -84,8 +84,8 @@ void ClashView::paint(SgPainter& p) {
         return;
     }
     const sf::Spectra& found = graph_->fit()->spectra;
-    const double low = std::log(sf::kClashLow), high = std::log(sf::kClashHigh);
-    auto x = [&](double freq) { return plot.left() + (std::log(freq) - low) / (high - low) * plot.width(); };
+    const LogAxis axis{sf::kClashLow, sf::kClashHigh, plot.left(), plot.width()};
+    auto x = [&](double freq) { return axis.position(freq); };
     auto y = [&](double db) { return plot.bottom() - (std::max(db, -48.0) + 48.0) / 48.0 * plot.height(); };
 
     for (double freq : {50.0, 100.0, 200.0, 500.0, 1000.0})

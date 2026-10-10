@@ -7,7 +7,7 @@
 // A clip counts for the file it plays (`path`: a reversed clip's is its
 // reversed copy). Frozen tracks' own audio (Freeze) isn't listed: the
 // application makes it, and makes it again. Paths are grouped as the system
-// compares them (sourceKey: on Windows in any case) and keep the spelling of
+// compares them (pathIdentity: on Windows in any case) and keep the spelling of
 // the first use met, in the arrangement's order: the tracks, the returns, the
 // master; on each, its clips, then its devices (in racks too).
 

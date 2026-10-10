@@ -19,8 +19,9 @@ For what the user sees and does, read the [user guide](../guide/README.md); this
 | [ui/src/app/](../../ui/src/app) | `AppTypes`: `registerSession()` makes the session the `Session` singleton and registers the application layer's types QML sees (uncreatable). |
 | [ui/src/sg/](../../ui/src/sg) | The scene-graph toolkit: `SgCanvas`, `SgPainter`, `SgTextureCache` ([below](#the-scene-graph-toolkit)). |
 | [ui/src/theme/](../../ui/src/theme) | `Theme` (every colour, the fonts, the metrics, the buttons' looks) and `Icons` (vector icons, and the `image://icons` provider). |
-| [ui/src/controls/](../../ui/src/controls) | `KnobItem`, `ValueBoxItem`, `Meter`, `OscilloscopeItem`, `DragCursor`. |
-| [ui/src/timeline/](../../ui/src/timeline) | `timeline::Timeline` (zoom, scroll, the adaptive grid), `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`: the arrangement's and the piano roll's time axis. |
+| [ui/src/controls/](../../ui/src/controls) | `KnobItem`, `ValueBoxItem`, `Meter`, `OscilloscopeItem`, `DragCursor`; `Automation` (`automationState()`: a control's automation as its dot shows it, `""`, `"on"` or `"off"`; `AutomationTarget`: a parameter menu's Show, Delete and Re-Enable Automation). |
+| [ui/src/input/](../../ui/src/input) | What every view reads from input alike: `Modifiers.h` (`isPanModifier()`: Ctrl+Alt drags scroll; `hasShortcutModifier()`: Ctrl, Alt or Meta, so a key isn't typing; `heldModifiers()`: the modifiers once a key event is through), `DoubleClicks` (a double-click's second press, [below](#gotchas)), `GestureKey.h` (`newGestureKey()`: one gesture's undo merge key, [below](#how-the-ui-talks-to-the-rest)), `Shortcuts` (`keySequences()`: an `Action`'s or `Shortcut`'s shortcut as Qt Quick reads it, for the menus' shortcut text and `PluginEditorKeys`). Ctrl is the shortcut modifier: on macOS Qt reports Command as `Qt::ControlModifier`, so the same code means Command there. |
+| [ui/src/timeline/](../../ui/src/timeline) | `timeline::Timeline` (zoom, scroll, the adaptive grid), `gridLines()`, `labelStep()`, `drawGrid()`, `drawLoopRegion()`, `drawPlayhead()`: the arrangement's and the piano roll's time axis. |
 | [ui/src/mainwindow/](../../ui/src/mainwindow) | `TransportState` (what the transport bar works out), `WindowState` (the window's place and splitters), `FileUrls` (paths and the file dialogs' URLs), `OutsidePresses`, `PagedRows`, `FolderTreeModel` (the browser panel's helpers). |
 | [ui/src/platform/](../../ui/src/platform) | `PluginEditorKeys`: the window's shortcuts while a plug-in's editor has the focus (Windows). `WindowFrame`: the main window's title bar instead of the system's caption (Windows). |
 | [ui/src/arrangement/](../../ui/src/arrangement), [ui/qml/arrangement/](../../ui/qml/arrangement) | The arrangement view: [arrangement.md](arrangement.md). |
@@ -84,7 +85,7 @@ globbed ([ui/CMakeLists.txt](../../ui/CMakeLists.txt)): a new one is picked up b
 - **Continuous gestures are one undo step.** `Knob` and `ValueBox` emit `moved(value, gestureKey)`: every value of
   one drag (or a run of wheel notches less than 0.6 s apart, in a `ValueBox`) shares a key, a fresh
   `QUuid` string (`newGestureKey()`), and QML passes it to the editor as the merge key. The items' gestures do the
-  same with a key of their own.
+  same with keys of their own, from `newGestureKey()` too.
 - **View state skips undo.** Track heights, folding and which automation lanes show change the project without an
   undo step (they are saved); the zoom and the scroll are the views' own (`Arrangement`, `PianoRoll`) and not saved.
 - **Never the engine.** The UI may not include the engine's headers (`ctest -R boundaries` checks it, see
@@ -473,7 +474,7 @@ or shortcut does.
 [PluginEditorKeys](../../ui/src/platform/PluginEditorKeys.h) (in Main.qml, `target: window`). The rules as the user
 sees them: [guide/shortcuts.md](../guide/shortcuts.md).
 
-Plug-in editors are plain Win32 windows (the engine's `EditorWindow.cpp`, window class `SUBstationPluginEditor`; see
+Plug-in editors are plain Win32 windows (the engine's `EditorWindowWin32.cpp`, window class `SUBstationPluginEditor`; see
 [engine/plugins.md](../engine/plugins.md)), so Qt never sees their keys as key events. Their messages still pass
 through Qt's event loop, so `PluginEditorKeys`, a `QAbstractNativeEventFilter` installed on the application on
 Windows only (`supported`), sees each `WM_KEYDOWN` / `WM_SYSKEYDOWN`:
@@ -485,7 +486,8 @@ Windows only (`supported`), sees each `WM_KEYDOWN` / `WM_SYSKEYDOWN`:
      field (an `Edit` or `RichEdit` class), and not a key the computer MIDI keyboard plays while it is on.
    - Ctrl+A/C/V/X/Z/Y and Ctrl+Shift+Z always stay with the plug-in: it may be typing into a field of its own.
    - Otherwise the window's first enabled `Action` or `Shortcut` whose key sequence matches exactly (read from what
-     QML holds: a string, a `StandardKey`, a `QKeySequence`, or a list of them).
+     QML holds as Qt Quick reads it, `keySequences()`: a string, a `StandardKey`, a `QKeySequence`, or a list of
+     them).
 3. `keyPressed()`: if there is one, the message is swallowed and the action triggered (a `Shortcut`'s `activated`),
    except for the repeats (lParam bit 30) of keys held without Ctrl or Alt: Space held down acts once. While a
    render's dialog is up the window takes no keys, so the plug-in keeps them.
@@ -511,8 +513,8 @@ are plain code, so the tests run `actionFor()` and `keyPressed()` on any platfor
 - **The second press of a double-click.** Qt Quick delivers it as a press as well as the double-click (widgets got
   only the double-click). The arrangement's and the piano roll's items ignore a press flagged
   `Qt::MouseEventCreatedDoubleClick` (the double-click stands for it); the device view's frames and editors work it
-  out from the presses' times and places (`secondPressOfDoubleClick()`). Where each click of a double-click
-  counts (automation lanes, fold buttons), the double-click starts the gesture again.
+  out from the presses' times and places (`secondPressOfDoubleClick()`, with a `DoubleClicks`). Where each click of
+  a double-click counts (automation lanes, fold buttons), the double-click starts the gesture again.
 - **Losing the mouse grab ends a gesture.** A popup opening mid-drag takes the mouse: items end their gesture in
   `mouseUngrabEvent()`, where what it previewed goes.
 - **Native event filters see every message.** `PluginEditorKeys::nativeEventFilter` runs for every message of the

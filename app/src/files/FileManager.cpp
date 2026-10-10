@@ -9,15 +9,18 @@
 #include <algorithm>
 
 #include "Browser.h"  // the browser's index (sub_browser: its Snapshot)
+#include "ListModels.h"
 #include "audio/AudioFiles.h"
 #include "audio/EngineBridge.h"
 #include "browser/BrowserController.h"
 #include "editor/ProjectEditor.h"
 #include "files/HotSwap.h"
 #include "files/MissingFiles.h"
-#include "model/Edits.h"
+#include "model/Numbers.h"
+#include "model/Paths.h"
 #include "model/Project.h"
 #include "session/Selection.h"
+#include "session/SessionSupport.h"
 
 namespace sub::app {
 
@@ -25,12 +28,6 @@ namespace {
 
 QVariantMap action(const QString& id, const QString& label) {
     return {{QStringLiteral("action"), id}, {QStringLiteral("label"), label}};
-}
-
-QString stem(const QString& path) { return QFileInfo(path).completeBaseName(); }
-
-QString fileCountText(int count) {
-    return count == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(count);
 }
 
 }  // namespace
@@ -76,17 +73,11 @@ void FileListModel::setRows(std::vector<Row> rows) {
     if (count() != before) Q_EMIT countChanged();
 }
 
-QVariantMap FileListModel::get(int row) const {
-    if (row < 0 || row >= count()) return {};
-    const Row& r = rows_[static_cast<size_t>(row)];
-    return {{QStringLiteral("path"), r.path},       {QStringLiteral("name"), r.name},
-            {QStringLiteral("folder"), r.folder},   {QStringLiteral("uses"), r.uses},
-            {QStringLiteral("missing"), r.missing}, {QStringLiteral("frozen"), r.frozen}};
-}
+QVariantMap FileListModel::get(int row) const { return rowMap(*this, row); }
 
 int FileListModel::rowOf(const QString& path) const {
     for (int i = 0; i < count(); ++i) {
-        if (edits::samePath(rows_[static_cast<size_t>(i)].path, path)) return i;
+        if (samePath(rows_[static_cast<size_t>(i)].path, path)) return i;
     }
     return -1;
 }
@@ -122,7 +113,7 @@ FileManager::FileManager(Project* project, ProjectEditor* editor, Selection* sel
     // A file the engine couldn't decode may have gone; one it could may be back
     // (or it had it in memory still): looked at again.
     auto lookAgain = [this](const QString& path) {
-        if (exists_.remove(sourceKey(path)) > 0) scheduleUpdate();
+        if (exists_.remove(pathIdentity(path)) > 0) scheduleUpdate();
     };
     connect(bridge_, &EngineBridge::sourceReady, this, lookAgain);
     connect(bridge_, &EngineBridge::sourceFailed, this,
@@ -135,7 +126,7 @@ FileManager::~FileManager() { search_.reset(); }  // (cancelled, and waited for)
 void FileManager::scheduleUpdate() { updateTimer_.start(); }
 
 bool FileManager::exists(const QString& path) const {
-    const QString key = sourceKey(path);
+    const QString key = pathIdentity(path);
     const auto known = exists_.constFind(key);
     if (known != exists_.constEnd()) return *known;
     const bool there = QFileInfo(path).isFile();
@@ -200,7 +191,7 @@ bool FileManager::isMissing(const QString& path) const { return !exists(path); }
 QString FileManager::summary() const {
     if (files_.empty()) return QStringLiteral("No files");
     const int missing = missingCount();
-    const QString all = fileCountText(fileCount());
+    const QString all = countText(fileCount(), QStringLiteral("file"), QStringLiteral("files"));
     return missing == 0 ? all : QStringLiteral("%1, %2 missing").arg(all).arg(missing);
 }
 
@@ -298,7 +289,7 @@ void FileManager::searchFinished(quint64 generation, const QMap<QString, QString
         Q_EMIT statusMessage(QStringLiteral("No missing files were found%1").arg(searchWhere_));
         return;
     }
-    for (const QString& path : moved) exists_.insert(sourceKey(path), true);
+    for (const QString& path : moved) exists_.insert(pathIdentity(path), true);
     editor_->relinkFiles(moved);
     update();
     const int count = static_cast<int>(moved.size());
@@ -321,7 +312,7 @@ void FileManager::setSearching(bool searching, const QString& status) {
 // --- What it does with a file -------------------------------------------------------------
 
 bool FileManager::replace(const QString& path, const QString& with) {
-    if (path.isEmpty() || with.isEmpty() || edits::samePath(path, with)) return false;
+    if (path.isEmpty() || with.isEmpty() || samePath(path, with)) return false;
     if (!isAudioFile(with) || !QFileInfo(with).isFile()) {
         Q_EMIT statusMessage(QStringLiteral("%1 isn't an audio file").arg(QFileInfo(with).fileName()));
         return false;
@@ -336,11 +327,11 @@ bool FileManager::replace(const QString& path, const QString& with) {
     }
     const std::optional<AudioFileInfo> info = bridge_->fileInfo(with);  // (it says why it couldn't read it)
     if (!info || info->duration <= 0.0) return false;
-    const QString text = QStringLiteral("Replace %1 with %2").arg(stem(path), stem(with));
+    const QString text = QStringLiteral("Replace %1 with %2").arg(fileStem(path), fileStem(with));
     if (!editor_->replaceFile(uses, with, info->duration, text)) return false;
-    exists_.insert(sourceKey(with), true);
+    exists_.insert(pathIdentity(with), true);
     QString message =
-        QStringLiteral("Replaced %1 with %2 (%3)").arg(stem(path), stem(with), usesText(*project_, uses));
+        QStringLiteral("Replaced %1 with %2 (%3)").arg(fileStem(path), fileStem(with), usesText(*project_, uses));
     if (!frozen.isEmpty()) message += QStringLiteral("; frozen tracks' are left as they are");
     Q_EMIT statusMessage(message);
     return true;
@@ -352,13 +343,13 @@ bool FileManager::locate(const QString& path, const QString& found) {
         Q_EMIT statusMessage(QStringLiteral("%1 isn't an audio file").arg(QFileInfo(found).fileName()));
         return false;
     }
-    if (edits::samePath(path, found)) return false;
+    if (samePath(path, found)) return false;
     QStringList others = missingFiles();
     others.removeAll(path);
     const auto isFile = [](const QString& candidate) { return QFileInfo(candidate).isFile(); };
     QMap<QString, QString> moved = missing::moveAlong(path, found, others, isFile);
     moved.insert(path, found);
-    for (const QString& to : moved) exists_.insert(sourceKey(to), true);
+    for (const QString& to : moved) exists_.insert(pathIdentity(to), true);
     if (!editor_->relinkFiles(moved, moved.size() == 1 ? QStringLiteral("Locate Missing File")
                                                        : QStringLiteral("Locate Missing Files")))
         return false;
@@ -368,7 +359,7 @@ bool FileManager::locate(const QString& path, const QString& found) {
     if (more == 0)
         Q_EMIT statusMessage(QStringLiteral("Located %1").arg(name));
     else
-        Q_EMIT statusMessage(QStringLiteral("Located %1, and %2 more where it went").arg(name, fileCountText(more)));
+        Q_EMIT statusMessage(QStringLiteral("Located %1, and %2 more where it went").arg(name, countText(more, QStringLiteral("file"), QStringLiteral("files"))));
     return true;
 }
 

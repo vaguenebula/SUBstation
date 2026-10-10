@@ -15,7 +15,8 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | File | What it holds |
 |---|---|
 | [Processor.h](../../engine/src/Processor.h) | `ProcessEvent`, `EventList`, `ProcessContext`, `ParamInfo`, `DisplayInfo`, `ParamAutomation`, `ProcessorEvent`, `Processor` |
-| [builtin/BuiltinProcessor.h](../../engine/src/builtin/BuiltinProcessor.h) / [.cpp](../../engine/src/builtin/BuiltinProcessor.cpp) | parameters as atomics, automation by splitting blocks, displays, state as named text values, `loadSource()` |
+| [builtin/BuiltinProcessor.h](../../engine/src/builtin/BuiltinProcessor.h) / [.cpp](../../engine/src/builtin/BuiltinProcessor.cpp) | parameters as atomics (`param`, `isOn`, `choice`, `choiceIndex`, `offOnLabels`), automation by splitting blocks, displays, state as named text values, `loadSource()` |
+| [builtin/Dsp.h](../../engine/src/builtin/Dsp.h) | DSP the devices share, all inline: the state-variable filter section (`dsp::Svf`, `dsp::SvfCoefficients`), `hermite`, `followPeak`, `flushTiny`, the instruments' envelopes (`riseStep`, `fallCoefficient`, `kSilent`, `kFadeTo`), `renderBetweenNotes` |
 | [builtin/BuiltinRegistry.h](../../engine/src/builtin/BuiltinRegistry.h) / [.cpp](../../engine/src/builtin/BuiltinRegistry.cpp) | `BuiltinRegistry`, `BuiltinInfo`, `BuiltinCategory`, `SUB_REGISTER_BUILTIN` |
 | [builtin/devices/Synth.cpp](../../engine/src/builtin/devices/Synth.cpp) | the Synth instrument |
 | [builtin/devices/Sampler.cpp](../../engine/src/builtin/devices/Sampler.cpp) | the Sampler instrument |
@@ -27,10 +28,10 @@ How the user works with devices (the device view, racks, presets, folding, cut/c
 | [builtin/devices/Disperser.cpp](../../engine/src/builtin/devices/Disperser.cpp) | Disperser: up to 64 all-pass stages, glides and fades, bypass |
 | [builtin/DisperserDesign.h](../../engine/src/builtin/DisperserDesign.h) | The Disperser's stages (`disperser::design`, `process`, `groupDelayMs`), shared with the application layer's `disperserGroupDelayMs()` for the editor's graph |
 | [builtin/devices/Eq.cpp](../../engine/src/builtin/devices/Eq.cpp) | EQ: 24 bands, placement, output gain, gain scale |
-| [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design (`eq::design`, `eq::responseDb`), shared with the application layer's `eqResponseDb()` for the editor's curves |
+| [builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h) | The EQ's filter design (`eq::design`, `eq::responseDb`), shared with the application layer's `eqResponseDb()` for the editor's curves; `eq::Biquad::tick` (a sample through a section, transposed direct form II: the EQ's and the Sidechain's crossover) |
 | [builtin/devices/Sidechain.cpp](../../engine/src/builtin/devices/Sidechain.cpp) | Sidechain: a curve from each hit in the key (or on the beat), lookahead, lows only |
 | [Rack.h](../../engine/src/Rack.h) | `RackProcessor`: a rack's place in a chain (its chains are run by the renderer) |
-| [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | `SmoothedValue`, `SpscQueue`, `DisplayStream`, `dbToGain`, `balanceGains` |
+| [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) | `SmoothedValue`, `SpscQueue`, `DisplayStream`, `dbToGain`, `gainToDb`, `expDbToGain`, `onePoleCoefficient`, `balanceGains` |
 | [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `addBuiltinProcessor()`, and the processor calls the engine bridge makes (`setProcessorParam`, `processorState`, `setProcessorState`, `processorDisplays`, `readProcessorDisplay`, ...) |
 | [app/src/model/Devices.h](../../app/src/model/Devices.h) | The application layer's view of the registry: `BuiltinDevice`, `builtinDevices()`, `builtinCategories()`, `builtinParamInfo()` |
 | [ui/qml/devices/editors/](../../ui/qml/devices/editors) | Built-in devices' own editors (QML, drawing with items in [ui/src/devices](../../ui/src/devices)), registered by kind |
@@ -71,10 +72,12 @@ Everything else is called from the main (UI) thread, as plug-in formats require,
 - `ProcessEvent`: `NoteOn`, `NoteOff` (`data[0]` key, 60 = C3; `data[1]` velocity, 0 for note-offs; `data[2]`
   channel) or raw `Midi` bytes, at a `sampleOffset`. The renderer sends each track's notes to every processor on the
   track (audio effects ignore them), sorted by offset, note-offs before note-ons at the same offset. A note-on with
-  velocity 0 counts as a note-off. Plug-in adapters translate them to their format's events.
+  velocity 0 counts as a note-off (`startsNote()`, `endsNote()` say which an event is). Plug-in adapters translate
+  them to their format's events.
 - `ProcessContext`: sample rate, `samplePos` and `beatPos` of the block's first frame, tempo, time signature,
-  `playing`, `looping` with loop start and end beats, `offline`, and `inEvents`. The renderer splits blocks where the
-  playhead jumps (a loop wrap), so a block is always one continuous stretch.
+  `playing`, `looping` with loop start and end beats, `offline`, and `inEvents`; `samplesPerBeat()` and
+  `beatsPerBar()` from them. The renderer splits blocks where the playhead jumps (a loop wrap), so a block is always
+  one continuous stretch.
 
 ### Sidechain
 
@@ -107,7 +110,9 @@ What every built-in device shares ([BuiltinProcessor.h](../../engine/src/builtin
 
 - **Parameters.** A fixed `ParamInfo` list (a static the device owns: it must outlive the processor) is passed to the
   constructor. Values are atomics initialised to the defaults; the UI sets them (`setParam` clamps to the range),
-  the rendering thread reads them with `param(index)`. `params()`, `getParam()`, `setParam()`, `process()`,
+  the rendering thread reads them with `param(index)`, a switch with `isOn(index)` (on from 0.5, as automation plays
+  it: `automationSwitchOn`), a list or stepped value with `choice<Enum>(index)` or `choiceIndex(index)` (rounded).
+  A switch's labels are `offOnLabels()`. `params()`, `getParam()`, `setParam()`, `process()`,
   `displays()`, `readDisplay()`, `getState()` and `setState()` are `final`.
 - **Automation.** `process()` renders the block in stretches between the points where automation changes a value,
   calling the device's `render()` for each, with that stretch's events (offsets relative to it), position and beat
@@ -698,6 +703,10 @@ See [ui/device-view.md](../ui/device-view.md#device-editors) for the editors and
 
    - Parameter ids are saved in projects and automation keys (`device:<device id>:<param id>`): don't rename them
      once released. Use `logScale` for frequencies and times, `valueLabels` for lists, `steps` for whole numbers.
+   - What other devices already do is in [builtin/Dsp.h](../../engine/src/builtin/Dsp.h) (filter sections,
+     interpolation, envelopes, rendering between note events) and [rt/RtUtils.h](../../engine/src/rt/RtUtils.h)
+     (smoothing, dB, one-pole coefficients): use them rather than writing them again. They are inline, so they
+     cost what the same code written out would.
    - An instrument writes its output (it is first on a MIDI track) and reads notes from `ctx.inEvents`; an effect
      processes in place.
    - A sidechain: override `hasSidechain()` and read `sidechain(c)` / `sidechainConnected()` in `render()`.

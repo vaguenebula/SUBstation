@@ -750,6 +750,9 @@ private:
     };
     QMap<LaneRef, Envelope> carriedAutomation(const std::vector<Span>& spans, double deltaBeats, bool copyClips) const;
     QMap<LaneRef, Envelope> clearedAutomation(double start, double end, const QStringList& trackIds) const;
+    // What of the frozen audio holding these tracks (frozenRenders) plays with
+    // the range between two beats taken out: render -> its segments.
+    QMap<QString, std::vector<Clip>> frozenWithout(const QStringList& trackIds, double start, double end) const;
     // The clips of these tracks with the stretch between two beats of each
     // `chosen` clip split off (at the range's edges) and changed by `change`
     // (a clip wholly inside keeps its id), for reverseRange and setRangeActive:

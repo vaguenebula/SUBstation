@@ -17,6 +17,7 @@
 #include "Browser.h"
 #include "Platform.h"
 #include "Search.h"
+#include "TestSupport.h"
 #include "Text.h"
 #include "browser/BrowserItem.h"
 #include "browser/BrowserSearch.h"
@@ -160,12 +161,22 @@ private Q_SLOTS:
         QVERIFY(Library(path(), clock()).records().isEmpty());
         write(R"({"version": 2, "items": {"audio:a": {"uses": 1}}})");
         QVERIFY(Library(path(), clock()).records().isEmpty());
+        write(R"([{"version": 1}])");  // (not an object)
+        QVERIFY(Library(path(), clock()).records().isEmpty());
+        write(R"({"version": 1, "items": [{"uses": 1}]})");
+        QVERIFY(Library(path(), clock()).records().isEmpty());
         write(R"({"version": 1, "items": {"audio:a": {"uses": 1}, "audio:b": 3}})");
         QCOMPARE(Library(path(), clock()).records().keys(), QStringList{QStringLiteral("audio:a")});
         // The environment says where it is.
-        qputenv("SUBSTATION_LIBRARY", path().toUtf8());
+        const test::ScopedEnv library("SUBSTATION_LIBRARY", path());
         QCOMPARE(Library::defaultPath(), path());
-        qunsetenv("SUBSTATION_LIBRARY");
+    }
+
+    void savingMakesItsFolder() {
+        const QString nested = tmp_->filePath(QStringLiteral("a/b/library.json"));
+        Library library(nested, clock());
+        library.recordUse({QStringLiteral("audio:a")});
+        QCOMPARE(Library(nested, clock()).uses(QStringLiteral("audio:a")), 1);
     }
 
     void usageRecordsForTheBackend() {
@@ -278,10 +289,17 @@ private Q_SLOTS:
         QVERIFY(FileIndex::isAudioFile(QStringLiteral("/x/a.flac")));
         QVERIFY(FileIndex::isAudioFile(QStringLiteral("/x/a.mp3")));
         QVERIFY(!FileIndex::isAudioFile(QStringLiteral("/x/a.wav.asd")));
-        qputenv("SUBSTATION_BROWSER_INDEX", path().toUtf8());
-        QCOMPARE(FileIndex::defaultIndexPath(), path());
-        qunsetenv("SUBSTATION_BROWSER_INDEX");
-        QVERIFY(FileIndex::defaultIndexPath().endsWith(QStringLiteral("/SUBstation/browser-index.bin")));
+        {
+            const test::ScopedEnv index("SUBSTATION_BROWSER_INDEX", path());
+            QCOMPARE(FileIndex::defaultIndexPath(), path());
+        }
+        {
+            const test::ScopedEnv index("SUBSTATION_BROWSER_INDEX", std::nullopt);
+            QVERIFY(FileIndex::defaultIndexPath().endsWith(QStringLiteral("/SUBstation/browser-index.bin")));
+            QCOMPARE(FileIndex::defaultIndexPath(), localDataDir() + QStringLiteral("/browser-index.bin"));
+        }
+        const test::ScopedEnv index("SUBSTATION_BROWSER_INDEX", QString());  // (set, but empty: as if it weren't)
+        QCOMPARE(FileIndex::defaultIndexPath(), localDataDir() + QStringLiteral("/browser-index.bin"));
     }
 
 private:

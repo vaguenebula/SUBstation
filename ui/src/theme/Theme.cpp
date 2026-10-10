@@ -1,5 +1,7 @@
 #include "theme/Theme.h"
 
+#include "input/Shortcuts.h"
+
 #include <QKeySequence>
 #include <QVariant>
 
@@ -39,16 +41,7 @@ QColor Theme::automationColor(const QString& state) const {
 }
 
 QString Theme::shortcutText(const QVariant& shortcut) const {
-    if (!shortcut.isValid())
-        return {};
-    QKeySequence sequence;
-    if (shortcut.typeId() == QMetaType::QKeySequence)
-        sequence = shortcut.value<QKeySequence>();
-    else if (shortcut.typeId() == QMetaType::QString)
-        sequence = QKeySequence(shortcut.toString());
-    else if (shortcut.canConvert<int>())
-        sequence = QKeySequence(static_cast<QKeySequence::StandardKey>(shortcut.toInt()));
-    return sequence.toString(QKeySequence::NativeText);
+    return keySequences(shortcut).value(0).toString(QKeySequence::NativeText);
 }
 
 QString Theme::withoutMnemonics(const QString& text) {

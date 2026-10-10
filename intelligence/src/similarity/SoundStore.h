@@ -40,7 +40,8 @@
 #include <string>
 #include <vector>
 
-#include "core/Platform.h"
+#include "platform/Bytes.h"
+#include "platform/Files.h"
 #include "similarity/FeatureSchema.h"
 #include "similarity/Similarity.h"
 
@@ -77,12 +78,8 @@ public:
     std::string finish(const FeatureStatistics* statistics = nullptr);
 
 private:
-    void u32(uint32_t v);
-    void u64(uint64_t v);
-    void f32(float v);
-    void str(const std::string& s);
     size_t dims_;
-    std::string bytes_;
+    platform::ByteWriter out_;
 };
 
 // Writes the bytes to `file` (through `file`.tmp, moved over it). False on failure.

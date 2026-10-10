@@ -5,6 +5,7 @@
 #include "arrangement/Cursors.h"
 #include "audio/EngineBridge.h"
 #include "editor/ProjectEditor.h"
+#include "input/GestureKey.h"
 #include "model/Project.h"
 #include "session/Selection.h"
 #include "session/Session.h"
@@ -14,7 +15,6 @@
 
 #include <QFontMetricsF>
 #include <QLineF>
-#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -41,7 +41,6 @@ using app::Envelope;
 
 double fine(Qt::KeyboardModifiers modifiers) { return modifiers & Qt::ShiftModifier ? 0.1 : 1.0; }
 bool alt(Qt::KeyboardModifiers modifiers) { return modifiers & Qt::AltModifier; }
-bool farEnough(const QPointF& pos, const QPointF& press) { return (pos - press).manhattanLength() >= kDragThreshold; }
 
 const timeline::Timeline& viewOf(LanesHost& host) { return host.hostArrangement()->view(); }
 app::Project& projectOf(LanesHost& host) { return *host.hostSession()->project(); }
@@ -178,8 +177,6 @@ std::optional<Grab> grabAt(LanesHost& host, const EnvelopeArea& area, const Enve
     return std::nullopt;
 }
 
-QString newKey() { return QUuid::createUuid().toString(); }
-
 // --- Gestures -------------------------------------------------------------------------------------
 
 // Drag breakpoints: the one pressed, and the others selected with it. A click
@@ -192,7 +189,7 @@ public:
     PointGesture(LanesHost& host, const EnvelopeArea& area, int index, const QPointF& press,
                  Qt::KeyboardModifiers modifiers, bool added = false, bool segment = false, QString mergeKey = {})
         : host_(host), area_(area), index_(index), press_(press), added_(added || segment),
-          mergeKey_(mergeKey.isEmpty() ? newKey() : std::move(mergeKey)) {
+          mergeKey_(mergeKey.isEmpty() ? newGestureKey() : std::move(mergeKey)) {
         app::Selection& selection = *host.hostSession()->selection();
         original_ = projectOf(host).envelope(area.owner, area.key);
         QSet<int> selected = added_ ? QSet<int>() : selection.selectedPoints(area.owner, area.key);
@@ -278,7 +275,7 @@ private:
 class CurveGesture : public Gesture {
 public:
     CurveGesture(LanesHost& host, const EnvelopeArea& area, int index, const QPointF& press)
-        : host_(host), area_(area), index_(index), press_(press), key_(newKey()) {
+        : host_(host), area_(area), index_(index), press_(press), key_(newGestureKey()) {
         original_ = projectOf(host).envelope(area.owner, area.key);
         host.hostSession()->selection()->selectPoints(area.owner, area.key, QSet<int>());
     }
@@ -381,7 +378,7 @@ private:
 class RangeGesture : public Gesture {
 public:
     RangeGesture(LanesHost& host, const EnvelopeArea& area, const QPointF& press, Qt::KeyboardModifiers modifiers)
-        : host_(host), area_(area), press_(press), modifiers_(modifiers), key_(newKey()) {
+        : host_(host), area_(area), press_(press), modifiers_(modifiers), key_(newGestureKey()) {
         const app::Selection& selection = *host.hostSession()->selection();
         if (const auto& range = selection.timeRange()) {
             start_ = range->start;
@@ -433,7 +430,7 @@ private:
 std::unique_ptr<Gesture> addAndDrag(LanesHost& host, const EnvelopeArea& area, const QPointF& pos,
                                     Qt::KeyboardModifiers modifiers, const std::pair<double, double>& target) {
     app::Session& session = *host.hostSession();
-    const QString key = newKey();  // ties the breakpoint's adding to the drag that follows
+    const QString key = newGestureKey();  // ties the breakpoint's adding to the drag that follows
     const int index = session.editor()->addAutomationPoint(area.owner, area.key, target.first, target.second, key);
     auto gesture = std::make_unique<PointGesture>(host, area, index, pos, modifiers, true, false, key);
     session.selection()->setInsert(target.first);

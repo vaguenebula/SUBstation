@@ -4,6 +4,7 @@
 #include "audio/EngineBridge.h"
 #include "controls/KnobItem.h"
 #include "editor/ProjectEditor.h"
+#include "mainwindow/FileUrls.h"
 #include "model/Device.h"
 #include "model/DeviceState.h"
 #include "model/Project.h"
@@ -100,9 +101,7 @@ SampleView::SampleView(QQuickItem* parent) : DeviceCanvas(parent) {
 
 QString SampleView::samplePath() const { return path_; }
 
-QUrl SampleView::sampleFolder() const {
-    return path_.isEmpty() ? QUrl() : QUrl::fromLocalFile(QFileInfo(path_).absolutePath());
-}
+QUrl SampleView::sampleFolder() const { return FileUrls::folderUrl(path_); }
 
 QList<qreal> SampleView::slices() const {
     QList<qreal> result;
@@ -210,7 +209,6 @@ void SampleView::readSample() {
         Q_EMIT sampleChanged();
 }
 
-void SampleView::loadSampleUrl(const QUrl& url) { loadSample(url.isLocalFile() ? url.toLocalFile() : url.toString()); }
 
 void SampleView::loadSample(const QString& path) {
     const sub::app::Device* found = device();

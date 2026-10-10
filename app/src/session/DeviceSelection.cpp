@@ -10,11 +10,13 @@
 #include <functional>
 
 #include "audio/EngineBridge.h"
+#include "editor/EditorSupport.h"
 #include "editor/ProjectEditor.h"
 #include "io/Presets.h"
 #include "io/Serialization.h"
 #include "model/Devices.h"
 #include "model/Errors.h"
+#include "model/Ids.h"
 #include "model/Project.h"
 #include "session/Selection.h"
 #include "session/SessionSupport.h"
@@ -83,7 +85,7 @@ QStringList DeviceSelection::chainDevices(const QString& chain) const {
     QStringList ids;
     const auto* list = devices();
     if (list == nullptr) return ids;
-    const auto* devices = sub::app::chainDevices(*list, chain.isEmpty() ? std::nullopt : std::optional<QString>(chain));
+    const auto* devices = sub::app::chainDevices(*list, optionalId(chain));
     if (devices != nullptr) {
         for (const Device& device : *devices) ids.append(device.id);
     }
@@ -95,10 +97,7 @@ QString DeviceSelection::shownChain(const QString& rackId) const {
     const Device* rack = list != nullptr ? findDevice(*list, rackId) : nullptr;
     if (rack == nullptr || rack->chains.empty()) return {};
     const QString shown = shownChains_.value(rackId);
-    for (const Chain& chain : rack->chains) {
-        if (chain.id == shown) return shown;
-    }
-    return rack->chains.front().id;
+    return chainIndex(*rack, shown) >= 0 ? shown : rack->chains.front().id;
 }
 
 bool DeviceSelection::frozen() const { return !trackId_.isEmpty() && project_->frozenBy(trackId_).has_value(); }
@@ -115,10 +114,8 @@ QStringList DeviceSelection::computeShown() const {
                 !project_->areRackDevicesShown(device.id)) {
                 continue;
             }
-            const QString chainId = shownChain(device.id);
-            for (const Chain& rackChain : device.chains) {
-                if (rackChain.id == chainId) add(rackChain.devices);
-            }
+            const int chain = chainIndex(device, shownChain(device.id));
+            if (chain >= 0) add(device.chains[chain].devices);
         }
     };
     add(*list);
@@ -280,16 +277,12 @@ QVariantMap DeviceSelection::renameTarget() const {
     if (clickedRack_.isEmpty() || !shown_.contains(clickedRack_)) return {};
     const auto* list = devices();
     const Device* rack = list != nullptr ? findDevice(*list, clickedRack_) : nullptr;
-    if (rack == nullptr || project_->isDeviceFolded(rack->id)) return {};
-    for (const Chain& chain : rack->chains) {
-        if (chain.id == clickedChain_) {
-            return {{QStringLiteral("trackId"), trackId_},
-                    {QStringLiteral("rackId"), clickedRack_},
-                    {QStringLiteral("chainId"), clickedChain_},
-                    {QStringLiteral("name"), chain.name}};
-        }
-    }
-    return {};
+    const int chain = rack != nullptr ? chainIndex(*rack, clickedChain_) : -1;
+    if (chain < 0 || project_->isDeviceFolded(rack->id)) return {};
+    return {{QStringLiteral("trackId"), trackId_},
+            {QStringLiteral("rackId"), clickedRack_},
+            {QStringLiteral("chainId"), clickedChain_},
+            {QStringLiteral("name"), rack->chains[chain].name}};
 }
 
 // --- Acting on them ---------------------------------------------------------------------------
@@ -334,14 +327,13 @@ bool DeviceSelection::ungroupSelected() {
     if (racks.isEmpty()) return false;
     selected_.clear();
     Q_EMIT changed();
-    QUndoStack* stack = editor_->undoStack();
-    stack->beginMacro(racks.size() == 1 ? QStringLiteral("Ungroup Rack") : QStringLiteral("Ungroup Racks"));
+    const editing::Macro macro(editor_->undoStack(),
+                               racks.size() == 1 ? QStringLiteral("Ungroup Rack") : QStringLiteral("Ungroup Racks"));
     for (const QString& rackId : racks) {
         if (!editor_->ungroupRack(trackId_, rackId)) {
             Q_EMIT statusMessage(QStringLiteral("A rack of several instruments can't be ungrouped: a chain has one."));
         }
     }
-    stack->endMacro();
     return true;
 }
 
@@ -539,10 +531,7 @@ QString DeviceSelection::savePreset(const QString& deviceId, const QString& give
     }
     try {
         saveToLibrary(device, name);
-    } catch (const ProjectFileError& error) {
-        Q_EMIT statusMessage(QStringLiteral("Could not save the preset: ") + error.message());
-        return {};
-    } catch (const EditError& error) {
+    } catch (const UserError& error) {  // (the file, or the name for it)
         Q_EMIT statusMessage(QStringLiteral("Could not save the preset: ") + error.message());
         return {};
     }
@@ -560,10 +549,7 @@ QString DeviceSelection::saveAsDefault(const QString& deviceId) {
     QString path;
     try {
         path = saveDefault(device);
-    } catch (const ProjectFileError& error) {
-        Q_EMIT statusMessage(QStringLiteral("Could not save the default preset: ") + error.message());
-        return {};
-    } catch (const EditError& error) {
+    } catch (const UserError& error) {  // (the file, or a rack: none)
         Q_EMIT statusMessage(QStringLiteral("Could not save the default preset: ") + error.message());
         return {};
     }

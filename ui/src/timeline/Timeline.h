@@ -109,6 +109,9 @@ void drawGrid(SgPainter& painter, const Timeline& view, double x0, double x1, do
               bool overClip = false);
 // The loop region (while the loop is on) between x0 and x1, from `top` to `bottom`.
 void drawLoopRegion(SgPainter& painter, const Timeline& view, double x0, double x1, double top, double bottom);
+// The playhead at `beat`, in an item `height` tall: a line down it, or on a
+// ruler (`ruler`) a triangle at its foot.
+void drawPlayhead(SgPainter& painter, const Timeline& view, double beat, double height, bool ruler);
 
 }  // namespace timeline
 }  // namespace sub::ui

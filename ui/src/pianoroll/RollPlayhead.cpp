@@ -1,10 +1,6 @@
 #include "pianoroll/RollPlayhead.h"
 
-#include "model/Numbers.h"
-#include "sg/SgPainter.h"
-#include "theme/Theme.h"
-
-#include <QPolygonF>
+#include "timeline/Timeline.h"
 
 namespace sub::ui {
 
@@ -26,14 +22,7 @@ void RollPlayhead::paint(SgPainter& p) {
     PianoRoll* roll = this->roll();
     const auto playhead = roll ? roll->playhead() : std::nullopt;
     if (!playhead) return;
-    const double x = app::roundHalfEven(roll->view().beatToX(*playhead));
-    const double h = height();
-    if (ruler_) {
-        p.fillPolygon(QPolygonF({QPointF(x - 5, h - 8), QPointF(x + 6, h - 8), QPointF(x + 0.5, h - 1)}),
-                      Theme::kPlayhead);
-    } else {
-        p.fillRect(QRectF(x, 0, 1, h), Theme::kPlayhead);
-    }
+    timeline::drawPlayhead(p, roll->view(), *playhead, height(), ruler_);
 }
 
 }  // namespace sub::ui

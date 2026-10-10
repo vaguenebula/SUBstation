@@ -1,7 +1,9 @@
 # The layers' boundaries, checked as a test (ctest -R boundaries):
-#  * the audio engine (engine/src), the browser backend (browser/src) and the
-#    intelligence module (intelligence/src) never include Qt or anything of the
-#    application or the UI;
+#  * the platform layer (platform/src), the audio engine (engine/src), the
+#    browser backend (browser/src) and the intelligence module
+#    (intelligence/src) never include Qt or anything of the application or the UI;
+#  * the platform layer includes nothing of the layers on it (the engine, the
+#    browser backend, the intelligence module): they all stand on it;
 #  * the intelligence module includes neither the engine's headers nor the
 #    browser's: it stands on its own (miniaudio, which it decodes with, is a
 #    library of its own);
@@ -24,6 +26,7 @@ function(_check folder pattern what)
     endforeach()
 endfunction()
 
+_check(platform/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
 _check(engine/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
 _check(browser/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
 _check(intelligence/src "Q[A-Za-z]+|qt|app/|ui/" "Qt or the application")
@@ -40,6 +43,7 @@ list(JOIN _engine_names "|" _engine_pattern)
 if (_engine_pattern)
     _check(ui/src "(${_engine_pattern})[\">]|miniaudio|pluginterfaces|public\\.sdk" "the engine")
     _check(intelligence/src "(${_engine_pattern})[\">]|pluginterfaces|public\\.sdk" "the engine")
+    _check(platform/src "(${_engine_pattern})[\">]|miniaudio|pluginterfaces|public\\.sdk" "the engine")
 endif()
 
 # The browser backend's headers, by name ("Browser.h", "Model.h"...).
@@ -52,7 +56,9 @@ endforeach()
 list(JOIN _browser_names "|" _browser_pattern)
 if (_browser_pattern)
     _check(intelligence/src "(${_browser_pattern})[\">]" "the browser backend")
+    _check(platform/src "(${_browser_pattern})[\">]" "the browser backend")
 endif()
+_check(platform/src "core/|similarity/|harmony/|humanize/" "the intelligence module")
 
 if (_failures)
     list(JOIN _failures "\n  " _text)

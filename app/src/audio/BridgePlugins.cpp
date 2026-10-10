@@ -6,6 +6,7 @@
 #include "audio/BridgePrivate.h"
 
 #include "model/Devices.h"
+#include "model/Ids.h"
 #include "model/Project.h"
 #include "plugins/PluginInfo.h"
 
@@ -78,22 +79,19 @@ void EngineBridge::setKnownPlugins(const std::vector<PluginInfo>& plugins) {
 std::optional<QByteArray> EngineBridge::pluginState(const QString& trackId, const QString& deviceId) {
     const auto processorId = engineDeviceId(trackId, deviceId);
     if (!processorId || !d_->pluginIds.contains(*processorId)) return std::nullopt;
-    const std::vector<uint8_t> state = engine_.processorState(*processorId);
-    return QByteArray(reinterpret_cast<const char*>(state.data()), static_cast<qsizetype>(state.size()));
+    return stateData(engine_.processorState(*processorId));
 }
 
 QString EngineBridge::applyPluginState(const QString& trackId, const QString& deviceId, const QByteArray& state) {
     const auto processorId = engineDeviceId(trackId, deviceId);
     if (!processorId || !d_->pluginIds.contains(*processorId)) return QStringLiteral("the plug-in isn't loaded.");
-    QString problem;
-    ++d_->busy;  // (the plug-in may run a message loop)
+    const BusyScope busy(d_->busy);  // (the plug-in may run a message loop)
     try {
-        engine_.setProcessorState(*processorId, std::vector<uint8_t>(state.begin(), state.end()));
+        engine_.setProcessorState(*processorId, stateBytes(state));
     } catch (const std::exception& error) {  // another plug-in's settings
-        problem = QString::fromStdString(error.what());
+        return QString::fromStdString(error.what());
     }
-    --d_->busy;
-    return problem;
+    return {};
 }
 
 void EngineBridge::storePluginStates(const std::optional<QSet<QString>>& deviceIds) {
@@ -110,9 +108,7 @@ void EngineBridge::storePluginStates(const std::optional<QSet<QString>>& deviceI
         const Device& device = project_->device(trackId, deviceId);
         QString state = device.state.value_or(QString());
         try {
-            const std::vector<uint8_t> bytes = engine_.processorState(*processorId);
-            state = QString::fromLatin1(
-                QByteArray(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())).toBase64());
+            state = QString::fromLatin1(stateData(engine_.processorState(*processorId)).toBase64());
         } catch (const std::exception& error) {
             Q_EMIT statusMessage(device.plugin->name + QStringLiteral(": ") + QString::fromStdString(error.what()));
         }
@@ -148,13 +144,14 @@ bool EngineBridge::openPluginEditor(const QString& trackId, const QString& devic
     if (!processorId) return false;
     const QString title = editorTitle(trackId, deviceId);
     bool opened = false;
-    ++d_->busy;
-    try {
-        opened = engine_.openEditor(*processorId, d_->ownerWindow(), title.toStdString());
-    } catch (const std::exception& error) {
-        qWarning("EngineBridge (open editor): %s", error.what());
+    {
+        const BusyScope busy(d_->busy);
+        try {
+            opened = engine_.openEditor(*processorId, d_->ownerWindow(), title.toStdString());
+        } catch (const std::exception& error) {
+            qWarning("EngineBridge (open editor): %s", error.what());
+        }
     }
-    --d_->busy;
     if (opened) {
         d_->editorsWanted.insert(deviceId);
     } else {
@@ -192,7 +189,7 @@ void EngineBridge::requestPluginEditor(const QString& trackId, const QString& de
 
 void EngineBridge::showPluginEditors(const QString& trackId) {
     Private& d = *d_;
-    const std::optional<QString> shown = trackId.isEmpty() ? std::nullopt : std::optional(trackId);
+    const std::optional<QString> shown = optionalId(trackId);
     if (shown == d.editorsTrack) return;
     d.editorsTrack = shown;
     // A copy: opening an editor may run a message loop that changes the chains.

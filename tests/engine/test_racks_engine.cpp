@@ -20,7 +20,6 @@ using namespace subtest;
 
 namespace {
 
-enum { FX_GAIN, FX_LATENCY };  // SUB Test Effect's parameters
 constexpr double kClick = 0.25;
 
 struct RackEngine {
@@ -29,12 +28,6 @@ struct RackEngine {
 };
 
 // A click of kClick at the start of 1000 samples.
-std::string clickWav() {
-    Samples click(1000, 0.f);
-    click[0] = static_cast<float>(kClick);
-    return makeWav(click);
-}
-
 uint32_t rackClipTrack(sub::Engine& engine, const std::string& path, double startBeat = 1.0,
                        double seconds = 1000.0 / kSampleRate) {
     engine.loadSource(path);
@@ -80,7 +73,7 @@ uint32_t synthTrack(sub::Engine& engine, const std::function<std::vector<uint32_
 TEST_CASE("an empty rack passes its input on") {
     RackEngine e;
     auto& engine = e.engine;
-    const uint32_t track = rackClipTrack(engine, clickWav());
+    const uint32_t track = rackClipTrack(engine, clickWav(kClick));
     const uint32_t rid = engine.addRack(engine.trackChain(track), -1);
     const sub::ProcessorInfo info = engine.processorInfo(rid);
     CHECK_EQ(info.typeId, std::string("rack"));
@@ -99,7 +92,7 @@ TEST_CASE("chains sum their devices' outputs") {
     requireTestPlugins();
     RackEngine e;
     auto& engine = e.engine;
-    const uint32_t track = rackClipTrack(engine, clickWav());
+    const uint32_t track = rackClipTrack(engine, clickWav(kClick));
     const auto [rid, chains] = rack(engine, engine.trackChain(track));
     const uint32_t a = chains[0], b = chains[1];
     effect(engine, a, 0, 0.5);
@@ -124,7 +117,7 @@ TEST_CASE("chains sum their devices' outputs") {
 TEST_CASE("chain faders, mute and solo") {
     RackEngine e;
     auto& engine = e.engine;
-    const uint32_t track = rackClipTrack(engine, clickWav());
+    const uint32_t track = rackClipTrack(engine, clickWav(kClick));
     const auto [rid, chains] = rack(engine, engine.trackChain(track));
     const uint32_t a = chains[0], b = chains[1];
 
@@ -159,7 +152,7 @@ TEST_CASE("a latent device in one chain doesn't smear the others") {
     requireTestPlugins();
     RackEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t track = rackClipTrack(engine, wav);
     const auto [rid, chains] = rack(engine, engine.trackChain(track));
     const uint32_t a = chains[0], b = chains[1];
@@ -260,7 +253,7 @@ TEST_CASE("a sidechain into a device in a rack lines up") {
              ", in the other chain " + std::to_string(otherChain));
         RackEngine e;
         auto& engine = e.engine;
-        const std::string wav = clickWav();
+        const std::string wav = clickWav(kClick);
         const uint32_t source = rackClipTrack(engine, wav);
         const uint32_t track = rackClipTrack(engine, wav);
         if (beforeRack) effect(engine, engine.trackChain(track), beforeRack);
@@ -283,7 +276,7 @@ TEST_CASE("a sidechain taken after a device in a rack") {
     requireTestPlugins();
     RackEngine e;
     auto& engine = e.engine;
-    const uint32_t source = rackClipTrack(engine, clickWav());
+    const uint32_t source = rackClipTrack(engine, clickWav(kClick));
     const auto [rid, chains] = rack(engine, engine.trackChain(source));
     const uint32_t a = chains[0], b = chains[1];
     const uint32_t half = effect(engine, a, 0, 0.5);
@@ -343,7 +336,7 @@ TEST_CASE("a sidechain taken after a device in a rack lines up") {
              ", before the device " + std::to_string(beforeDevice));
         RackEngine e;
         auto& engine = e.engine;
-        const std::string wav = clickWav();
+        const std::string wav = clickWav(kClick);
         const uint32_t source = rackClipTrack(engine, wav);
         if (beforeRack) effect(engine, engine.trackChain(source), beforeRack);
         const auto [rid, chains] = rack(engine, engine.trackChain(source));
@@ -364,7 +357,7 @@ TEST_CASE("moving devices into and out of racks") {
     requireTestPlugins();
     RackEngine e;
     auto& engine = e.engine;
-    const std::string wav = clickWav();
+    const std::string wav = clickWav(kClick);
     const uint32_t track = rackClipTrack(engine, wav);
     const uint32_t other = rackClipTrack(engine, wav, 0.5);
     const uint32_t fx = effect(engine, engine.trackChain(track), 0, 0.5);
@@ -415,7 +408,7 @@ TEST_CASE("a sidechain moving with a rack can't close a cycle") {
     requireTestPlugins();
     RackEngine e;
     auto& engine = e.engine;
-    const uint32_t source = rackClipTrack(engine, clickWav());
+    const uint32_t source = rackClipTrack(engine, clickWav(kClick));
     const uint32_t track = engine.addTrack();
     const auto [rid, chains] = rack(engine, engine.trackChain(track), 1);
     const uint32_t keyed = addTestPlugin(engine, chains[0], "SUB Test Sidechain");

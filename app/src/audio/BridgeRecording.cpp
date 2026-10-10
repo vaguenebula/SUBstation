@@ -41,8 +41,8 @@ QString EngineBridge::startRecording(double countInBeats) {
         if (!input.empty()) openInputs(input);
     }
     const QString folder = recordingsFolder(*project_);
-    if (!audio.isEmpty() && !QDir().mkpath(folder)) {
-        return QStringLiteral("Could not create the recordings folder %1").arg(QDir::toNativeSeparators(folder));
+    if (!audio.isEmpty()) {
+        if (const auto problem = makeFolder(folder, QStringLiteral("the recordings folder"))) return *problem;
     }
     const QDateTime now = QDateTime::currentDateTime();  // local time, in the file names
     std::vector<sub::RecordTarget> targets;

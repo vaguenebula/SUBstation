@@ -20,6 +20,7 @@
 #include <set>
 
 using namespace sub::app;
+using test::round6;
 
 namespace {
 
@@ -30,8 +31,6 @@ Clip midiClip(double start = 0.0, double beats = 4.0, double offset = 0.0, const
               const QString& id = QStringLiteral("m")) {
     return Clip::midi(id, QString(), start, beats, offset, notes::normalize(clipNotes));  // (MIDI clips have no name)
 }
-
-double round6(double value) { return std::round(value * 1e6) / 1e6; }
 
 struct Played {
     double start;

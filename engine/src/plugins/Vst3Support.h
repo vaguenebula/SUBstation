@@ -3,12 +3,13 @@
 // examples, none of them allocates after it is set up, so a plug-in's
 // process() call never makes the host allocate.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <thread>
 #include <vector>
-#include <xmmintrin.h>
 
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
@@ -42,7 +43,7 @@ using Steinberg::Vst::ParamValue;
 class SpinLock {
 public:
     void lock() noexcept {
-        while (flag_.test_and_set(std::memory_order_acquire)) _mm_pause();
+        while (flag_.test_and_set(std::memory_order_acquire)) cpuRelax();
     }
     void unlock() noexcept { flag_.clear(std::memory_order_release); }
 
@@ -182,9 +183,7 @@ class HostParamChanges final : public Steinberg::Vst::IParameterChanges {
 public:
     void setCapacity(size_t queues) {
         queues_ = std::vector<HostParamQueue>(queues);
-        size_t slots = 16;
-        while (slots < 2 * queues) slots *= 2;
-        slots_.assign(slots, -1);
+        slots_.assign(std::max<size_t>(16, std::bit_ceil(2 * queues)), -1);
         used_ = 0;
     }
     void clear() noexcept {
@@ -244,6 +243,7 @@ public:
     }
     bool pop(ParamChange& change) noexcept { return queue_.pop(change); }
     bool empty() const noexcept { return queue_.empty(); }
+    void clear() noexcept { queue_.clear(); }  // (the consumer)
 
 private:
     SpinLock lock_;

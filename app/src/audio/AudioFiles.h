@@ -15,6 +15,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
 #include <vector>
 
 namespace sub::app {
@@ -24,9 +25,6 @@ class Project;
 // The audio files the application decodes: .wav, .wave, .flac, .mp3.
 QStringList audioExtensions();
 bool isAudioFile(const QString& path);
-// A file's path as the decoded sources are keyed by: absolute and clean (and on
-// Windows lower case), so two spellings of one file share one source.
-QString sourceKey(const QString& path);
 
 QString recordingsFolder(const Project& project);
 // A new file for a take in `folder`: the track's name (characters Windows
@@ -36,6 +34,9 @@ QString freezeFolder(const Project& project);
 QString reversedFolder(const Project& project);
 // A new file for the reversed copy of `source`: its name and " R" (numbered if taken).
 QString reversedPath(const QString& folder, const QString& source);
+// Makes a folder to write into (and the folders it is in); none if it is
+// there, else why not: "Could not create <what> <folder>" (`what`: "the freeze folder").
+std::optional<QString> makeFolder(const QString& folder, const QString& what);
 
 // The header of a 32-bit float WAV file of `frames` frames.
 QByteArray floatWavHeader(int channels, qint64 frames, int sampleRate);

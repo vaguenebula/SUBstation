@@ -30,6 +30,7 @@
 #include <unistd.h>
 #endif
 
+#include "platform/Unicode.h"
 #include "plugins/Vst3Format.h"
 
 namespace {
@@ -56,22 +57,20 @@ std::string quote(const std::string& text) {
     return out + "\"";
 }
 
-void appendUtf8(std::string& out, unsigned code) {
-    if (code < 0x80) {
-        out += static_cast<char>(code);
-    } else if (code < 0x800) {
-        out += static_cast<char>(0xC0 | (code >> 6));
-        out += static_cast<char>(0x80 | (code & 0x3F));
-    } else if (code < 0x10000) {
-        out += static_cast<char>(0xE0 | (code >> 12));
-        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (code & 0x3F));
-    } else {
-        out += static_cast<char>(0xF0 | (code >> 18));
-        out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
-        out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-        out += static_cast<char>(0x80 | (code & 0x3F));
+// The four hex digits of a \u escape at `at`; throws std::invalid_argument for anything else.
+unsigned hex4(const std::string& line, size_t at) {
+    if (at + 4 > line.size()) throw std::invalid_argument("bad escape");
+    unsigned code = 0;
+    for (size_t i = at; i < at + 4; ++i) {
+        const char c = line[i];
+        const int digit = c >= '0' && c <= '9'   ? c - '0'
+                          : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                          : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                                 : -1;
+        if (digit < 0) throw std::invalid_argument("bad escape");
+        code = (code << 4) | static_cast<unsigned>(digit);
     }
+    return code;
 }
 
 // A JSON string (the whole line); throws std::invalid_argument for anything else.
@@ -95,15 +94,18 @@ std::string unquote(const std::string& line) {
             case 'f': out += '\f'; break;
             case 'u': {
                 if (at + 4 >= line.size()) throw std::invalid_argument("bad escape");
-                unsigned code = std::stoul(line.substr(at + 1, 4), nullptr, 16);
+                unsigned code = hex4(line, at + 1);
                 at += 4;
+                // A surrogate pair is one code point; an unpaired surrogate stays as it is (WTF-8).
                 if (code >= 0xD800 && code < 0xDC00 && at + 6 < line.size() && line[at + 1] == '\\' &&
                     line[at + 2] == 'u') {
-                    const unsigned low = std::stoul(line.substr(at + 3, 4), nullptr, 16);
-                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
-                    at += 6;
+                    const unsigned low = hex4(line, at + 3);
+                    if (low >= 0xDC00 && low < 0xE000) {
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        at += 6;
+                    }
                 }
-                appendUtf8(out, code);
+                sub::platform::appendUtf8(out, code);
                 break;
             }
             default: out += line[at];

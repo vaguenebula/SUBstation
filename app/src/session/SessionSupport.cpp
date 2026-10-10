@@ -4,6 +4,7 @@
 #include <QSet>
 
 #include "audio/EngineBridge.h"
+#include "model/Devices.h"
 #include "model/Project.h"
 
 namespace sub::app {
@@ -45,9 +46,7 @@ void storeTrackPluginStates(EngineBridge& bridge, const Project& project, const 
         if (!project.hasTrack(trackId)) continue;
         std::vector<const Track*> tracks{&project.track(trackId)};
         for (const Track* inside : project.descendants(trackId)) tracks.push_back(inside);
-        for (const Track* track : tracks) {
-            for (const Device* device : iterDevices(track->devices)) ids.insert(device->id);
-        }
+        for (const Track* track : tracks) addDeviceIds(ids, track->devices);
     }
     bridge.storePluginStates(ids);
 }

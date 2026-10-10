@@ -39,6 +39,7 @@
 
 #include "AsioSupport.h"
 #include "iasiodrv.h"
+#include "rt/RtUtils.h"
 
 namespace sub {
 namespace {
@@ -394,8 +395,7 @@ public:
 
     void process(long index, const ASIOTime* time) noexcept {
         if (!running_.load(std::memory_order_acquire) || (index != 0 && index != 1)) return;
-        const int64_t hostTime =
-            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+        const int64_t hostTime = hostTimeNs();
         if (time && (time->timeInfo.flags & kSamplePositionValid)) sampleTime_ = toInt64(time->timeInfo.samplePosition);
         const auto frames = static_cast<int>(bufferFrames_);
         const size_t numInputs = inputs_.size();

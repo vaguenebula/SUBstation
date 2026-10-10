@@ -4,14 +4,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <functional>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 
 #include "AudioFileWriter.h"
-#include "PathUtils.h"
+#include "MiniaudioFiles.h"
 #include "miniaudio.h"
 
 namespace sub {
@@ -33,23 +31,32 @@ private:
 // Frames rendered at a time in the background: a cancel is heard this soon.
 constexpr int64_t kJobChunk = 4096;
 
+// Renders `frames` that lag the timeline and drops them, as many at a time as
+// `scratch` (stereo) holds: render(out, n) for each piece.
+template <typename Render>
+void dropFrames(int64_t frames, std::vector<float>& scratch, Render&& render) {
+    const auto chunk = static_cast<int64_t>(scratch.size() / 2);
+    while (frames > 0) {
+        const int64_t n = std::min(chunk, frames);
+        render(scratch.data(), n);
+        frames -= n;
+    }
+}
+
 // A stereo WAV file being written. Unless kept, it is deleted when this goes:
 // a render cancelled, or failed, leaves nothing behind.
 class WavWriter final : public AudioFileWriter {
 public:
-    WavWriter(std::string path, ma_format format, double sampleRate) : path_(std::move(path)), format_(format) {
+    WavWriter(std::string path, ma_format format, double sampleRate) : AudioFileWriter(std::move(path)), format_(format) {
         ma_encoder_config config =
             ma_encoder_config_init(ma_encoding_format_wav, format, 2, static_cast<ma_uint32>(sampleRate));
-        if (ma_encoder_init_file_w(widen(path_).c_str(), &config, &encoder_) != MA_SUCCESS) {
+        if (initEncoderFile(path_, config, &encoder_) != MA_SUCCESS) {
             throw std::runtime_error("Could not create " + path_);
         }
     }
     ~WavWriter() override {
         close();
-        if (!kept_) {
-            std::error_code ignored;
-            std::filesystem::remove(pathFromUtf8(path_), ignored);
-        }
+        deleteUnlessKept();
     }
     WavWriter(const WavWriter&) = delete;
     WavWriter& operator=(const WavWriter&) = delete;
@@ -81,11 +88,9 @@ private:
         open_ = false;
     }
 
-    std::string path_;
     ma_format format_;
     ma_encoder encoder_{};
     bool open_ = true;
-    bool kept_ = false;
     std::vector<uint8_t> converted_;
 };
 
@@ -196,10 +201,9 @@ void Engine::renderTrackLocked(uint32_t trackId, double startBeat, int64_t frame
     checkNotRenderingLocked();
     arrangementTrackLocked(trackId);  // (throws for an unknown track)
     const RenderSnapshot& snap = *snapshotHold_;
-    const auto found = std::find_if(snap.tracks.begin(), snap.tracks.end(),
-                                    [trackId](const TrackRender& track) { return track.id == trackId; });
-    if (found == snap.tracks.end()) throw std::invalid_argument("Unknown track id " + std::to_string(trackId));
-    const int track = static_cast<int>(found - snap.tracks.begin());
+    const TrackRender* found = snap.findTrack(trackId);
+    if (!found) throw std::invalid_argument("Unknown track id " + std::to_string(trackId));
+    const int track = static_cast<int>(found - snap.tracks.data());
     ScopedNoDenormals noDenormals;
     suspendLiveLocked();
     resetProcessorsLocked();
@@ -211,11 +215,8 @@ void Engine::renderTrackLocked(uint32_t trackId, double startBeat, int64_t frame
     // bus hears its tracks that late) and its own devices: render that first and drop it.
     constexpr int64_t kChunk = 16384;
     std::vector<float> rendered(kChunk * 2);
-    for (int64_t lag = found->inputLatency + found->latency; lag > 0;) {
-        const int64_t n = std::min(kChunk, lag);
-        offline.renderTrackOffline(snap, track, rendered.data(), n);
-        lag -= n;
-    }
+    dropFrames(found->inputLatency + found->latency, rendered,
+               [&](float* out, int64_t n) { offline.renderTrackOffline(snap, track, out, n); });
     for (int64_t done = 0; done < frames;) {
         const int64_t n = std::min(kChunk, frames - done);
         offline.renderTrackOffline(snap, track, rendered.data(), n);
@@ -296,9 +297,7 @@ std::shared_ptr<RenderJob> Engine::startExport(const std::string& path, double s
     if (endBeat <= startBeat) throw std::invalid_argument("Export range is empty");
     const bool mp3 = format.kind == ExportFormat::Kind::Mp3;
     const ma_format wavFormat = mp3 ? ma_format_unknown : exportFormat(format.bitDepth);
-    if (mp3 && (format.bitrate < 32 || format.bitrate > 320)) {
-        throw std::invalid_argument("MP3 bitrate must be 32 to 320 kbps");
-    }
+    if (mp3) checkMp3Bitrate(format.bitrate);
     std::lock_guard lock(mutex_);
     checkNotRenderingLocked();
     std::shared_ptr<AudioFileWriter> writer;
@@ -314,11 +313,8 @@ std::shared_ptr<RenderJob> Engine::startExport(const std::string& path, double s
         const RenderSnapshot& snap = *render->snapshot;
         std::vector<float> rendered(kJobChunk * 2);
         // With delay compensation the output lags the timeline: render the lag first and drop it.
-        for (int64_t lag = snap.outputLatency(); lag > 0;) {
-            const int64_t n = std::min(kJobChunk, lag);
-            render->renderer.renderOffline(snap, rendered.data(), n);
-            lag -= n;
-        }
+        dropFrames(snap.outputLatency(), rendered,
+                   [&](float* out, int64_t n) { render->renderer.renderOffline(snap, out, n); });
         for (int64_t done = 0; done < total;) {
             if (job.stopping()) return std::nullopt;
             const int64_t n = std::min(kJobChunk, total - done);
@@ -341,13 +337,12 @@ std::shared_ptr<RenderJob> Engine::startTrackRender(uint32_t trackId, const std:
     auto writer = std::make_shared<WavWriter>(path, ma_format_f32, sampleRate_);
     auto render = beginOfflineLocked(startBeat);
     const RenderSnapshot& snap = *render->snapshot;
-    const auto found = std::find_if(snap.tracks.begin(), snap.tracks.end(),
-                                    [trackId](const TrackRender& track) { return track.id == trackId; });
-    if (found == snap.tracks.end()) {
+    const TrackRender* found = snap.findTrack(trackId);
+    if (!found) {
         endOfflineLocked();
         throw std::invalid_argument("Unknown track id " + std::to_string(trackId));
     }
-    const int track = static_cast<int>(found - snap.tracks.begin());
+    const int track = static_cast<int>(found - snap.tracks.data());
     // Its signal before its fader lags the timeline by what feeds it (a group's
     // bus hears its tracks that late) and its own devices: that is rendered first and dropped.
     const int64_t lag = found->inputLatency + found->latency;
@@ -358,11 +353,7 @@ std::shared_ptr<RenderJob> Engine::startTrackRender(uint32_t trackId, const std:
         ScopedNoDenormals noDenormals;
         const RenderSnapshot& snap = *render->snapshot;
         std::vector<float> rendered(kJobChunk * 2);
-        for (int64_t left = lag; left > 0;) {
-            const int64_t n = std::min(kJobChunk, left);
-            render->renderer.renderTrackOffline(snap, track, rendered.data(), n);
-            left -= n;
-        }
+        dropFrames(lag, rendered, [&](float* out, int64_t n) { render->renderer.renderTrackOffline(snap, track, out, n); });
         // The range as it comes; the tail is kept back until it is known where it falls silent.
         std::vector<float> tailSamples;
         tailSamples.reserve(static_cast<size_t>(tail) * 2);

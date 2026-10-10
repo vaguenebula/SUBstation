@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "Sounds.h"
+#include "platform/Paths.h"
 #include "similarity/EssentiaExtractor.h"
 #include "similarity/SoundIndex.h"
 #include "similarity/SoundStore.h"
@@ -337,7 +338,7 @@ TEST_CASE("a place gone for a while keeps its fingerprints; one gone long enough
 }
 
 TEST_CASE("a path spelt in another case is the library's file, where names ignore case") {
-    if (sub::intelligence::platform::kCaseSensitivePaths) SKIP("file names are case-sensitive here");
+    if (sub::platform::kCaseSensitivePaths) SKIP("file names are case-sensitive here");
     Library library;
     const std::string kickPath = library.first("kick");
     std::string upper = kickPath;

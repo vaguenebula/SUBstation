@@ -52,9 +52,7 @@ std::function<double(std::string_view)> SimilarSounds::scorer() const {
 // --- SoundSimilarity -------------------------------------------------------------------
 
 QString SoundSimilarity::defaultStorePath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_SOUND_INDEX");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/sound-index.bin");
+    return localDataFile("SUBSTATION_SOUND_INDEX", QStringLiteral("sound-index.bin"));
 }
 
 SoundSimilarity::SoundSimilarity(QObject* parent) : SoundSimilarity(Options(), parent) {}

@@ -6,6 +6,7 @@
 
 #include "model/Commands.h"
 #include "model/Devices.h"
+#include "model/Ids.h"
 
 #include <QUndoStack>
 
@@ -15,7 +16,6 @@ namespace sub::app {
 
 using editing::indexOfDevice;
 using editing::Macro;
-using editing::optionalId;
 
 namespace {
 
@@ -25,8 +25,7 @@ namespace {
 void pruneMacros(std::vector<Device>& devices) {
     for (Device* rack : iterDevices(devices)) {
         if (rack->macros.empty()) continue;
-        QSet<QString> inside = deviceIdsOf(*rack);
-        inside.remove(rack->id);
+        const QSet<QString> inside = innerDeviceIds(*rack);
         std::vector<MacroMapping> kept;
         for (const MacroMapping& m : rack->macros) {
             if (inside.contains(m.deviceId) && m.macro < macroCount(*rack)) kept.push_back(m);
@@ -52,11 +51,7 @@ QStringList outermost(const std::vector<Device>& devices, const QStringList& dev
         if (deviceIds.contains(d->id) && !deviceIsInstrument(*d)) found.push_back(d);
     }
     QSet<QString> inside;
-    for (const Device* d : found) {
-        QSet<QString> ids = deviceIdsOf(*d);
-        ids.remove(d->id);
-        inside.unite(ids);
-    }
+    for (const Device* d : found) inside.unite(innerDeviceIds(*d));
     QStringList result;
     for (const Device* d : found) {
         if (!inside.contains(d->id)) result.append(d->id);
@@ -161,11 +156,7 @@ std::vector<Device> ProjectEditor::copyDevices(const QString& trackId, const QSt
         if (deviceIds.contains(d->id)) found.push_back(d);
     }
     QSet<QString> inside;
-    for (const Device* d : found) {
-        QSet<QString> ids = deviceIdsOf(*d);
-        ids.remove(d->id);
-        inside.unite(ids);
-    }
+    for (const Device* d : found) inside.unite(innerDeviceIds(*d));
     std::vector<Device> copies;
     for (const Device* d : found) {
         if (!inside.contains(d->id)) copies.push_back(*d);
@@ -235,7 +226,7 @@ bool ProjectEditor::moveDevices(const QString& trackId, const QStringList& devic
     std::vector<Device>* target = chainDevices(after, chainId);
     if (moving.isEmpty() || target == nullptr) return false;
     QSet<QString> inside;
-    for (const QString& id : moving) inside.unite(deviceIdsOf(*findDevice(after, id)));
+    for (const QString& id : moving) addDeviceIds(inside, *findDevice(after, id));
     if (chainId && inside.contains(project_->chainRack(trackId, *chainId).id)) return false;  // into itself
     const int depth = rackDepth(after, chainId);
     for (const QString& id : moving) {
@@ -290,7 +281,7 @@ bool ProjectEditor::moveDevicesToTrack(const QString& trackId, const QStringList
     const int size = static_cast<int>(target->size());
     const int at = index < 0 ? size : std::max(startsWithInstrument(*target) ? 1 : 0, std::min(index, size));
     QSet<QString> movedIds;
-    for (const Device& d : moved) movedIds.unite(deviceIdsOf(d));
+    for (const Device& d : moved) addDeviceIds(movedIds, d);
     target->insert(target->begin() + at, std::make_move_iterator(moved.begin()), std::make_move_iterator(moved.end()));
     pruneMacros(source);
     pruneMacros(targetDevices);

@@ -1,14 +1,18 @@
 #pragma once
 // Helpers the application layer's tests share.
 
+#include "model/Clip.h"
 #include "model/Device.h"
 #include "model/Track.h"
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 
+#include <cmath>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace sub::app::test {
@@ -23,12 +27,12 @@ inline constexpr int kSampleRate = 48000;
 // temporary ones.
 void prepareApplication();
 
-// An environment variable set for as long as it lives (then as it was): a
-// test's own folder for SUBSTATION_RECORDINGS or SUBSTATION_PRESETS, never the
-// user's after it.
+// An environment variable set (or, for none, unset) for as long as it lives,
+// then as it was: a test's own folder for SUBSTATION_RECORDINGS or
+// SUBSTATION_PRESETS, never the user's after it, even when a check fails.
 class ScopedEnv {
 public:
-    ScopedEnv(const char* name, const QString& value);
+    ScopedEnv(const char* name, const std::optional<QString>& value);
     ~ScopedEnv();
     ScopedEnv(const ScopedEnv&) = delete;
     ScopedEnv& operator=(const ScopedEnv&) = delete;
@@ -62,5 +66,18 @@ Track makeTrack(const QString& id, const QString& name, const QString& kind = kA
                 const std::optional<QString>& parent = std::nullopt);
 // A device with these parameters.
 Device makeDevice(const QString& id, const QString& kind, const QMap<QString, double>& params = {});
+
+// The ids of some devices or tracks, in order; the devices' kinds.
+QStringList ids(const std::vector<Device>& devices);
+QStringList ids(const std::vector<const Track*>& tracks);
+QStringList kinds(const std::vector<Device>& devices);
+
+// A time rounded to 6 decimals, so sums of beats compare equal.
+inline double round6(double value) { return std::round(value * 1e6) / 1e6; }
+
+// Where clips start and end, in beats (at `tempo`: the tests' 120 BPM unless
+// said), rounded with round6().
+using Spans = std::vector<std::pair<double, double>>;
+Spans spans(const std::vector<Clip>& clips, double tempo = 120.0);
 
 }  // namespace sub::app::test

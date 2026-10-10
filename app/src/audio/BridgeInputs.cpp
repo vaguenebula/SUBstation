@@ -20,12 +20,6 @@ sub::MonitorMode monitorMode(const QString& mode) {
     return sub::MonitorMode::Auto;
 }
 
-QStringList stringList(const std::vector<std::string>& names) {
-    QStringList list;
-    for (const std::string& name : names) list.append(QString::fromStdString(name));
-    return list;
-}
-
 }  // namespace
 
 // The engine track whose output a track takes as its input (sub::Engine::kMaster:

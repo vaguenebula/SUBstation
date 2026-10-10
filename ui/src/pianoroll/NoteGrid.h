@@ -68,8 +68,6 @@ public:
     std::optional<QRectF> rubberBand() const;
     // The keys the grid takes, before the window's shortcuts.
     static bool handles(const QKeyEvent* event);
-    // Ctrl+Alt: drag to scroll, as in the arrangement (and Ableton).
-    static bool isPanModifier(Qt::KeyboardModifiers modifiers);
 
     class Gesture;
 

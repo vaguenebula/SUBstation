@@ -1,6 +1,6 @@
 #include "similarity/FeatureSchema.h"
 
-#include "core/Hash.h"
+#include "platform/Bytes.h"
 
 namespace sub::intelligence {
 
@@ -29,19 +29,19 @@ AspectWeights AspectWeights::only(Aspect aspect) {
 }
 
 uint64_t FeatureSchema::key() const {
-    uint64_t h = kFnvOffsetBasis;
+    uint64_t h = platform::kFnvOffsetBasis;
     auto text = [&h](const std::string& s) {
-        h = fnv1a(s.data(), s.size() + 1, h);  // (with its terminating 0: a separator)
+        h = platform::fnv1a(s.data(), s.size() + 1, h);  // (with its terminating 0: a separator)
     };
     text(extractor);
     const unsigned char v[4] = {static_cast<unsigned char>(version), static_cast<unsigned char>(version >> 8),
                                 static_cast<unsigned char>(version >> 16), static_cast<unsigned char>(version >> 24)};
-    h = fnv1a(v, 4, h);
+    h = platform::fnv1a(v, 4, h);
     text(settings);
     for (const FeatureInfo& f : features) {
         text(f.name);
         const auto aspect = static_cast<unsigned char>(f.aspect);
-        h = fnv1a(&aspect, 1, h);
+        h = platform::fnv1a(&aspect, 1, h);
     }
     return h;
 }

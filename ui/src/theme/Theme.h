@@ -247,8 +247,8 @@ public:
     Q_INVOKABLE QFont monoFont(qreal pointSize = 9.0) const;
     // The colour of an automation dot: "on" (automated), "off" (overridden); else transparent.
     Q_INVOKABLE QColor automationColor(const QString& state) const;
-    // A shortcut as the menus show it ("Ctrl+Shift+S"), from a string or a
-    // QKeySequence::StandardKey (what Action.shortcut holds).
+    // A shortcut as the menus show it ("Ctrl+Shift+S"), from what
+    // Action.shortcut holds (keySequences(): its first key sequence).
     Q_INVOKABLE QString shortcutText(const QVariant& shortcut) const;
     // A menu or button text without its mnemonic marks ("&File" -> "File", "&&" -> "&").
     Q_INVOKABLE static QString withoutMnemonics(const QString& text);

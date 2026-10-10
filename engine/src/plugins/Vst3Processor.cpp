@@ -1,7 +1,6 @@
 #include "plugins/Vst3Processor.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -550,11 +549,9 @@ void Vst3Processor::fillContext(const ProcessContext& ctx) {
     c.sampleRate = ctx.sampleRate;
     c.projectTimeSamples = ctx.samplePos;
     c.continousTimeSamples = continuousSamples_;
-    c.systemTime = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now().time_since_epoch())
-                       .count();
+    c.systemTime = hostTimeNs();
     c.projectTimeMusic = ctx.beatPos;
-    const double beatsPerBar = ctx.timeSigNum * 4.0 / ctx.timeSigDen;
+    const double beatsPerBar = ctx.beatsPerBar();
     c.barPositionMusic = std::floor(ctx.beatPos / beatsPerBar + 1e-9) * beatsPerBar;
     c.tempo = ctx.tempo;
     c.timeSigNumerator = ctx.timeSigNum;
@@ -853,9 +850,7 @@ void Vst3Processor::setState(const std::vector<uint8_t>& state) {
     bool loaded = false;
     {
         ScopedSuspend suspend(guard_);
-        ParamChange stale;
-        while (toAudio_.pop(stale)) {
-        }  // changes from before must not undo the state
+        toAudio_.clear();  // changes from before must not undo the state
         loaded = PresetFile::loadPreset(stream, FUID::fromTUID(classId_.data()), component_,
                                         singleComponent_ ? nullptr : controller_.get());
     }
@@ -876,7 +871,7 @@ bool Vst3Processor::openEditor(void* ownerWindow, const std::string& title) {
     dropEditor();
     if (!controller_) return false;
     IPtr<IPlugView> view = owned(controller_->createView(ViewType::kEditor));
-    if (!view || view->isPlatformTypeSupported(kPlatformTypeHWND) != kResultTrue) return false;
+    if (!view || !EditorWindow::canHold(*view)) return false;
     editor_ = std::make_unique<EditorWindow>(view, ownerWindow, title,
                                              editorPosition_ ? &*editorPosition_ : nullptr);
     if (!editor_->isOpen()) {

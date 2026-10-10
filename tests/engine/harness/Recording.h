@@ -16,7 +16,6 @@ namespace subtest {
 inline constexpr int kRate = 48000;
 inline constexpr int64_t kRecordSpb = kRate / 2;  // samples per beat at 120 BPM
 inline constexpr int kBuffer = 256;
-inline constexpr int kRecordFxLatency = 1;  // SUB Test Effect's latency parameter
 
 // The driver (in manual mode, float samples; the test skips without it), then
 // an engine, which must have let go of the driver when it is closed.
@@ -61,15 +60,6 @@ inline std::vector<std::vector<float>> readTake(sub::Engine& engine, const sub::
     for (uint32_t c = 0; c < source->channels(); ++c)
         channels.emplace_back(source->channelData(c), source->channelData(c) + source->frames());
     return channels;
-}
-
-// SUB Test Effect on a track (or the master), `latency` samples late (the test skips without the plug-ins).
-inline uint32_t latentEffect(sub::Engine& engine, uint32_t track, int latency) {
-    const uint32_t effect = addTestPlugin(engine, engine.trackChain(track), "SUB Test Effect");
-    engine.setProcessorParam(effect, kRecordFxLatency, static_cast<float>(latency));
-    engine.idle();  // the plug-in asked for a restart to change its latency
-    CHECK_EQ(engine.processorInfo(effect).latency, latency);
-    return effect;
 }
 
 }  // namespace subtest

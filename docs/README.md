@@ -78,6 +78,15 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Piano roll](ui/piano-roll.md) | the piano roll: notes, keys, velocity lane, note tools |
 | [Device view](ui/device-view.md) | the device panel, racks, built-in devices' editors, the clip view |
 
+### Platform
+
+[platform/src](../platform/src), no Qt: what the engine, the browser and the intelligence module need from the
+operating system.
+
+| Page | Covers |
+|---|---|
+| [Platform layer](platform.md) | paths in the system's form and their keys, files, binary fields and checksums, threads' priorities; one file per system |
+
 ### Browser
 
 [browser/src](../browser/src), no Qt, and its application side in [app/src/browser](../app/src/browser).

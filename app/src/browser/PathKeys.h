@@ -7,7 +7,13 @@
 // a key is os.path.normcase(os.path.normpath(path)), backslashes and Windows'
 // own lower case, exactly as Python made it; elsewhere the normalised path as
 // it is, since names that differ in case are different files there (see
-// nameKey() in browser/src/Platform.h).
+// nameKey() in platform/Paths.h).
+//
+// These keys are made to match those files, not to tell whether two paths are
+// one file: they keep the system's separators, aren't made absolute, and use
+// Windows' own lower case. The rest of the application compares files with
+// pathIdentity() and samePath() (model/Paths.h): absolute, clean, Qt's form,
+// case folded where the system ignores case.
 
 #include <QString>
 
@@ -40,5 +46,8 @@ QString audioKey(const QString& path);
 // %LOCALAPPDATA%\SUBstation (as before), elsewhere the system's place for
 // application data (~/.local/share/SUBstation).
 QString localDataDir();
+// A file of the application's there (`name`), or the path the environment
+// variable `envVar` holds, if it is set and not empty (the tests set them).
+QString localDataFile(const char* envVar, const QString& name);
 
 }  // namespace sub::app

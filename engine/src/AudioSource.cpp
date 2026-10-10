@@ -4,8 +4,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "PathUtils.h"
-#include "miniaudio.h"
+#include "MiniaudioFiles.h"
 
 namespace sub {
 namespace {
@@ -14,7 +13,7 @@ namespace {
 class Decoder {
 public:
     Decoder(const std::string& utf8Path, const ma_decoder_config& config) {
-        const ma_result result = ma_decoder_init_file_w(widen(utf8Path).c_str(), &config, &decoder_);
+        const ma_result result = initDecoderFile(utf8Path, config, &decoder_);
         if (result != MA_SUCCESS) {
             throw std::runtime_error("Could not open audio file '" + utf8Path + "': " + ma_result_description(result));
         }

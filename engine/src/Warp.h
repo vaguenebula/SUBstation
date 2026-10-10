@@ -35,12 +35,23 @@ inline constexpr int kNumStretchConfigs = 3;
 StretchConfig stretchConfigFor(WarpMode mode) noexcept;
 
 // A stretch configuration's analysis block and the interval between blocks, in
-// seconds (the Sampler configures its own stretchers with these too).
+// seconds.
 struct StretchTiming {
     double blockSeconds;
     double intervalSeconds;
 };
 StretchTiming stretchTiming(StretchConfig config) noexcept;
+
+// Sets a stereo Signalsmith stretcher up for `config` at `sampleRate`: the
+// clips' voices and the Sampler's stretchers alike. Split computation spreads
+// each block's work over the interval after it (an interval of latency, which
+// their alignment compensates like the rest).
+template <typename Stretcher>
+void configureStretcher(Stretcher& stretcher, StretchConfig config, double sampleRate) {
+    const StretchTiming timing = stretchTiming(config);
+    stretcher.configure(2, static_cast<int>(sampleRate * timing.blockSeconds),
+                        static_cast<int>(sampleRate * timing.intervalSeconds), true);
+}
 
 // The seed every stretcher starts from: it randomises some phases (when
 // stretching a lot), and offline renders should come out the same every time.

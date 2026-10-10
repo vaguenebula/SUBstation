@@ -1,7 +1,6 @@
 #include "plugins/PluginPaths.h"
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
@@ -15,22 +14,14 @@
 
 #include "Text.h"
 #include "browser/PathKeys.h"
-
-#ifndef _WIN32
+#include "platform/Paths.h"
 #include "plugins/Vst3Format.h"
-#endif
 
 namespace sub::app {
 
 namespace {
 
-std::filesystem::path fsPath(const QString& path) {
-#ifdef _WIN32
-    return std::filesystem::path(path.toStdWString());
-#else
-    return std::filesystem::path(QFile::encodeName(path).toStdString());
-#endif
-}
+std::filesystem::path fsPath(const QString& path) { return platform::toPath(toBackendPath(path)); }
 
 // Python's str.lower(), for sorting as it sorted.
 std::string lowerForSort(const QString& s) { return browser::pyLower(s.toStdString()); }
@@ -44,17 +35,10 @@ QStringList standardPluginFolders() {
             if (!folder.isEmpty()) folders << normalPath(folder);
         return folders;
     }
-#ifdef _WIN32
-    const QString common = qEnvironmentVariable("CommonProgramFiles", QStringLiteral("C:\\Program Files\\Common Files"));
-    const QString local = qEnvironmentVariable("LOCALAPPDATA", QDir::home().filePath(QStringLiteral("AppData/Local")));
-    return {normalPath(QDir::fromNativeSeparators(common) + QStringLiteral("/VST3")),
-            normalPath(QDir::fromNativeSeparators(local) + QStringLiteral("/Programs/Common/VST3"))};
-#else
     QStringList folders;
     for (const std::string& folder : vst3::Vst3Format::instance().defaultSearchPaths())
-        folders << normalPath(QFile::decodeName(QByteArray::fromStdString(folder)));
+        folders << normalPath(fromBackendPath(folder));
     return folders;
-#endif
 }
 
 QStringList pluginSearchFolders(const QStringList& custom) {
@@ -121,23 +105,12 @@ QStringList findPluginFiles(const QStringList& roots) {
 
 QStringList findPluginFiles() { return findPluginFiles(pluginSearchFolders()); }
 
-QString pluginCachePath() {
-    const QString overridden = qEnvironmentVariable("SUBSTATION_PLUGIN_CACHE");
-    if (!overridden.isEmpty()) return overridden;
-    return localDataDir() + QStringLiteral("/vst3-cache.json");
-}
+QString pluginCachePath() { return localDataFile("SUBSTATION_PLUGIN_CACHE", QStringLiteral("vst3-cache.json")); }
 
 QString pluginBinary(const QString& path) {
     const QFileInfo info(path);
-#if defined(_WIN32)
-    const QString inner = path + QStringLiteral("/Contents/x86_64-win/") + info.fileName();
-#elif defined(__APPLE__)
-    const QString inner = path + QStringLiteral("/Contents/MacOS/") + info.completeBaseName();
-#elif defined(__aarch64__)
-    const QString inner = path + QStringLiteral("/Contents/aarch64-linux/") + info.completeBaseName() + QStringLiteral(".so");
-#else
-    const QString inner = path + QStringLiteral("/Contents/x86_64-linux/") + info.completeBaseName() + QStringLiteral(".so");
-#endif
+    const QString inner =
+        path + QLatin1Char('/') + QString::fromStdString(vst3::Vst3Format::binaryInBundle(info.fileName().toStdString()));
     return info.isDir() && QFileInfo::exists(inner) ? inner : path;
 }
 

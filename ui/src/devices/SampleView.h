@@ -74,7 +74,6 @@ public:
 
     // Play `path` ("": no sample), undoably ("Load Sample" / "Clear Sample").
     Q_INVOKABLE void loadSample(const QString& path);
-    Q_INVOKABLE void loadSampleUrl(const QUrl& url);
     Q_INVOKABLE void clearSample() { loadSample(QString()); }
 
     // Where the waveform is drawn.

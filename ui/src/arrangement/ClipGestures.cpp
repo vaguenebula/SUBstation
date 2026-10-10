@@ -19,16 +19,6 @@
 
 namespace sub::ui::arrangement {
 
-namespace {
-
-bool farEnough(const QPointF& pos, const QPointF& press) { return (pos - press).manhattanLength() >= kDragThreshold; }
-
-}  // namespace
-
-bool isPanModifier(Qt::KeyboardModifiers modifiers) {
-    return (modifiers & Qt::ControlModifier) && (modifiers & Qt::AltModifier);
-}
-
 // --- MoveRangeGesture --------------------------------------------------------------------------
 
 MoveRangeGesture::MoveRangeGesture(LanesHost& host, const QPointF& press, std::function<void()> onClick)

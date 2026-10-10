@@ -4,7 +4,7 @@
 #include <QFile>
 #include <QStandardPaths>
 
-#include "Platform.h"
+#include "platform/Paths.h"
 
 namespace sub::app {
 
@@ -27,7 +27,7 @@ QString fromBackendPath(const std::string& path) {
 }
 
 QString caseKey(const QString& path) {
-    const std::string key = browser::platform::pathKey(toBackendPath(path));
+    const std::string key = platform::pathKey(toBackendPath(path));
 #ifdef _WIN32
     return QString::fromStdString(key);  // in the system's form: backslashes, as Python made keys
 #else
@@ -49,6 +49,11 @@ QString localDataDir() {
     return normalPath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
                       QStringLiteral("/SUBstation"));
 #endif
+}
+
+QString localDataFile(const char* envVar, const QString& name) {
+    const QString overridden = qEnvironmentVariable(envVar);
+    return !overridden.isEmpty() ? overridden : localDataDir() + u'/' + name;
 }
 
 }  // namespace sub::app

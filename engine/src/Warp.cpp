@@ -40,8 +40,7 @@ struct SourceInput {
         }
     };
     Channel operator[](int c) const noexcept {
-        const uint32_t channel = source->channels() > 1 ? static_cast<uint32_t>(c) : 0u;
-        return {source->channelData(channel), source->frames(), start};
+        return {source->stereoChannel(static_cast<uint32_t>(c)), source->frames(), start};
     }
 };
 
@@ -104,12 +103,7 @@ struct WarpVoice::State {
 
 WarpVoice::WarpVoice(StretchConfig config, double sampleRate)
     : config_(config), state_(std::make_unique<State>()) {
-    const StretchTiming timing = stretchTiming(config);
-    // Split computation spreads each spectral block's work over the following
-    // interval instead of doing it all in one callback. It adds an interval of
-    // latency, which the alignment below compensates like the rest.
-    state_->stretch.configure(2, static_cast<int>(sampleRate * timing.blockSeconds),
-                              static_cast<int>(sampleRate * timing.intervalSeconds), true);
+    configureStretcher(state_->stretch, config, sampleRate);
 }
 
 WarpVoice::~WarpVoice() = default;
@@ -162,8 +156,8 @@ void WarpVoice::render(const ClipRender& clip, int64_t position, int frames, boo
 
 void renderResampled(const ClipRender& clip, int64_t position, int frames, float* outL, float* outR) noexcept {
     const AudioSource& source = *clip.source;
-    const float* srcL = source.channelData(0);
-    const float* srcR = source.channels() > 1 ? source.channelData(1) : srcL;
+    const float* srcL = source.stereoChannel(0);
+    const float* srcR = source.stereoChannel(1);
     const int64_t total = source.frames();
 
     // Speeding up moves content above the output Nyquist: lower the cutoff (and

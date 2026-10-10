@@ -46,6 +46,14 @@ void repairTree(std::vector<Track>& tracks);
 // Track id -> the tracks its signal goes into.
 using RoutingGraph = QHash<QString, QStringList>;
 
+// Whether a track in `parent` (none: in no group) going to `output` goes where
+// it would by default (Output::group()): into its group, the same as into its
+// own group by name, or as into the master from outside a group.
+inline bool isDefaultOutput(const Output& output, const std::optional<QString>& parent) {
+    return output.isDefault() || (output.to == Output::To::Master && !parent) ||
+           (output.to == Output::To::Track && parent == output.id);
+}
+
 // The track (or return) a device is on, in a rack or not; none: none (or the master's).
 std::optional<QString> deviceTrack(const std::vector<Track>& tracks, const std::vector<Track>& returns,
                                    const QString& deviceId);

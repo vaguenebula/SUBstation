@@ -36,7 +36,7 @@ What the user sees (the clip view, warp modes, transpose, tempo and key from fil
 | File | What it holds |
 |---|---|
 | [AudioSource.h](../../engine/src/AudioSource.h) / [.cpp](../../engine/src/AudioSource.cpp) | `AudioFileInfo`, `AudioSource::probe()`, `AudioSource::load()`, planar data, peak mipmaps |
-| [Warp.h](../../engine/src/Warp.h) / [.cpp](../../engine/src/Warp.cpp) | `WarpMode`, `StretchConfig`, `stretchConfigFor()`, `stretchTiming()`, `kStretchSeed`, `WarpVoice`, `WarpVoiceSet`, `renderResampled()` |
+| [Warp.h](../../engine/src/Warp.h) / [.cpp](../../engine/src/Warp.cpp) | `WarpMode`, `StretchConfig`, `stretchConfigFor()`, `stretchTiming()`, `configureStretcher()`, `kStretchSeed`, `WarpVoice`, `WarpVoiceSet`, `renderResampled()` |
 | [Snapshot.h](../../engine/src/Snapshot.h) | `ClipRender` (`Playback::Direct / Resample / Stretch`, `rate`, `sourceAt()`, `key`), `TrackBuffers::kMaxClipVoices` |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | clips to `ClipRender`s, choosing the playback; `ensureWarpVoicesLocked()` |
 | [Engine.cpp](../../engine/src/Engine.cpp) | the source cache: `loadSource()`, `cachedSource()`, `releaseUnusedSources()`, `reloadSourcesLocked()`, `sourceKey()` |
@@ -64,7 +64,8 @@ Both Signalsmith libraries are added as `SYSTEM` include directories in [CMakeLi
 4. It builds the peaks.
 
 It throws `std::runtime_error` if the file can't be opened or contains no audio. Paths are UTF-8 and opened with
-`ma_decoder_init_file_w` (through `widen()`, [PathUtils.h](../../engine/src/PathUtils.h)), so any Windows path works.
+`initDecoderFile()` ([MiniaudioFiles.h](../../engine/src/MiniaudioFiles.h)): miniaudio's wide call on Windows, so any
+Windows path works, and its narrow one elsewhere, so a path never goes through the C library's locale.
 
 `AudioSource::probe(utf8Path)` reads only what is needed for length and format (`AudioFileInfo`: frames at the file's
 own rate, channels, rate, duration). For streams that report no length it counts the frames by decoding.
@@ -105,8 +106,9 @@ Built-in devices that play files (the Sampler) get theirs through the same cache
 ([app/engine-bridge.md](../app/engine-bridge.md)).
 
 The Sampler warps its sample too (its Warp: the whole sample in so many beats at the tempo), with the same modes: it
-resamples for Re-Pitch, and otherwise runs a Signalsmith stretcher per note, configured with the same block sizes
-(`stretchTiming()`) and seed (`kStretchSeed`) as the clips'. Its stretchers are its own, made on the main side while
+resamples for Re-Pitch, and otherwise runs a Signalsmith stretcher per note, configured as the clips' are
+(`configureStretcher()`: the block sizes of `stretchTiming()`, split computation) with the same seed
+(`kStretchSeed`). Its stretchers are its own, made on the main side while
 it stretches ([devices.md](devices.md#sampler-builtinsampler-instrument)).
 
 ## Warp modes and how a clip plays

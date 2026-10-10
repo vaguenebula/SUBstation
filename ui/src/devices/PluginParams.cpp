@@ -1,6 +1,7 @@
 #include "devices/PluginParams.h"
 
 #include "audio/EngineBridge.h"
+#include "controls/Automation.h"
 #include "editor/ProjectEditor.h"
 #include "model/Automation.h"
 #include "model/Project.h"
@@ -205,11 +206,7 @@ void PluginParam::refreshValue() {
 void PluginParam::refreshAutomation() {
     QString state;
     if (session_ && spec_) {
-        const QString key = sub::app::automation::deviceKey(deviceId_, spec_->id);
-        if (session_->bridge()->isOverridden(trackId_, key))
-            state = QStringLiteral("off");
-        else if (session_->bridge()->isAutomated(trackId_, key))
-            state = QStringLiteral("on");
+        state = automationState(*session_->bridge(), trackId_, sub::app::automation::deviceKey(deviceId_, spec_->id));
     }
     if (state == automation_)
         return;

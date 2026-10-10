@@ -267,16 +267,14 @@ void EqGraph::touchBand(int index, const QString& name) {
 
 QRectF EqGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, 1, -1, -1); }
 
-double EqGraph::xOf(double freq) const {
+LogAxis EqGraph::frequencyAxis() const {
     const QRectF r = plot();
-    return r.left() + std::log(freq / kFreqMin) / std::log(kFreqMax / kFreqMin) * r.width();
+    return {kFreqMin, kFreqMax, r.left(), r.width()};
 }
 
-double EqGraph::freqAt(double x) const {
-    const QRectF r = plot();
-    const double fraction = std::clamp((x - r.left()) / r.width(), 0.0, 1.0);
-    return kFreqMin * std::pow(kFreqMax / kFreqMin, fraction);
-}
+double EqGraph::xOf(double freq) const { return frequencyAxis().position(freq); }
+
+double EqGraph::freqAt(double x) const { return frequencyAxis().valueAt(x); }
 
 double EqGraph::half() const { return std::max(10.0, plot().height() / 2 - kMargin); }
 
