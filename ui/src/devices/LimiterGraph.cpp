@@ -313,7 +313,9 @@ void LimiterGraph::advance(double dt) {
     changed = soft_.step(easeFraction(dt, kBadgeEase)) || changed;
     changed = badge_.step(easeFraction(dt, kBadgeEase)) || changed;
     changed = maxBadge_.step(easeFraction(dt, kBadgeEase)) || changed;
-    glow_.target = std::clamp(std::max(meterGr_[0].level, meterGr_[1].level) / kGlowFullDb, 0.0, 1.0);
+    // (The gain reduction as the GR bars stack it: in Soft Clip with the knee's share, which may be all of it.)
+    glow_.target =
+        std::clamp((std::max(meterGr_[0].level, meterGr_[1].level) + meterClip_.level) / kGlowFullDb, 0.0, 1.0);
     changed = glow_.step(easeFraction(dt, kGlowEase), 1e-3) || changed;
     changed = hover_.step(easeFraction(dt, kHoverEase), 1e-3) || changed;
     changed = updateTextsChanged() || changed;

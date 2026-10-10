@@ -450,23 +450,23 @@ The editors:
   Release dims while Auto is on (opacity 0.55, as Ableton greys it) and can still be set, for when Auto is off. The
   line's box and Link's are their widest text (the parameter's minimum and maximum, formatted) + 16 px and 4 more,
   so the automation dot clears a minus sign.
-  - The display: the level over the last `kHistorySeconds` (1.5 s) on a fixed axis (+12 to -36 dB): the input
-    (grey, red where it goes over the line), the output inside it (light), and the gain reduction hanging from the
-    top, filled with a gradient and edged with a glow (24 dB at the bottom: twice the level's scale, so its 6, 12 and
-    18 dB fall on the level's grid lines); beside it In, GR and Out meters (two bars each: L and R, or M and S for GR
-    in M/S; EditorPaint's `drawLevelMeter`/`drawReductionMeter` in wells), and under them the peaks of the last
-    second; the gain reduction of the last half second at the bottom left. Both gain reduction figures count Soft
-    Clip's share, as the GR bars do, and read negative ("GR −6.3 dB", "-6.3"); the reduction's scale figures (6, 12,
-    18) are drawn over the line on small backings, so the line passes behind them. The history is drawn in the line's
-    domain, as the device works (`sub::app::limiterLine`, the application layer's wrapper of `sub::limiter::scales`):
-    the input as the device hears it (after Gain; with Maximize the raw input) and the output moved down by what
-    Maximize adds (Output - Threshold, converted as each value comes, so the history stays put when the parameters
-    move), so the loudest output meets the line; the In meter is the history's input, while the Out meter and its
-    figure read the output in dBFS, as the axis does. Its time axis and silence are the device's
-    (`limiterMeterSamples()`, `limiterFloorDb()`). In Soft Clip a band shades where the knee rounds off (from
-    `limiterSoftKneeDb()`, -6.02 dB, to `limiterSoftTopDb()`, +3.52 dB, where it reaches the line, dashed), and the
-    knee's share of the reduction (display `clip`) is stacked under the gain reduction, lighter, in the history and
-    on the GR bars. A badge names the mode (SOFT CLIP, TRUE PEAK), with MAX beside it while Maximize is on.
+  - The display: the level over the last `kHistorySeconds` (1.5 s) on a fixed axis (+12 to -36 dB): the input (grey, red
+    where it goes over the line), the output inside it (light), and the gain reduction hanging from the top, filled with
+    a gradient and edged with a glow (24 dB at the bottom: twice the level's scale, so its 6, 12 and 18 dB fall on the
+    level's grid lines); beside it In, GR and Out meters (two bars each: L and R, or M and S for GR in M/S;
+    EditorPaint's `drawLevelMeter`/`drawReductionMeter` in wells), and under them the peaks of the last second; the gain
+    reduction of the last half second at the bottom left. Both gain reduction figures count Soft Clip's share, as the GR
+    bars do, and read negative ("GR −6.3 dB", "-6.3"); the reduction's scale figures (6, 12, 18) are drawn over the line
+    on small backings, so the line passes behind them. The history is drawn in the line's domain, as the device works
+    (`sub::app::limiterLine`, the application layer's wrapper of `sub::limiter::scales`): the input as the device hears
+    it (after Gain; with Maximize the raw input) and the output moved down by what Maximize adds (Output - Threshold,
+    converted as each value comes, so the history stays put when the parameters move), so the loudest output meets the
+    line; the In meter is the history's input, while the Out meter and its figure read the output in dBFS, as the axis
+    does. Its time axis and silence are the device's (`limiterMeterSamples()`, `limiterFloorDb()`). In Soft Clip a band
+    shades where the knee rounds off (from `limiterSoftKneeDb()`, -6.02 dB, to `limiterSoftTopDb()`, +3.52 dB, where it
+    reaches the line, dashed), and the knee's share of the reduction (display `clip`) is stacked under the gain
+    reduction, lighter, in the history and on the GR bars. A badge names the mode (SOFT CLIP, TRUE PEAK), with MAX
+    beside it while Maximize is on.
   - The line, across the plot and the meters to its handle, is the Ceiling (the Threshold with Maximize): drag it
     within `kLineGrab` (5 px) up and down (Shift finely: a quarter; pressing Shift mid-drag changes the rate from
     there on), to 0.1 dB within the parameter's range (the device's, read as the drag starts), one undo step per
@@ -474,22 +474,22 @@ The editors:
     once; moved otherwise (automation, undo, its box, Maximize) it eases there, and the hover (the line lit, the
     resize cursor) is checked again as it moves under a still mouse.
   - `refreshDisplays()` reads the seven displays (`input_l`, `input_r`, `output_l`, `output_r`, `reduction_a`,
-    `reduction_b`, `clip`: one value per 128 samples) by absolute index (`readDisplayAt`) into rings of `kRing`
-    (4096) values, keeping what one stream has that another hasn't yet, so they stay in step; a gap is filled with
-    silence, a new start (the device's processor made again) starts the history again. The history is drawn from fixed bins (a column holds
-    the most of its values by absolute index, so a column never changes once complete), placed by a cursor: the
-    index at the plot's right edge, moved on by the time since the last tick and eased towards `kLagSeconds`
-    (40 ms) behind the newest value, so the history scrolls smoothly at a steady speed whatever the bursts the values
-    come in, and holds still when they stop. The meters read what the cursor passes (`MeterBallistics`: In and Out
-    fall 24 dB a second, peaks held 1 s; GR and the knee's share 30 dB a second, held 0.5 s), so they move with the
-    history's edge.
+    `reduction_b`, `clip`: one value per 128 samples) by absolute index (`readDisplayAt`; not `readRecent`, which keeps
+    only the newest: the history keeps every value) into rings of `kRing` (4096) values, keeping what one stream has
+    that another hasn't yet, so they stay in step; a gap is filled with silence, a new start (the device's processor
+    made again) starts the history again. The history is drawn from fixed bins (a column holds the most of its values by
+    absolute index, so a column never changes once complete), placed by a cursor: the index at the plot's right edge,
+    moved on by the time since the last tick and eased towards `kLagSeconds` (40 ms) behind the newest value, so the
+    history scrolls smoothly at a steady speed whatever the bursts the values come in, and holds still when they stop.
+    The meters read what the cursor passes (`MeterBallistics`: In and Out fall 24 dB a second, peaks held 1 s; GR and
+    the knee's share 30 dB a second, held 0.5 s), so they move with the history's edge.
   - It opens showing the device as it is: the first sync with a device snaps the line, Soft Clip's band and the
     badges to their values (DeviceCanvas syncs once before its track and device are set; that sync does nothing).
-  - Everything moves in `advance()` (from `refreshDisplays()`, by `tickSeconds()`): the cursor,
-    the meters, and, eased (`Eased`, `easeFraction`), the line (50 ms), Soft Clip's band and the badges (80 ms), the
-    line's glow (warming from white to orange with the gain reduction, fully at 6 dB) and the hover (the line
-    thickens, its handle lights). It repaints only while something moves or a figure changes: not while idle, nor
-    while silence scrolls through once nothing in view is loud.
+  - Everything moves in `advance()` (from `refreshDisplays()`, by `tickSeconds()`): the cursor, the meters, and, eased
+    (`Eased`, `easeFraction`), the line (50 ms), Soft Clip's band and the badges (80 ms), the line's glow (warming from
+    white to orange with the gain reduction, Soft Clip's share with it as the GR bars stack it, fully at 6 dB) and the
+    hover (the line thickens, its handle lights). It repaints only while something moves or a figure changes: not while
+    idle, nor while silence scrolls through once nothing in view is loud.
 - **Multiband Dynamics** ([MultibandEditor.qml](../../ui/qml/devices/editors/MultibandEditor.qml)): no pages; laid
   out as Live's, a row per band with High on top (the rows are the graph's lanes: `rowHeight` is the graph's, the
   body's height less a 16 px header, in three): the band's button, its activator (lit while the band works; off, the
@@ -1119,7 +1119,7 @@ The editors:
 | [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | The registry (every kind with an editor, and the generic knobs for the others); the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and Sampler's editors, each loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; what the editors share (SgPainter's additions, the animation helpers, `EditorKnob` and `DeviceParamMap`); the parameter cell and its menu. Its host, and every editor test's, is [support/EditorHarness.h](../../tests/app/support/EditorHarness.h) |
 | [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body, every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, one step each; either taken when they are one), their right-click menus, the meters not a control; the displays reaching the graph (its rings holding all the plot draws, at any rate up to 384 kHz), its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's widest values whole); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
-| [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
+| [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view, every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the boxes and lists wide enough for their widest text; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures and in the line's glow; with Maximize, the history's output in the line's domain and the Out meter in dBFS), its animation and its rest, the maths shared with the engine |
 | [test_ui_device_editors_multiband.cpp](../../tests/app/test_ui_device_editors_multiband.cpp) | Multiband Dynamics' editor: it fits the body (at its least height too), every box as wide as its text and automation dot need, every control bound and undoable (the engine has what they set: the activators and the split switches, each where Live has it), ratios and times typed and printed, the T/B/A pages and their captions (the page outliving the editor being made again); the graph's threshold and ratio drags (pushing, Ctrl, Alt, Shift; Ctrl+Alt left to the chain), double-clicks and wheel (a high-resolution wheel's steps adding up; a run staying on a threshold that slides from under the mouse; Shift+wheel left to the chain), one undo step each; the displays reaching the graph as the engine renders (a whole 2048-sample buffer's read), its meters, eased gain, glows (not after the audio stops), target marker, a cut under the floor drawn only as far as the level before it, the bars and the figure agreeing tick by tick while the meters let go (a lift, a cut, a cut under the floor), lanes and highlights, a switched-off lane's "→ Mid" making way for a drag's bubble, the hover readout clear of the change's figure, a bypassed band's lane (its level only), and its stopping once still; the sidechain's controls (dimmed but settable without a sidechain, whole readouts, the menu asked for under the button, Listen); the `ratio` unit and the typed texts (with no window, on any platform) |
 | [test_ui_device_editors_spectral.cpp](../../tests/app/test_ui_device_editors_spectral.cpp) | The Spectral Compressor's editor: fitting the body, every name and value whole, its knobs and Delta bound and undoable, the lines the engine's, lines leaving the plot drawn where they are with their handles on them (and the mouse finding them only there), the level figures a line crosses fading, the threshold, tilt, Below and Focus dragged (one undo step, Shift, Shift pressed mid-drag, double-click), the Focus boxes (wide enough for their widest value clear of the automation dot), Below dimmed but settable while Upward is 1:1, the Focus dim the engine's weights with the level figures over it, the displays reaching the graph and sinking back without a bounce, the held cut outliving the curtain, nothing drawn while still, lifts, the glow only while cutting, Delta's spectrum and tint, the key line only where the key is, the Sidechain badge (its menu under it) |
 | [test_ui_device_editors_saturator.cpp](../../tests/app/test_ui_device_editors_saturator.cpp) | The Saturator's editor: fitting the body (its columns 8 px apart in order, each control in its own column, with either shaper section showing; Color's switch off its graph; the lists as wide as their longest names with the arrow; no caption or readout cut short at either end of a knob's range), every control bound to its parameter, undoable and reaching the engine (each knob, the lists, the switches; Hi-Quality's latency), the knobs bipolar whose range is symmetric about 0, Color's under Live 12.1's names, the Color and Waveshaper knobs dimmed and lit, the Waveshaper and Bass Shaper sections swapping; the curve and Color's EQ being the engine's own `saturator::transfer` and `colorResponseDb` (every type, both Post Clips, every shaper control; exactly, after the morph and the ease); an editor opening on the device as it is, without a morph; the graphs' drags (Shift mid-drag, double-clicks, presses off the handles, Amt Lo dragged near the top, the cursor after a drag) as single undo steps, showing the automation of what they move most; the displays reaching the curve (the dots, the saturation, the afterglow, the over-full-scale flash) and the spectra, holding over a tick without values, a backlog counting for nothing, and both graphs settling without repaints in silence |

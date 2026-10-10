@@ -562,8 +562,13 @@ private Q_SLOTS:
         QVERIFY2(graph->reduction() < 0.05, qPrintable(QString::number(graph->reduction())));
         graph->advance(1.0 / 60);
         QVERIFY2(std::abs(graph->meterClip().level - 1.8) < 0.2, qPrintable(QString::number(graph->meterClip().level)));
+        // The line warms with it too (1.8 dB of the 6 that warm it fully), as it does with the limiter's own
+        // reduction, of which there is none.
+        for (int i = 0; i < 2; ++i)
+            graph->advance(1.0 / 60);
+        QVERIFY2(graph->glow() > 0.05 && graph->glow() < 0.35, qPrintable(QString::number(graph->glow())));
         // Both gain reduction figures include the knee's share, as the GR bars do: they agree.
-        for (int i = 0; i < 60; ++i)
+        for (int i = 0; i < 58; ++i)
             graph->advance(1.0 / 60);
         const QStringList soft = graph->figures();
         QCOMPARE(soft.at(2), QStringLiteral("-1.8"));

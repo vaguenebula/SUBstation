@@ -332,10 +332,10 @@ sound.
   and the output (Out), with their peaks of the last second under them, and the gain
   reduction of the last half second at the bottom left. The line glows orange while it
   limits. In Soft Clip a band shows where it rounds off, and what it rounded off shows
-  in lighter orange under the gain reduction (and is counted in both gain reduction
-  figures). With Maximize the history shows the input as it comes in and the output as
-  far under the Output as the line is under it, so the loudest output meets the line;
-  the Out meter and its figure still read the level that comes out.
+  in lighter orange under the gain reduction (it counts in both gain reduction figures,
+  and warms the line too). With Maximize the history shows the input as it comes in and
+  the output as far under the Output as the line is under it, so the loudest output
+  meets the line; the Out meter and its figure still read the level that comes out.
 - Every control but Lookahead can be automated, and changes don't click: the levels
   glide, the modes crossfade, and a new Lookahead fades out and back in (for a few
   milliseconds) as the latency changes.

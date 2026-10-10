@@ -739,20 +739,18 @@ TEST_CASE("changing any of the limiter's controls is click-free") {
         CHECK_ARRAY_EQUAL(slice(z, kAt + 960 + kS), slice(y, kAt + 960 + kS));
     }
 
-    // Lookahead, between blocks: a dip of a few milliseconds, never a click or an overshoot.
+    // Lookahead, between blocks (it isn't automatable): a dip of a few milliseconds, never a click or an
+    // overshoot. The block starting there has the new latency, reported once (idle()).
     Limiter l;
-    Samples left = a, right = a;
+    Samples out = a, right = a;
     constexpr int64_t kSwitch = 24064;  // (a block's start)
-    Samples l1 = slice(left, 0, kSwitch), r1 = slice(right, 0, kSwitch);
-    l.run({&l1, &r1});
-    l.set("lookahead", 2.f);
-    CHECK_EQ(l.processor().latencySamples(), 288);
-    CHECK(l.processor().idle());
-    CHECK(!l.processor().idle());
-    Samples l2 = slice(left, kSwitch), r2 = slice(right, kSwitch);
-    l.run({&l2, &r2});
-    Samples out = l1;
-    out.insert(out.end(), l2.begin(), l2.end());
+    int reported = 0;
+    l.run({&out, &right}, {{kSwitch, "lookahead", 2.f, true}}, 256, [&](int64_t start, int) {
+        if (start != kSwitch) return;
+        CHECK_EQ(l.processor().latencySamples(), 288);
+        for (int i = 0; i < 2; ++i) reported += l.processor().idle() ? 1 : 0;
+    });
+    CHECK_EQ(reported, 1);
     Limiter three, six({{"lookahead", 2.f}});
     const auto [steady3, unused3] = three.play(a, a);
     const auto [steady6, unused6] = six.play(a, a);
@@ -837,8 +835,7 @@ TEST_CASE("reset and a new sample rate start the limiter cleanly") {
                                                    std::tuple{44100.0, 0.f, 66}, std::tuple{44100.0, 2.f, 265}}) {
         INFO(std::to_string(rate) + " Hz, lookahead " + std::to_string(lookahead));
         l.set("lookahead", lookahead);
-        l.processor().prepare(rate, Standalone::kMaxBlock);
-        l.context().sampleRate = rate;
+        l.prepare(rate);
         CHECK_EQ(l.processor().latencySamples(), samples);
         CHECK_EQ(l.processor().tailSamples(), samples);
         const auto [a, b] = l.play(noise(static_cast<size_t>(rate / 4), 1), noise(static_cast<size_t>(rate / 4), 2));

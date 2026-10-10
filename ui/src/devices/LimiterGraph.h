@@ -89,7 +89,8 @@ public:
     // Where the line is drawn now (eased towards the parameter; on it while dragged), in px and dB.
     Q_INVOKABLE double lineY() const { return yOf(line_.value); }
     Q_INVOKABLE double shownLineDb() const { return line_.value; }
-    // Soft Clip's band and the mode badge (0..1, eased), the line's glow (0..1: with the gain reduction).
+    // Soft Clip's band and the mode badge (0..1, eased), the line's glow (0..1: with the gain reduction,
+    // Soft Clip's share with it, as the GR bars stack it).
     Q_INVOKABLE double softBand() const { return soft_.value; }
     double badge() const { return badge_.value; }
     double glow() const { return glow_.value; }

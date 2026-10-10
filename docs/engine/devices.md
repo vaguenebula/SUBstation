@@ -590,13 +590,13 @@ between the two; Maximize turns the ceiling into a threshold. Its latency is the
 - **Detection**, 12 samples behind the input (`kDetectorDelay`), of left, right, mid and side. Standard and Soft Clip
   take each sample's magnitude. True Peak interpolates seven points between each sample and the next (24 taps each, a
   Kaiser-windowed sinc with β = 6, `dsp::besselI0` for its window, each phase passing DC exactly: flat within ±0.01 dB
-  to 0.42 of the rate), and refines
-  the largest of the eight by a parabola through it and its neighbours (`limiter::refinedPeak`, never below the point,
-  within 0.002 dB of a sine's crest at 0.4 of the rate), aiming 0.02 dB under the ceiling (`kTruePeakMargin`). Its
-  output, by a 32x reference meter, stays at or under the ceiling for content up to about 0.42 of the rate (20 kHz at
-  48 kHz). The seven dot products run as one vector of eight points per tap (AVX intrinsics, as compilers vectorize the
-  plain loop across the taps with a shuffle per value; the plain loop elsewhere), and the parabola is skipped where 1.25
-  times the largest of the ten points around the sample is under the target (the most it can add).
+  to 0.42 of the rate), and refines the largest of the eight by a parabola through it and its neighbours
+  (`limiter::refinedPeak`, never below the point, within 0.002 dB of a sine's crest at 0.4 of the rate), aiming 0.02 dB
+  under the ceiling (`kTruePeakMargin`). Its output, by a 32x reference meter, stays at or under the ceiling for content
+  up to about 0.42 of the rate (20 kHz at 48 kHz). The seven dot products run as one vector of eight points per tap (AVX
+  intrinsics, as compilers vectorize the plain loop across the taps with a shuffle per value; the plain loop elsewhere),
+  and the parabola is skipped where 1.25 times the largest of the ten points around the sample is under the target (the
+  most it can add).
 - **Required gains.** L/R: each channel's own (target / peak, for peaks over it) blended by Link with the pair's (the
   lower). M/S: |left| and |right| are at most |mid| + |side|, so their sum must fit: own gains share the room out
   (`limiter::sharedCeiling`: the quieter keeps its level while the louder takes what is left; both meet at half when
