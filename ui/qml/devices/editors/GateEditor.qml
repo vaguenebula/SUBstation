@@ -23,6 +23,7 @@ Item {
 
     readonly property alias graph: graph
     readonly property alias keyGraph: keyGraph
+    readonly property alias lineMenu: lineMenu  // (the threshold's or Return's, from the display's lines)
     readonly property bool sidechainShown: GateViews.isShown(deviceId)
     readonly property int foldedWidth: 566
     readonly property int sectionWidth: 254
@@ -32,10 +33,10 @@ Item {
     readonly property bool eqOn: p.get("sc_eq") ? p.get("sc_eq").value >= 0.5 : false
     readonly property int eqType: p.get("sc_eq_type") ? p.get("sc_eq_type").index : 5
     readonly property bool listening: p.get("sc_listen") ? p.get("sc_listen").value >= 0.5 : false
-    // The key EQ's types that use the gain (the shelves and the bell) and the Q (the bell and the pass
-    // filters), as the engine's (GateDesign.h).
-    readonly property bool eqUsesGain: eqType <= 2
-    readonly property bool eqUsesQ: eqType !== 0 && eqType !== 2
+    // Whether the key EQ's type uses the gain (the shelves and the bell) and the Q (the bell and the
+    // pass filters): the engine's rule (GateDesign.h), as the key graph has it.
+    readonly property bool eqUsesGain: keyGraph.usesGain
+    readonly property bool eqUsesQ: keyGraph.usesQ
 
     implicitWidth: foldedWidth + shift
     implicitHeight: 6 + Math.max(knobGrid.implicitHeight, graph.implicitHeight, section.implicitHeight) + 6
@@ -48,10 +49,10 @@ Item {
               "sc_listen", "sc_eq", "sc_eq_type", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"]
     }
 
-    // Floor at its bottom is silence.
+    // Floor at its bottom is silence (the engine's rule, through the graph).
     function floorText(v) {
         const floor = p.get("floor")
-        return v <= -74.95 ? "−inf dB" : (floor ? floor.format(v) : "")
+        return graph.floorIsSilent(v) ? "−inf dB" : (floor ? floor.format(v) : "")
     }
 
     // --- The sidechain section's fold: a strip at the left -------------------------------------
@@ -256,10 +257,11 @@ Item {
                     enabled: graph.keyed
                     tooltip: qsTr("Sidechain Dry/Wet: 100 %: only the sidechain opens the gate;\n0 %: only the device's own input")
                 }
+                // (52 px each: "15.00 kHz" fits)
                 EditorKnob {
                     objectName: "sc_eq_freq"
-                    x: 104
-                    width: 50
+                    x: 98
+                    width: 52
                     size: 28
                     param: p.get("sc_eq_freq")
                     title: qsTr("Freq")
@@ -268,8 +270,8 @@ Item {
                 }
                 EditorKnob {
                     objectName: "sc_eq_q"
-                    x: 154
-                    width: 50
+                    x: 150
+                    width: 52
                     size: 28
                     param: p.get("sc_eq_q")
                     title: qsTr("Q")
@@ -280,8 +282,8 @@ Item {
                 }
                 EditorKnob {
                     objectName: "sc_eq_gain"
-                    x: 204
-                    width: 50
+                    x: 202
+                    width: 52
                     size: 28
                     param: p.get("sc_eq_gain")
                     title: qsTr("Gain")
@@ -305,7 +307,7 @@ Item {
                 }
                 ToolTip.visible: keyHover.hovered && !keyHover.point.pressedButtons
                 ToolTip.delay: 700
-                ToolTip.text: qsTr("The EQ on the key: only this band opens the gate.\nDrag the dot across for the frequency, up and down for the gain (shelves, bell) or the Q")
+                ToolTip.text: qsTr("The EQ on the key: only this band opens the gate.\nDrag the dot across for the frequency, up and down for the gain (shelves, bell) or the Q\n(the bell's with Ctrl); the wheel over the dot sets the Q")
             }
         }
     }
@@ -340,12 +342,21 @@ Item {
             width: 280
             height: Math.max(implicitHeight, editor.height - 12)
 
+            // A line right-clicked: its parameter's menu.
+            onParamMenuRequested: id => {
+                lineMenu.param = p.get(id)
+                lineMenu.show()
+            }
+
+            ParamMenu {
+                id: lineMenu
+            }
             HoverHandler {
                 id: graphHover
             }
             ToolTip.visible: graphHover.hovered && !graph.dragging
             ToolTip.delay: 700
-            ToolTip.text: qsTr("The last 2.5 s: the input (light) and the output (dark, outlined),\nshaded blue where the gate lets sound through.\nDrag the blue line for the threshold, the orange one for where it closes again (Return);\ndouble-click either to reset it. At the right: the input's level and how far the gate turns it down")
+            ToolTip.text: qsTr("The last 2.5 s: the input (light) and the output (dark, outlined),\nshaded blue where the gate lets sound through.\nDrag the blue line for the threshold, the orange one for where it closes again (Return);\ndouble-click either to reset it, right-click it for its menu.\nAt the right: the input's level and how far the gate turns it down")
         }
 
         Grid {

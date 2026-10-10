@@ -39,8 +39,6 @@ double gateFloorGain(double floorDb) { return sub::gate::floorGain(static_cast<f
 
 bool gateFloorIsSilent(double floorDb) { return gateFloorGain(floorDb) <= 0.0; }
 
-double gateFloorMinDb() { return sub::gate::kFloorMinDb; }
-
 double gateGainDb(double pass, double floorDb) {
     const float gain = sub::gate::gain(static_cast<float>(std::clamp(pass, 0.0, 1.0)),
                                        sub::gate::floorGain(static_cast<float>(floorDb)));
@@ -50,8 +48,6 @@ double gateGainDb(double pass, double floorDb) {
 double gateCloseDb(double thresholdDb, double returnDb) {
     return sub::gate::closeDb(static_cast<float>(thresholdDb), static_cast<float>(returnDb));
 }
-
-int gateLookaheadSamples(int index, double sampleRate) { return sub::gate::lookaheadSamples(index, sampleRate); }
 
 int gateDisplaySamples() { return sub::gate::kDisplaySamples; }
 

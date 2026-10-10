@@ -192,10 +192,10 @@ double largestStep(const Samples& x, int64_t from = 1, int64_t to = -1) {
     return worst;
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
+// The largest 6th difference over [from, to): a steep high-pass, a gain of 64
+// (36 dB) at Nyquist, 8 at a quarter of the sample rate, and 2 * 10^5 times less
+// at 2 kHz (48 kHz) than at Nyquist. A step of d shows as up to 20 d; a smooth
+// signal well below Nyquist hardly at all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     std::vector<double> d(x.begin(), x.end());
     for (int k = 0; k < 6; ++k)
@@ -399,6 +399,28 @@ TEST_CASE("the gate's Hold keeps it open after the level falls, to the sample") 
         CHECK(gainAt(out, in, d + samples + 46) > 0.01 * (1.0 + 1e-5));
         CHECK_APPROX_TOL(gainAt(out, in, d + samples + 47), 0.01, 1e-6, 0.0);
     }
+    // A Hold changed while it counts applies at once, counted from the fall: shorter
+    // than what has passed, it closes there; longer, it holds on for the new length.
+    // (Whatever the block size: the change splits the stretch.)
+    for (const int block : {64, 256, 1000}) {
+        INFO("block " + std::to_string(block));
+        const int64_t d = 4800, change = d + 240;
+        const Samples in = levels({{d, 0.5f}, {80000, 0.001f}});
+        Gate shorter(with(kBase, {{"threshold", -20.f}, {"hold", 1500.f}, {"release", 1.f}}));
+        const Samples out = shorter.play(in, {{change, "hold", 1.f}}, block);
+        CHECK_ARRAY_EQUAL(slice(out, 4, change), slice(in, 4, change));
+        CHECK(out[static_cast<size_t>(change)] < in[static_cast<size_t>(change)]);
+        CHECK_APPROX_TOL(gainAt(out, in, change + 47), 0.01, 1e-6, 0.0);
+        Gate longer(with(kBase, {{"threshold", -20.f}, {"hold", 10.f}, {"release", 1.f}}));
+        const Samples held = longer.play(in, {{change, "hold", 50.f}}, block);
+        CHECK_ARRAY_EQUAL(slice(held, 4, d + 2400), slice(in, 4, d + 2400));
+        CHECK(held[static_cast<size_t>(d + 2400)] < in[static_cast<size_t>(d + 2400)]);
+        // Lengthened once it has closed, it stays closed: nothing reopens it.
+        Gate closed(with(kBase, {{"threshold", -20.f}, {"hold", 1.f}, {"release", 1.f}}));
+        const Samples shut = closed.play(in, {{d + 480, "hold", 1500.f}}, block);
+        CHECK_APPROX_TOL(gainAt(shut, in, d + 48 + 47), 0.01, 1e-6, 0.0);
+        CHECK(allclose(slice(shut, d + 96), 0.001 * 0.01, 1e-6, 0.0));
+    }
 }
 
 TEST_CASE("the gate's Floor is how far a closed gate turns the sound down") {
@@ -576,7 +598,8 @@ TEST_CASE("a sidechain keys the gate, after its gain and blended by its mix") {
     CHECK_ARRAY_EQUAL(channel(engine.renderOffline(0.0, kSampleRate / 2), 0), plain);
     CHECK_EQ(plain.back(), 0.5f);
 
-    // Standalone, on a stretch of the key: bit-equal to the gate keyed by it at full mix.
+    // Standalone (as the renderer hands a sidechain over), keyed by a burst: closed before it,
+    // open from it (after the attack's 4.8 samples), held 10 ms after it falls, then closing.
     const Samples quiet = levels({{9600, 0.001f}});
     const Samples key = levels({{2400, 0.f}, {4800, 0.5f}, {2400, 0.f}});
     Gate keyed;
@@ -666,6 +689,58 @@ TEST_CASE("the gate listening puts out the key instead") {
     Gate mono(with(kBase, {{"sc_listen", 1.f}}));
     const Samples one = mono.play(levels({{4800, 0.5f}}), {}, 256, Key{&left, &right});
     CHECK(allclose(one, 0.2, 0.0, 1e-6));
+}
+
+TEST_CASE("a filter the gate's key EQ starts has nothing to settle: a new type, or the EQ switched on") {
+    // Listening to a key of 40 Hz (0.5) and 3 kHz (0.1) through filters at 30 Hz, where they
+    // are slowest. Switched at `at`: during the 10 ms crossfade, exactly the crossfade between
+    // the two settled outputs (the outputs of gates set so all along), and from its end on,
+    // the new one's. Carrying on from the old filter's state instead, Band-pass to Low Shelf
+    // +15 dB peaked at 1.64 against the new one's 0.91, still 0.73 out after the crossfade:
+    // it could open the gate where neither setting would.
+    const int64_t at = 24000, fade = 480, length = 36000;
+    const Samples key = plus(tone(40.0, length, 0.5), tone(3000.0, length, 0.1));
+    const Values listening = with(kBase, {{"sc_listen", 1.f}, {"sc_eq", 1.f}, {"sc_eq_freq", 30.f}, {"sc_eq_q", 0.71f},
+                                          {"sc_eq_gain", 15.f}});
+    // `out` against the crossfade from `before` to `after` starting at `at`.
+    const auto check = [&](const Samples& out, const Samples& before, const Samples& after) {
+        const double peak = std::max(maxAbs(slice(before, at - 4800, at)), maxAbs(slice(after, at, at + 4800)));
+        double worst = 0.0;
+        for (int64_t i = at - 4800; i < length; ++i) {
+            const auto x = static_cast<size_t>(i);
+            float t = i < at ? 0.f : i >= at + fade ? 1.f : static_cast<float>(i - at) / static_cast<float>(fade);
+            t = t * t * (3.f - 2.f * t);
+            worst = std::max(worst, std::abs(static_cast<double>(out[x]) - (before[x] + t * (after[x] - before[x]))));
+        }
+        INFO("off by " + std::to_string(worst) + " at most, the levels " + std::to_string(peak));
+        // What the warm-up leaves of where the filter started: -60 dB, or less where its slowest
+        // pole needs longer than the 100 ms it gets (the bell 15 dB up here: 0.12 %).
+        CHECK(worst < 3e-3 * peak);
+        CHECK(maxAbs(slice(out, at, at + 4800)) <= peak * (1.0 + 1e-3));
+    };
+    for (const auto& [from, to] : std::vector<std::pair<int, int>>{{4, 0}, {0, 4}, {5, 0}, {5, 3}, {3, 1}, {1, 2}}) {
+        INFO("type " + std::to_string(from) + " to " + std::to_string(to));
+        Gate moved(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
+        Gate old(with(listening, {{"sc_eq_type", static_cast<float>(from)}}));
+        Gate now(with(listening, {{"sc_eq_type", static_cast<float>(to)}}));
+        check(moved.play(key, {{at, "sc_eq_type", static_cast<float>(to)}}), old.play(key), now.play(key));
+    }
+    // Switched on (Low Shelf), it fades in from the key as it is to the filter as if it had
+    // been on all along.
+    Gate on(with(listening, {{"sc_eq", 0.f}, {"sc_eq_type", 0.f}}));
+    Gate off(with(listening, {{"sc_eq", 0.f}, {"sc_eq_type", 0.f}}));
+    Gate always(with(listening, {{"sc_eq_type", 0.f}}));
+    const Samples moved = on.play(key, {{at, "sc_eq", 1.f}});
+    const Samples plain = off.play(key), filtered = always.play(key);
+    // (The EQ's fade in is linear, the S/C EQ On ramp: the crossfade's shape here.)
+    double worst = 0.0;
+    for (int64_t i = at; i < length; ++i) {
+        const auto x = static_cast<size_t>(i);
+        const float t = std::min(1.f, static_cast<float>(i - at + 1) / static_cast<float>(fade));
+        worst = std::max(worst, std::abs(static_cast<double>(moved[x]) - (plain[x] + t * (filtered[x] - plain[x]))));
+    }
+    INFO("switched on: off by " + std::to_string(worst));
+    CHECK(worst < 1e-3);
 }
 
 TEST_CASE("every gate control moves without a jump") {
@@ -1023,8 +1098,12 @@ TEST_CASE("on one channel the gate gates as two equal channels do") {
     const Samples out = keyed.play(quiet, {}, 256, Key{&key});
     CHECK_APPROX_TOL(out[4799], 0.001 * 0.01, 1e-5, 0.0);
     CHECK_EQ(out.back(), 0.001f);
-    // And it goes back to two channels without the right's old delay.
+    // And it goes back to two channels without the right's old delay: two channels
+    // (filling both delays), one, then two again, whose right starts from silence.
     Gate both(with(kBase, {{"lookahead", 2.f}, {"threshold", -70.f}}));
+    Samples l0 = levels({{4800, 0.5f}}), r0 = l0;
+    both.run({&l0, &r0});
+    CHECK(allclose(slice(r0, 480), 0.5, 0.0, 1e-7));
     both.play(levels({{4800, 0.5f}}));
     Samples l = levels({{4800, 0.2f}}), r = l;
     both.run({&l, &r});

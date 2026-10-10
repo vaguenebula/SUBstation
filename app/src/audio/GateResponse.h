@@ -20,14 +20,11 @@ bool gateKeyFilterUsesQ(int type);
 // The floor's gain: 0 (silence) at the bottom of its range.
 double gateFloorGain(double floorDb);
 bool gateFloorIsSilent(double floorDb);
-double gateFloorMinDb();  // -75
 // The gain in dB for `pass` (0..1: how much passes, the display "open") at a floor; at a silent floor with
 // nothing passing, -infinity (callers clamp).
 double gateGainDb(double pass, double floorDb);
 // The level (dB) below which an open gate closes again.
 double gateCloseDb(double thresholdDb, double returnDb);
-// Lookahead choice `index` (0, 1, 10 ms) in samples.
-int gateLookaheadSamples(int index, double sampleRate);
 // Audio samples per value of the device's displays (256).
 int gateDisplaySamples();
 

@@ -10,6 +10,7 @@
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -66,11 +67,7 @@ double GateKeyGraph::dbAt(double y) const {
     return std::clamp((r.center().y() - y) / (r.height() / 2) * kRangeDb, -kRangeDb, kRangeDb);
 }
 
-QPointF GateKeyGraph::dot() const {
-    const double at = usesGain_ ? gain_
-                                : sub::app::gateKeyFilterDb(type_, freq_, q_, gain_, sampleRate(), {freq_}).value(0);
-    return QPointF(xOf(std::clamp(freq_, kLow, kHigh)), yOf(at));
-}
+QPointF GateKeyGraph::dot() const { return QPointF(xOf(std::clamp(freq_, kLow, kHigh)), yOf(dotDb_)); }
 
 void GateKeyGraph::sync() {
     active_ = value(QStringLiteral("sc_eq")) >= 0.5;
@@ -79,6 +76,7 @@ void GateKeyGraph::sync() {
     q_ = value(QStringLiteral("sc_eq_q"));
     gain_ = value(QStringLiteral("sc_eq_gain"));
     usesGain_ = sub::app::gateKeyFilterUsesGain(type_);
+    usesQ_ = sub::app::gateKeyFilterUsesQ(type_);
     activeEase_.target = active_ ? 1.0 : 0.0;
     if (!clock_.isValid())  // (the first time: as it is, no easing)
         activeEase_.snap(activeEase_.target);
@@ -92,15 +90,19 @@ void GateKeyGraph::geometryChange(const QRectF& newGeometry, const QRectF& oldGe
         updateCurve();
 }
 
+// The curve and the dot's level, worked out here (the GUI thread) so paint() only reads them (the
+// engine's rate is the bridge's, read under the engine's lock).
 void GateKeyGraph::updateCurve() {
     const int columns = std::max(2, int(plot().width()));
     QList<double> frequencies;
-    frequencies.reserve(columns + 1);
+    frequencies.reserve(columns + 2);
     for (int i = 0; i <= columns; ++i)
         frequencies.append(kLow * std::pow(kHigh / kLow, double(i) / columns));
+    frequencies.append(freq_);  // (the dot's, last)
     const QList<double> response = sub::app::gateKeyFilterDb(type_, freq_, q_, gain_, sampleRate(), frequencies);
-    frequencies_.assign(frequencies.begin(), frequencies.end());
-    response_.assign(response.begin(), response.end());
+    frequencies_.assign(frequencies.begin(), frequencies.end() - 1);
+    response_.assign(response.begin(), response.end() - 1);
+    dotDb_ = usesGain_ ? gain_ : response.back();
     Q_EMIT curveChanged();
 }
 
@@ -150,13 +152,14 @@ void GateKeyGraph::mouseMoveEvent(QMouseEvent* event) {
     dragFreqX_ += dx;
     sub::app::OrderedMap<QString, double> values;
     values.insert(QStringLiteral("sc_eq_freq"), std::clamp(freqAt(dragFreqX_), kFreqMin, kFreqMax));
-    if (usesGain_) {
+    // Up and down: the Q for the pass filters (and the bell's with Ctrl, as the EQ's bands), else the gain.
+    if (usesQ_ && (!usesGain_ || (event->modifiers() & Qt::ControlModifier))) {
+        dragQ_ *= std::pow(2.0, up / kQPixels);
+        values.insert(QStringLiteral("sc_eq_q"), std::clamp(dragQ_, kQMin, kQMax));
+    } else {
         const QRectF r = plot().adjusted(0, 4, 0, -4);
         dragGain_ += up / std::max(1.0, r.height() / 2) * kRangeDb;
         values.insert(QStringLiteral("sc_eq_gain"), std::clamp(dragGain_, kGainMin, kGainMax));
-    } else {
-        dragQ_ *= std::pow(2.0, up / kQPixels);
-        values.insert(QStringLiteral("sc_eq_q"), std::clamp(dragQ_, kQMin, kQMax));
     }
     setParams(values, gesture_, QStringLiteral("Change Gate Key Filter"));
 }
@@ -188,6 +191,24 @@ void GateKeyGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 void GateKeyGraph::hoverMoveEvent(QHoverEvent* event) { hovered_ = onDot(event->position()); }
 
 void GateKeyGraph::hoverLeaveEvent(QHoverEvent*) { hovered_ = false; }
+
+void GateKeyGraph::wheelEvent(QWheelEvent* event) {
+    const int delta = event->angleDelta().y() ? event->angleDelta().y() : event->angleDelta().x();
+    // Over the dot (or while it is dragged): its Q; elsewhere the wheel goes on (the chain scrolls).
+    if (!usesQ_ || delta == 0 || device() == nullptr || (gesture_.isEmpty() && !onDot(event->position()))) {
+        event->ignore();
+        return;
+    }
+    event->accept();
+    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > 400)
+        wheelGesture_ = newGestureKey();  // (notches closer than 400 ms are one step)
+    wheelClock_.start();
+    const double step = event->modifiers() & Qt::ShiftModifier ? 1.03 : 1.15;
+    const double q = std::clamp(q_ * std::pow(step, delta / 120.0), kQMin, kQMax);
+    if (!gesture_.isEmpty())
+        dragQ_ = q;  // (a drag goes on from it)
+    setParams({{QStringLiteral("sc_eq_q"), q}}, wheelGesture_, QStringLiteral("Change Gate Key Filter Q"));
+}
 
 // --- Painting ------------------------------------------------------------------------------
 

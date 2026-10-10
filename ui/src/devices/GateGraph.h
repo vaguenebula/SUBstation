@@ -8,11 +8,12 @@
 // EQ on it). Across it the threshold (a blue line) and where an open gate closes
 // again (Return: an orange dashed line below it, the band between them tinted),
 // both dragged up and down (one undo step per drag, relative to where the press
-// was; Shift finely), double-clicked back to their defaults. An LED and "Open" or
-// "Closed" at the top left, the newest key level as a dot on the right edge
-// (blue at or above the threshold, a ring rippling out as the gate opens), and
-// two meters: the input's level (on the plot's dB axis) and how far the gate
-// turns it down.
+// was; Shift finely), double-clicked back to their defaults, right-clicked for
+// their parameters' menus. An LED and "Open" or "Closed" at the top left ("Idle"
+// while no values come: the device off, the engine stopped), the newest key level
+// as a dot on the right edge (blue at or above the threshold, a ring rippling out
+// as the gate opens), and two meters in wells, captioned, both on the plot's dB
+// axis: the input's level ("In") and how far the gate turns it down ("Gate").
 //
 // It reads the device's displays "input", "output", "key" and "open" (one value
 // per 256 samples, pushed together) by absolute index into a ring per stream, so
@@ -43,6 +44,7 @@ class GateGraph : public DeviceCanvas {
     Q_PROPERTY(double levelKey READ levelKey NOTIFY levelsChanged)  // dB: the loudest "key" of the last tick
     Q_PROPERTY(double passing READ passing NOTIFY levelsChanged)    // the latest "open", 0..1
     Q_PROPERTY(bool open READ isOpen NOTIFY levelsChanged)          // passing >= 0.5
+    Q_PROPERTY(bool idle READ idle NOTIFY levelsChanged)            // no values for a while: nothing passes
     Q_PROPERTY(bool keyed READ keyed NOTIFY sidechainChanged)       // a sidechain is chosen
     Q_PROPERTY(QString sidechainName READ sidechainName NOTIFY sidechainChanged)  // its track's name, or ""
     Q_PROPERTY(bool dragging READ dragging NOTIFY draggingChanged)  // a line is being dragged
@@ -55,7 +57,7 @@ public:
     static constexpr double kHistorySeconds = 2.5;
     static constexpr int kCapacity = 2048;  // values kept per stream (2.5 s at 192 kHz is 1875)
     static constexpr double kLineGrab = 6.0;     // px either side of a line that picks it up
-    static constexpr double kRightStrip = 42.0;  // the dB figures and the two meters
+    static constexpr double kRightStrip = 62.0;  // the dB figures and the two meters, captioned
     enum Stream { Input = 0, Output, Key, Open, kStreams };
 
     explicit GateGraph(QQuickItem* parent = nullptr);
@@ -65,6 +67,7 @@ public:
     double levelKey() const { return levelKey_; }
     double passing() const { return passing_; }
     bool isOpen() const { return passing_ >= 0.5; }
+    bool idle() const { return idle_; }
     bool keyed() const { return keyed_; }
     QString sidechainName() const { return sidechainName_; }
     bool dragging() const { return drag_ != Line::None; }
@@ -78,12 +81,19 @@ public:
     qint64 newest() const { return newest_; }    // the index after the latest value all four streams have
     int historySize() const;                     // values held
     float historyAt(int stream, qint64 index) const;
-    bool animating() const { return animating_; }  // the last tick asked for a repaint
+    // Not at rest: the last tick asked for a repaint, or a meter is still falling (or its peak held).
+    bool animating() const { return animating_; }
+    QRectF inMeter() const;    // the meters' wells
+    QRectF gateMeter() const;
+    // Whether Floor at `floorDb` is silence (its bottom: the editor shows it as "−inf dB").
+    Q_INVOKABLE bool floorIsSilent(double floorDb) const;
 
 Q_SIGNALS:
     void levelsChanged();
     void sidechainChanged();
     void draggingChanged();
+    // A line right-clicked: its parameter's menu ("threshold" or "return"; the editor opens it).
+    void paramMenuRequested(const QString& paramId);
 
 protected:
     void sync() override;
@@ -140,6 +150,10 @@ private:
     double sinceValues_ = 1e9;  // seconds since values last came
     double levelIn_ = kFloorDb, levelOut_ = kFloorDb, levelKey_ = kFloorDb;
     double passing_ = 0.0;
+    bool idle_ = true;
+    std::array<double, 4> emitted_{kFloorDb, kFloorDb, kFloorDb, 0.0};  // the levels levelsChanged last told of
+    bool emittedIdle_ = true;
+    double drawnIn_ = 0.0, drawnPeak_ = 0.0, drawnKey_ = 0.0;  // where the last repaint put the meter and the dot (y)
     MeterBallistics inMeter_;
     MeterBallistics keyMeter_;  // the key dot: rises at once, falls smoothly
     Eased led_;                 // how open, for the LED

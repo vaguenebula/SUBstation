@@ -11,6 +11,7 @@
 
 #include <QCursor>
 #include <QHoverEvent>
+#include <QLinearGradient>
 #include <QMouseEvent>
 
 #include <algorithm>
@@ -46,11 +47,59 @@ QColor mix(const QColor& from, const QColor& to, double t) {
                             float(from.alphaF() + (to.alphaF() - from.alphaF()) * t));
 }
 
+// The meters, in wells as the Compressor's (panel grey on the display's black), on the plot's own dB
+// axis: `rect` spans 0 dB at its top to the axis' floor at its bottom, a line across every 12 dB
+// where the plot has its grid.
+double meterY(double db, const QRectF& rect) { return dbToY(db, rect, GateGraph::kFloorDb, 0.0); }
+
+void meterTicks(SgPainter& p, const QRectF& rect) {
+    for (int db = -12; db > GateGraph::kFloorDb; db -= 12)
+        p.drawLine(QPointF(rect.left(), meterY(db, rect)), QPointF(rect.right(), meterY(db, rect)),
+                   withAlpha(Theme::kMeterBg, 145));
+}
+
+// The input's level: green, yellow from -12 dB, red from -3 dB (each only where the level reaches
+// it, as drawLevelMeter), its peak held as a line.
+void drawInMeter(SgPainter& p, const QRectF& rect, double levelDb, double peakDb) {
+    p.fillRect(rect, Theme::kPanel);
+    const double top = meterY(levelDb, rect);
+    if (top < rect.bottom()) {
+        const double yellow = meterY(-12.0, rect), red = meterY(-3.0, rect);
+        p.fillRect(QRectF(rect.left(), std::max(top, yellow), rect.width(), rect.bottom() - std::max(top, yellow)),
+                   Theme::kMeterLow);
+        if (top < yellow)
+            p.fillRect(QRectF(rect.left(), std::max(top, red), rect.width(), yellow - std::max(top, red)),
+                       Theme::kMeterMid);
+        if (top < red)
+            p.fillRect(QRectF(rect.left(), top, rect.width(), red - top), Theme::kMeterHigh);
+    }
+    meterTicks(p, rect);
+    if (peakDb > GateGraph::kFloorDb) {
+        const double y = meterY(peakDb, rect);
+        p.fillRect(QRectF(rect.left(), std::min(y, rect.bottom() - 1.5), rect.width(), 1.5),
+                   peakDb >= -0.05 ? Theme::kMeterHigh : Theme::kText);
+    }
+}
+
+// How far the gate turns down what comes in: down from the top by as many dB (to the floor's depth
+// when shut, the whole well at a silent floor), so it reads against the figures as the In meter does.
+void drawGateMeter(SgPainter& p, const QRectF& rect, double reductionDb) {
+    p.fillRect(rect, Theme::kPanel);
+    const double bottom = meterY(-std::max(0.0, reductionDb), rect);
+    if (bottom > rect.top() + 0.01) {
+        QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
+        gradient.setColorAt(0, withAlpha(Theme::kAccent, 150));
+        gradient.setColorAt(1, Theme::kAccent);
+        p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), bottom - rect.top()), gradient);
+    }
+    meterTicks(p, rect);
+}
+
 }  // namespace
 
 GateGraph::GateGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setImplicitSize(kWidth, kMinimumHeight);
-    setAcceptedMouseButtons(Qt::LeftButton);  // (right-click: the device's menu, the frame's)
+    setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);  // (right-click off the lines: the frame's menu)
     setAcceptHoverEvents(true);
     for (int s = 0; s < kStreams; ++s) {
         rings_[std::size_t(s)].assign(kCapacity, clearValue(s));
@@ -85,6 +134,15 @@ double GateGraph::yOf(double db) const {
         db = db > 0 ? kCeilingDb : kFloorDb;
     return r.top() + (kCeilingDb - std::clamp(db, kFloorDb, kCeilingDb)) / (kCeilingDb - kFloorDb) * r.height();
 }
+
+QRectF GateGraph::inMeter() const {
+    const double top = yOf(0.0);
+    return QRectF(width() - 36, top, 6, yOf(kFloorDb) - top);
+}
+
+QRectF GateGraph::gateMeter() const { return inMeter().translated(20, 0); }  // (its caption clear of the In's)
+
+bool GateGraph::floorIsSilent(double floorDb) const { return sub::app::gateFloorIsSilent(floorDb); }
 
 double GateGraph::dbAt(double y) const {
     const QRectF r = plot();
@@ -239,18 +297,33 @@ void GateGraph::refreshDisplays() {
     clock_.start();
     rate_ = std::max(1.0, sampleRate() / sub::app::gateDisplaySamples());
 
-    const std::array<double, 4> levelsBefore = {levelIn_, levelOut_, levelKey_, passing_};
     bool restarted = false;
     const bool came = readStreams(restarted);
+    const bool wasIdle = idle_;
     bool redraw = restarted;
     if (came) {
         sinceValues_ = 0.0;
+        idle_ = false;
     } else {
         sinceValues_ += dt;
-        if (sinceValues_ > kQuietSeconds)
-            levelIn_ = levelOut_ = levelKey_ = kFloorDb;  // the engine stopped: the meters fall
+        if (sinceValues_ > kQuietSeconds) {  // the engine stopped, or the device is off: nothing passes
+            levelIn_ = levelOut_ = levelKey_ = kFloorDb;  // (the meters fall)
+            passing_ = 0.0;                               // (the LED goes out)
+            idle_ = true;
+        }
     }
-    const bool levels = levelsBefore != std::array<double, 4>{levelIn_, levelOut_, levelKey_, passing_};
+    redraw = redraw || idle_ != wasIdle;
+    // levelsChanged once a level has moved a hundredth of a dB from what it last told of (how open, a
+    // thousandth, or across open and closed): a steady tone's levels jitter by far less tick to tick.
+    bool levels = idle_ != emittedIdle_ || (passing_ >= 0.5) != (emitted_[3] >= 0.5) ||
+                  std::abs(passing_ - emitted_[3]) > 1e-3;
+    const std::array<double, 3> now = {levelIn_, levelOut_, levelKey_};
+    for (std::size_t i = 0; i < now.size(); ++i)
+        levels = levels || std::abs(now[i] - emitted_[i]) > 0.01;
+    if (levels) {
+        emitted_ = {levelIn_, levelOut_, levelKey_, passing_};
+        emittedIdle_ = idle_;
+    }
 
     // Scrolling: on by the time since the last tick, eased towards a steady lag behind the newest
     // value; never past it.
@@ -274,18 +347,18 @@ void GateGraph::refreshDisplays() {
         redraw = redraw || double(lastVaried_) >= before - shown;
     }
 
-    // The meters, the LED, the lines.
-    const MeterBallistics in = inMeter_;
+    // The meters, the LED, the lines. The meters and the key dot repaint once they are a twentieth
+    // of a pixel from where they were last drawn (a steady tone's peaks jitter by about 1e-4 dB).
     inMeter_.update(levelIn_, dt, 24.0, 1.0, kFloorDb);
-    redraw = redraw || inMeter_.level != in.level || inMeter_.peak != in.peak;
-    const double key = keyMeter_.level;
     keyMeter_.update(levelKey_, dt, 48.0, 0.0, kFloorDb);
-    redraw = redraw || keyMeter_.level != key;
+    const auto moved = [this](double db, double drawn) { return std::abs(yOf(db) - drawn) > 0.05; };
+    redraw = redraw || moved(inMeter_.level, drawnIn_) || moved(inMeter_.peak, drawnPeak_) ||
+             moved(keyMeter_.level, drawnKey_);
     led_.target = passing_;
     redraw = led_.step(easeFraction(dt, 0.03), 1e-3) || redraw;
-    const double range = sub::app::gateFloorIsSilent(floorDb_) ? -kFloorDb : std::max(1.0, -floorDb_);
-    // How far the gate turns down what comes in (with nothing coming in, nothing).
-    reduction_.target = levelIn_ > kFloorDb ? std::clamp(-sub::app::gateGainDb(passing_, floorDb_), 0.0, range) : 0.0;
+    // How far the gate turns down what comes in, in dB on the axis (with nothing coming in, nothing).
+    reduction_.target =
+        levelIn_ > kFloorDb ? std::clamp(-sub::app::gateGainDb(passing_, floorDb_), 0.0, -kFloorDb) : 0.0;
     redraw = reduction_.step(easeFraction(dt, 0.03), 1e-3) || redraw;
     if (drag_ == Line::None) {
         redraw = threshold_.step(easeFraction(dt, 0.05), 1e-3) || redraw;
@@ -305,9 +378,18 @@ void GateGraph::refreshDisplays() {
         pulse_ = std::fmod(pulse_ + dt, kPulseSeconds);
         redraw = true;
     }
-    animating_ = redraw;
-    if (redraw)
+    // Not at rest yet besides: a meter or the dot above where the values put it, falling (whether or
+    // not this tick took it far enough to repaint), or the In meter's peak held above its level.
+    const auto above = [this](double db, double target) { return yOf(db) < yOf(target) - 0.05; };
+    const bool falling = above(inMeter_.level, levelIn_) || above(inMeter_.peak, inMeter_.level) ||
+                         above(keyMeter_.level, levelKey_);
+    animating_ = redraw || falling;
+    if (redraw) {
+        drawnIn_ = yOf(inMeter_.level);
+        drawnPeak_ = yOf(inMeter_.peak);
+        drawnKey_ = yOf(keyMeter_.level);
         update();
+    }
     if (levels)
         Q_EMIT levelsChanged();
 }
@@ -319,7 +401,12 @@ GateGraph::Line GateGraph::lineAt(const QPointF& pos) const {
     if (pos.x() < r.left() - 2 || pos.x() > r.right() + 8 || pos.y() < r.top() - kLineGrab ||
         pos.y() > r.bottom() + kLineGrab)
         return Line::None;
-    const double toThreshold = std::abs(pos.y() - thresholdY()), toReturn = std::abs(pos.y() - returnY());
+    const double thresholdY = this->thresholdY(), returnY = this->returnY();
+    const double toThreshold = std::abs(pos.y() - thresholdY), toReturn = std::abs(pos.y() - returnY);
+    // On top of each other (Return 0, or within float rounding of it): the threshold from above,
+    // Return from on and below the line, so either can still be taken.
+    if (toReturn <= kLineGrab && std::abs(returnY - thresholdY) < 0.5)
+        return pos.y() >= returnY ? Line::Return : Line::Threshold;
     if (toReturn <= kLineGrab && toReturn < toThreshold)
         return Line::Return;
     if (toThreshold <= kLineGrab)
@@ -333,21 +420,38 @@ void GateGraph::hoverAt(const QPointF& pos) {
 }
 
 void GateGraph::mousePressEvent(QMouseEvent* event) {
+    const QPointF pos = event->position();
+    if (event->button() == Qt::RightButton) {
+        // On a line: its parameter's menu (automation, a macro); elsewhere, the device's (the frame's).
+        const Line line = lineAt(pos);
+        if (line == Line::None || device() == nullptr) {
+            event->ignore();
+            return;
+        }
+        Q_EMIT paramMenuRequested(line == Line::Threshold ? QStringLiteral("threshold") : QStringLiteral("return"));
+        return;
+    }
     if (event->button() != Qt::LeftButton) {
         event->ignore();
         return;
     }
     if (secondPressOfDoubleClick(event) || device() == nullptr)
         return;  // (the double-click follows)
-    // On a line: that one; anywhere else: the threshold. Relative to where it was: nothing jumps.
-    Line line = lineAt(event->position());
-    if (line == Line::None)
+    // On a line: that one; anywhere else in the plot: the threshold (the figures and the meters are
+    // not a control). Relative to where it was: nothing jumps.
+    Line line = lineAt(pos);
+    if (line == Line::None) {
+        if (!plot().contains(pos)) {
+            event->ignore();
+            return;
+        }
         line = Line::Threshold;
+    }
     drag_ = line;
     hover_ = line;
     gesture_ = newGestureKey();
     dragValue_ = line == Line::Threshold ? thresholdDb_ : returnDb_;
-    lastY_ = event->position().y();
+    lastY_ = pos.y();
     touch(line == Line::Threshold ? QStringLiteral("threshold") : QStringLiteral("return"));
     threshold_.snap(threshold_.target);
     return_.snap(return_.target);
@@ -426,11 +530,12 @@ void GateGraph::paint(SgPainter& p) {
     const QRectF r = plot();
     const QFont small = uiFont(7);
 
-    // The level axis: a line every 12 dB, its figure in the strip on the right.
+    // The level axis: a line every 12 dB, its figure in the strip on the right (clear of the key
+    // dot's halo on the plot's edge).
     for (int db = 0; db >= -60; db -= 12) {
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBar, db == 0 ? 150 : 70));
-        p.drawText(QRectF(r.right() + 2, y - 6, 16, 12), Qt::AlignRight | Qt::AlignVCenter, QString::number(db),
+        p.drawText(QRectF(r.right() + 6, y - 6, 17, 12), Qt::AlignRight | Qt::AlignVCenter, QString::number(db),
                    Theme::kTextDim, small);
     }
 
@@ -508,23 +613,6 @@ void GateGraph::paint(SgPainter& p) {
     const QPointF tab[3] = {{r.right(), thresholdY - 4.5}, {r.right(), thresholdY + 4.5}, {r.right() - 6, thresholdY}};
     p.fillPolygon(tab, 3, Theme::kSoloOn);
 
-    // Their values while hovered or dragged.
-    auto tag = [&](double y, double opacity, bool right, const QString& text, const QColor& color) {
-        if (opacity <= 0.01)
-            return;
-        const double width = SgPainter::textWidth(text, small) + 8;
-        const double top = y - 15 >= r.top() ? y - 15 : y + 3;
-        const QRectF box(right ? r.right() - 10 - width : r.left() + 8, top, width, 12);
-        p.save();
-        p.setOpacity(opacity);
-        p.fillRoundedRect(box, 2, 2, withAlpha(Theme::kMeterBg, 200));
-        p.drawText(box, Qt::AlignCenter, text, color, small);
-        p.restore();
-    };
-    tag(thresholdY, hoverThreshold, true, sub::app::formatValue(thresholdDb_, QStringLiteral("dB")), Theme::kSoloOn);
-    tag(returnY, hoverReturn, false,
-        QStringLiteral("Return %1").arg(sub::app::formatValue(returnDb_, QStringLiteral("dB"))), Theme::kAccent);
-
     // The newest key level: a dot on the right edge, blue once it reaches the threshold; a ring
     // ripples out from it as the gate opens.
     const double ledEase = std::clamp(led_.value, 0.0, 1.0);
@@ -534,17 +622,21 @@ void GateGraph::paint(SgPainter& p) {
         p.fillEllipse(dot, 6, 6, withAlpha(Theme::kSoloOn, int(std::lround(50 * ledEase))));
         p.fillEllipse(dot, 2.5, 2.5, above ? Theme::kSoloOn : Theme::kTextDim);
     }
-    if (ping_ >= 0.0) {
+    if (ping_ >= 0.0) {  // (inside the plot: it would run over the figures)
         const double t = std::clamp(ping_ / kPingSeconds, 0.0, 1.0), eased = 1.0 - (1.0 - t) * (1.0 - t);
         const double radius = 3.0 + 11.0 * eased;
         const QPointF at(r.right(), yOf(std::max(keyMeter_.level, thresholdDb_)));
+        p.save();
+        p.setClipRect(r);
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius),
                       withAlpha(Theme::kSoloOn, int(std::lround(180 * (1.0 - eased)))), 1.2);
+        p.restore();
     }
 
     // The state, top left: an LED (glowing as it opens) and its word, on a dark backing so the history
-    // under it doesn't get in the way.
-    const QString state = led_.value >= 0.5 ? QStringLiteral("Open") : QStringLiteral("Closed");
+    // under it doesn't get in the way. While no values come (the device off, the engine stopped): "Idle".
+    const bool open = !idle_ && led_.value >= 0.5;
+    const QString state = idle_ ? QStringLiteral("Idle") : open ? QStringLiteral("Open") : QStringLiteral("Closed");
     const QPointF led = r.topLeft() + QPointF(9, 9);
     p.fillRoundedRect(QRectF(r.left() + 2, r.top() + 2, 20 + SgPainter::textWidth(state, small), 14), 3, 3,
                       withAlpha(Theme::kMeterBg, 170));
@@ -553,25 +645,49 @@ void GateGraph::paint(SgPainter& p) {
                       withAlpha(Theme::kSoloOn, int(std::lround(70 * ledEase))));
     p.fillEllipse(led, 3.5, 3.5, mix(Theme::kTextDisabled, Theme::kSoloOn, ledEase));
     p.drawText(QRectF(led.x() + 7, led.y() - 7, 50, 14), Qt::AlignLeft | Qt::AlignVCenter, state,
-               led_.value >= 0.5 ? Theme::kText : Theme::kTextDim, small);
-    if (listening_) {
+               idle_ ? Theme::kTextDisabled : open ? Theme::kText : Theme::kTextDim, small);
+    if (listening_) {  // (pulsing, on a backing of its own: the 0 dB line runs under it)
+        const QString listening = QStringLiteral("Listening to the key");
         const double alpha = 0.55 + 0.45 * std::sin(2 * kPi * pulse_ / kPulseSeconds);
-        p.drawText(QRectF(r.left(), r.top() + 2, r.width(), 14), Qt::AlignHCenter | Qt::AlignVCenter,
-                   QStringLiteral("Listening to the key"), withAlpha(Theme::kAccent, int(std::lround(255 * alpha))),
-                   small);
+        const double width = SgPainter::textWidth(listening, small) + 12;
+        const QRectF box(r.center().x() - width / 2, r.top() + 2, width, 14);
+        p.fillRoundedRect(box, 3, 3, withAlpha(Theme::kMeterBg, 200));
+        p.drawText(box, Qt::AlignCenter, listening, withAlpha(Theme::kAccent, int(std::lround(255 * alpha))), small);
     }
 
-    // The meters: the input's level on the plot's dB axis (red above 0 dB), and how far the gate
-    // turns it down (full: shut).
-    const double meterTop = yOf(0.0), meterHeight = yOf(kFloorDb) - meterTop;
-    const QRectF inRect(w - 20, meterTop, 5, meterHeight);
-    drawLevelMeter(p, inRect, inMeter_.level, inMeter_.peak, kFloorDb, 0.0);
+    // The lines' values while hovered or dragged, over everything else.
+    auto tag = [&](double y, double opacity, bool right, const QString& text, const QColor& color) {
+        if (opacity <= 0.01)
+            return;
+        const double width = SgPainter::textWidth(text, small) + 8;
+        const double top = y - 15 >= r.top() ? y - 15 : y + 3;
+        const QRectF box(right ? r.right() - 10 - width : r.left() + 8, top, width, 12);
+        p.save();
+        p.setOpacity(opacity);
+        p.fillRoundedRect(box, 2, 2, withAlpha(Theme::kMeterBg, 220));
+        p.drawText(box, Qt::AlignCenter, text, color, small);
+        p.restore();
+    };
+    tag(thresholdY, hoverThreshold, true, sub::app::formatValue(thresholdDb_, QStringLiteral("dB")), Theme::kSoloOn);
+    tag(returnY, hoverReturn, false,
+        QStringLiteral("Return %1").arg(sub::app::formatValue(returnDb_, QStringLiteral("dB"))), Theme::kAccent);
+
+    // The meters, captioned above: the input's level (red above 0 dB, over the well's top), and how
+    // far the gate turns it down.
+    const QRectF inRect = inMeter(), gateRect = gateMeter();
+    for (const auto& [rect, caption] :
+         {std::pair{inRect, QStringLiteral("In")}, std::pair{gateRect, QStringLiteral("Gate")}}) {
+        const double width = SgPainter::textWidth(caption, small) + 2;
+        const double left = std::min(rect.center().x() - width / 2, w - 2 - width);
+        p.drawText(QRectF(left, std::max(1.0, rect.top() - 13), width, 12), Qt::AlignCenter, caption,
+                   Theme::kTextDim, small);
+    }
+    drawInMeter(p, inRect, inMeter_.level, inMeter_.peak);
     if (inMeter_.level > 0.0) {
         const double top = yOf(std::min(inMeter_.level, kCeilingDb));
-        p.fillRect(QRectF(inRect.left(), top, inRect.width(), meterTop - top), Theme::kMeterHigh);
+        p.fillRect(QRectF(inRect.left(), top, inRect.width(), inRect.top() - top), Theme::kMeterHigh);
     }
-    const double range = sub::app::gateFloorIsSilent(floorDb_) ? -kFloorDb : std::max(1.0, -floorDb_);
-    drawReductionMeter(p, QRectF(w - 11, meterTop, 5, meterHeight), reduction_.value, range);
+    drawGateMeter(p, gateRect, reduction_.value);
 }
 
 }  // namespace sub::ui

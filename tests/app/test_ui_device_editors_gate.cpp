@@ -1,11 +1,14 @@
 // The Gate's editor (ui/qml/devices/editors/GateEditor.qml, GateGraph,
 // GateKeyGraph) loaded as the device view loads it, over a real engine: it fits
 // the view's height; every control is bound to its parameter (undoably, its
-// value as it is now); the threshold and return lines and the key filter's dot
-// drag in one undo step each; what the engine renders reaches the display, which
-// scrolls and stops; the sidechain section folds and unfolds, follows the
-// sidechain and its EQ; the key filter's curve is the engine's. With
-// SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
+// value as it is now); the threshold and return lines (either taken when they
+// are one) and the key filter's dot drag in one undo step each, the lines give
+// their parameters' menus; what the engine renders reaches the display, which
+// scrolls and stops, goes idle when nothing comes, and repaints only for what
+// shows; the sidechain section folds and unfolds, follows the sidechain and its
+// EQ; the key filter's curve is the engine's, its dot follows the mouse, Ctrl
+// and the wheel set the bell's Q. With SUBSTATION_UI_SCREENSHOTS set,
+// device-editors-gate*.png are saved there.
 
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -98,6 +101,16 @@ class TestUiDeviceEditorsGate : public QObject, public sub::app::test::EditorHar
         for (int i = 0; i < count; ++i) {
             QTest::qWait(ms);
             refreshDisplays();
+        }
+    }
+
+    // Ticks until the graph has asked for no repaint three ticks running (at most `most` ticks): a meter
+    // falling repaints only once it has moved a twentieth of a pixel, so a tick that comes close after
+    // another may ask for none while it still falls.
+    void settle(GateGraph* graph, int most = 400) {
+        for (int i = 0, still = 0; i < most && still < 3; ++i) {
+            tick(1);
+            still = graph->animating() ? 0 : still + 1;
         }
     }
 
@@ -304,6 +317,35 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 200));
         QCOMPARE(value("return"), 0.0);
         QCOMPARE(undo()->index(), steps + 2);
+
+        // Return 0: the lines are one. From on or below it, the return line; from above, the threshold.
+        tick(30);
+        QCOMPARE(graph->returnY(), graph->thresholdY());
+        at = scenePoint(graph, QPointF(plot.center().x(), graph->returnY() + 2));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at + QPoint(0, 10));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(0, 10));
+        QVERIFY2(std::abs(value("return") - 10 * perPixel) < 0.2, qPrintable(QString::number(value("return"))));
+        QCOMPARE(value("threshold"), -30.0);
+        undo()->undo();
+        tick(30);
+        at = scenePoint(graph, QPointF(plot.center().x(), graph->thresholdY() - 2));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at + QPoint(0, 10));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(0, 10));
+        QVERIFY2(std::abs(value("threshold") - (-30.0 - 10 * perPixel)) < 0.2,
+                 qPrintable(QString::number(value("threshold"))));
+        QCOMPARE(value("return"), 0.0);
+        undo()->undo();
+        tick(30);
+        QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier,
+                           scenePoint(graph, QPointF(plot.center().x() + 20, graph->returnY() + 1)));
+        QCOMPARE(value("return"), 3.0);
+        QCOMPARE(value("threshold"), -30.0);
+        undo()->undo();
+        QCOMPARE(value("return"), 0.0);
+        QCOMPARE(undo()->index(), steps + 2);
+
         undo()->undo();
         tick(30);
 
@@ -317,6 +359,52 @@ private Q_SLOTS:
         QTest::mouseDClick(window_, Qt::LeftButton, Qt::NoModifier, at);
         QCOMPARE(value("return"), 3.0);
         QCOMPARE(undo()->index(), steps + 3);
+    }
+
+    void lineMenusAndTheStrip() {
+        const Shown shown = gate(tone(220.0, kSampleRate), 1.0);
+        QVERIFY(shown.view && shown.graph);
+        GateGraph* graph = shown.graph;
+        auto value = [&](const char* id) { return param(shown.track, shown.device, QString::fromLatin1(id)); };
+        editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), -30.0);
+        editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("return"), 6.0);
+        tick(30);
+        const QRectF plot = graph->plot();
+
+        // Right-click a line: its parameter's menu; elsewhere, nothing of the graph's (the frame's menu).
+        auto* menu = qvariant_cast<QObject*>(shown.view->property("lineMenu"));
+        QVERIFY(menu);
+        QSignalSpy asked(graph, &GateGraph::paramMenuRequested);
+        for (const auto& [y, id] : {std::pair{graph->thresholdY(), QStringLiteral("threshold")},
+                                    std::pair{graph->returnY(), QStringLiteral("return")}}) {
+            QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier, scenePoint(graph, QPointF(plot.center().x(), y)));
+            QCOMPARE(asked.count(), id == QStringLiteral("threshold") ? 1 : 2);
+            QCOMPARE(asked.last().at(0).toString(), id);
+            QTRY_VERIFY(menu->property("opened").toBool());
+            auto* param = qvariant_cast<QObject*>(menu->property("param"));
+            QVERIFY(param);
+            QCOMPARE(param->property("paramId").toString(), id);
+            QMetaObject::invokeMethod(menu, "close");
+            QTRY_VERIFY(!menu->property("opened").toBool());
+        }
+        QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                          scenePoint(graph, QPointF(plot.center().x(), plot.top() + 12)));
+        QCOMPARE(asked.count(), 2);
+
+        // A press on the meters (the strip right of the plot) is not a drag of the threshold.
+        const int steps = undo()->index();
+        const QPoint meter = scenePoint(graph, graph->inMeter().center());
+        QVERIFY(!plot.contains(graph->inMeter().center()));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, meter);
+        QVERIFY(!graph->dragging());
+        dragTo(meter + QPoint(0, 20));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, meter + QPoint(0, 20));
+        QCOMPARE(value("threshold"), -30.0);
+        QCOMPARE(undo()->index(), steps);
+        // The meters' wells: inside the graph, beside each other, apart from the plot.
+        QVERIFY(graph->inMeter().left() > plot.right() + 20);
+        QVERIFY(graph->gateMeter().left() >= graph->inMeter().right() + 6);
+        QVERIFY(graph->gateMeter().right() <= graph->width() - 4);
     }
 
     void displaysReachTheGraph() {
@@ -350,13 +438,16 @@ private Q_SLOTS:
         // No more audio: it stops where the values stop, then everything settles (the meters fall).
         tick(20, 16);
         QCOMPARE(graph->scroll(), double(graph->newest()));
-        for (int i = 0; i < 400 && graph->animating(); ++i)
-            tick(1, 16);
+        settle(graph);
         QVERIFY(!graph->animating());
         const double settled = graph->scroll();
         tick(3);
         QCOMPARE(graph->scroll(), settled);
         QVERIFY(!graph->animating());
+        // Nothing has come for a while (as with the device off): idle, nothing passing, the LED out.
+        QVERIFY(graph->idle());
+        QCOMPARE(graph->passing(), 0.0);
+        QVERIFY(!graph->property("open").toBool());
 
         // Closed: the floor's -40 dB under the input.
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), 0.0);
@@ -366,6 +457,7 @@ private Q_SLOTS:
         QVERIFY2(std::abs(graph->levelOut() - (20 * std::log10(0.5) - 40.0)) < 0.2,
                  qPrintable(QString::number(graph->levelOut())));
         QVERIFY(!graph->property("open").toBool());
+        QVERIFY(!graph->idle());
     }
 
     void silenceDrawsNothing() {
@@ -376,13 +468,18 @@ private Q_SLOTS:
         GateGraph* graph = shown.graph;
         const double beatsPerSecond = project()->tempo() / 60.0;
         engine()->renderOffline(0.0, kSampleRate * 3);
-        for (int i = 0; i < 100 && (i < 3 || graph->animating()); ++i)
+        double seconds = 3.0;  // (values keep coming, as from a running audio device: never idle)
+        for (int i = 0; i < 100 && (i < 3 || graph->animating()); ++i) {
+            engine()->renderOffline(seconds * beatsPerSecond, kSampleRate / 60);
+            seconds += 1.0 / 60;
             tick(1);
+        }
         QVERIFY(!graph->animating());
+        QVERIFY(!graph->idle());
         for (int i = 0; i < 4; ++i) {
             const double before = graph->scroll();
             const qint64 newest = graph->newest();
-            engine()->renderOffline((3.0 + 0.1 * i) * beatsPerSecond, kSampleRate / 10);
+            engine()->renderOffline((seconds + 0.1 * i) * beatsPerSecond, kSampleRate / 10);
             tick(1);
             QVERIFY(graph->newest() > newest);  // values came,
             QVERIFY(graph->scroll() > before);  // it scrolled on,
@@ -392,6 +489,47 @@ private Q_SLOTS:
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), -40.0);
         tick(1);
         QVERIFY(graph->animating());  // (the line eases to it)
+    }
+
+    void steadyToneDrawsNothing() {
+        // A steady tone through an open gate (always above the threshold, so it never closes), values
+        // coming every tick: once the history in sight is all of it, nothing visible moves, so the graph
+        // doesn't repaint. (A 192 Hz triangle, 0.45..0.5, a peak in every value's 256 samples: the period
+        // isn't a whole number of samples and the peak is sharp, so the peak each value catches, and each
+        // tick's level, differ by a few thousandths of a dB, a few thousandths of a pixel. The clip is
+        // 16-bit, which would flatten a sine's crest to one value.)
+        std::vector<float> steady(size_t(kSampleRate) * 8);
+        for (size_t i = 0; i < steady.size(); ++i) {
+            const double phase = std::fmod(192.3 * double(i) / kSampleRate, 1.0);
+            steady[i] = float(0.45 + 0.05 * (1.0 - std::abs(2.0 * phase - 1.0)));
+        }
+        const Shown shown = gate(steady, 8.0);
+        QVERIFY(shown.view && shown.graph);
+        GateGraph* graph = shown.graph;
+        for (const auto& [id, value] : {std::pair{"threshold", -70.0}, std::pair{"lookahead", 0.0},
+                                        std::pair{"attack", 0.02}, std::pair{"floor", 0.0}})
+            editor()->setDeviceParam(shown.track, shown.device, QString::fromLatin1(id), value);
+        const double beatsPerSecond = project()->tempo() / 60.0;
+        engine()->renderOffline(0.0, kSampleRate * 3);
+        double seconds = 3.0;
+        // A tick's worth more, read at once (the display clock also ticks on its own while the test
+        // waits: had it read them first, the tick checked would be one without values).
+        auto more = [&] {
+            QTest::qWait(16);
+            engine()->renderOffline(seconds * beatsPerSecond, kSampleRate / 60);
+            seconds += 1.0 / 60;
+            refreshDisplays();
+        };
+        for (int i = 0; i < 150 && (i < 3 || graph->animating()); ++i)
+            more();
+        QVERIFY(!graph->animating());
+        QVERIFY(graph->isOpen() && !graph->idle());
+        for (int i = 0; i < 10; ++i) {
+            const qint64 newest = graph->newest();
+            more();
+            QVERIFY(graph->newest() > newest);
+            QVERIFY(!graph->animating());
+        }
     }
 
     void sidechainSection() {
@@ -432,6 +570,18 @@ private Q_SLOTS:
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(button(view, "sc_eq")));
         QCOMPARE(value("sc_eq"), 1.0);
         QVERIFY(enabled("sc_eq_freq") && enabled("sc_eq_q") && !enabled("sc_eq_gain"));
+        // Freq's readout shows 10 kHz and up whole ("15.00 kHz": its cell is wide enough).
+        for (const double hz : {10000.0, 15000.0}) {
+            editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_eq_freq"), hz);
+            QQuickItem* readout = nullptr;
+            for (QQuickItem* child : find(view, QStringLiteral("sc_eq_freq"))->childItems())
+                if (child->property("text").toString().endsWith(QStringLiteral("kHz")))
+                    readout = child;
+            QVERIFY(readout);
+            QVERIFY2(!readout->property("truncated").toBool(), qPrintable(readout->property("text").toString()));
+            undo()->undo();
+        }
+        QCOMPARE(value("sc_eq_freq"), 80.0);
         int steps = undo()->index();
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(find(view, QStringLiteral("eqType1"))));
         QCOMPARE(value("sc_eq_type"), 1.0);
@@ -526,7 +676,36 @@ private Q_SLOTS:
         QVERIFY2(gain > 1.0, qPrintable(QString::number(gain)));
         QVERIFY(std::abs(graph->dot().x() - graph->xOf(freq)) < 1e-6);
         QVERIFY(std::abs(graph->dot().y() - graph->yOf(gain)) < 1e-6);
+        // The dot under the mouse: 10 px up is that many dB on the graph's scale.
+        QVERIFY2(std::abs(graph->dot().y() - (dot.y() - 10)) < 0.5, qPrintable(QString::number(graph->dot().y())));
+        QVERIFY2(std::abs(gain - (graph->dbAt(dot.y() - 10) - graph->dbAt(dot.y()))) < 0.1,
+                 qPrintable(QString::number(gain)));
         checkCurve();
+
+        // The bell's Q: Ctrl-drag up doubles it every kQPixels (the gain stays); the wheel over the dot
+        // sets it too, notches close together one step; off the dot the wheel goes on.
+        const double q0 = value("sc_eq_q");
+        steps = undo()->index();
+        at = scenePoint(graph, graph->dot());
+        QTest::mousePress(window_, Qt::LeftButton, Qt::ControlModifier, at);
+        dragTo(at - QPoint(0, int(GateKeyGraph::kQPixels)), Qt::ControlModifier);
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::ControlModifier, at - QPoint(0, int(GateKeyGraph::kQPixels)));
+        QVERIFY2(std::abs(value("sc_eq_q") / (2 * q0) - 1.0) < 0.01, qPrintable(QString::number(value("sc_eq_q"))));
+        QCOMPARE(value("sc_eq_gain"), gain);
+        QCOMPARE(undo()->index(), steps + 1);
+        const double q1 = value("sc_eq_q");
+        wheel(window_, scenePoint(graph, graph->dot()), 120);
+        wheel(window_, scenePoint(graph, graph->dot()), 120);
+        QVERIFY2(std::abs(value("sc_eq_q") / (q1 * 1.15 * 1.15) - 1.0) < 1e-3,
+                 qPrintable(QString::number(value("sc_eq_q"))));
+        QCOMPARE(undo()->index(), steps + 2);
+        QCOMPARE(undo()->text(undo()->index() - 1), QStringLiteral("Change Gate Key Filter Q"));
+        const double q2 = value("sc_eq_q");
+        wheel(window_, scenePoint(graph, graph->dot() + QPointF(60, 0)), 120);
+        QCOMPARE(value("sc_eq_q"), q2);
+        undo()->undo();
+        undo()->undo();
+        QVERIFY(std::abs(value("sc_eq_q") - q0) < 1e-9);
 
         // However far it is dragged, the frequency stays in its range.
         at = scenePoint(graph, graph->dot());
@@ -582,19 +761,28 @@ private Q_SLOTS:
     void screenshots() {
         if (qEnvironmentVariable("SUBSTATION_UI_SCREENSHOTS").isEmpty())
             QSKIP("SUBSTATION_UI_SCREENSHOTS not set");
-        const Shown shown = gate(bursts(3.0), 3.0);
+        const Shown shown = gate(bursts(4.0), 4.0);
         QVERIFY(shown.view && shown.graph);
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("threshold"), -30.0);
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("release"), 60.0);
-        engine()->renderOffline(0.0, int(kSampleRate * 2.6));
-        tick(30);
+        const double beatsPerSecond = project()->tempo() / 60.0;
+        // 2.6 s at once, then as it plays: a tick's worth at a time (so it isn't idle when shot).
+        auto play = [&](int ticks) {
+            engine()->renderOffline(0.0, int(kSampleRate * 2.6));
+            for (int i = 0; i < ticks; ++i) {
+                engine()->renderOffline((2.6 + i / 60.0) * beatsPerSecond, kSampleRate / 60);
+                tick(1);
+            }
+        };
+        play(30);
+        QVERIFY(!shown.graph->idle());
         QTest::qWait(50);
         save(grab(), QStringLiteral("gate.png"));
 
         // Hovering the threshold line: its value.
         GateGraph* graph = shown.graph;
         QTest::mouseMove(window_, scenePoint(graph, QPointF(graph->plot().center().x(), graph->thresholdY())));
-        tick(20);
+        play(20);
         QTest::qWait(50);
         save(grab(), QStringLiteral("gate-hover.png"));
         QTest::mouseMove(window_, QPoint(1, 1));
@@ -609,16 +797,14 @@ private Q_SLOTS:
         QTRY_COMPARE(shown.view->implicitWidth(), 833.0);
         QVERIFY(fitted());
         QTest::mouseMove(window_, QPoint(1, 1));
-        engine()->renderOffline(0.0, int(kSampleRate * 2.6));
-        tick(30);
+        play(30);
         QTest::qWait(50);
         save(grab(), QStringLiteral("gate-sidechain.png"));
 
         // Flipped and listening.
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("flip"), 1.0);
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_listen"), 1.0);
-        engine()->renderOffline(0.0, int(kSampleRate * 2.6));
-        tick(30);
+        play(30);
         QTest::qWait(50);
         save(grab(), QStringLiteral("gate-flip-listen.png"));
     }
