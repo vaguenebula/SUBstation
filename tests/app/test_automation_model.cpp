@@ -316,6 +316,7 @@ private Q_SLOTS:
         QCOMPARE(formatValue(440.0, QStringLiteral("Hz")), QStringLiteral("440 Hz"));
         QCOMPARE(formatValue(1500.0, QStringLiteral("ms")), QStringLiteral("1.50 s"));
         QCOMPARE(formatValue(2.5, QStringLiteral("ms")), QStringLiteral("2.5 ms"));
+        QCOMPARE(formatValue(0.02, QStringLiteral("ms")), QStringLiteral("0.02 ms"));
         QCOMPARE(formatValue(120.0, QStringLiteral("ms")), QStringLiteral("120 ms"));
         QCOMPARE(formatValue(1.5, QStringLiteral("x")), QStringLiteral("1.50 x"));
         QCOMPARE(formatValue(32.0, QStringLiteral("#")), QStringLiteral("32"));  // a count (the Sampler's voices)

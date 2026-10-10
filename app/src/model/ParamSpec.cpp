@@ -34,6 +34,7 @@ QString formatValue(double value, const QString& unit) {
     }
     if (unit == u"ms") {
         if (value >= 1000) return formatFixed(value / 1000, 2) + QStringLiteral(" s");
+        if (value < 1) return formatFixed(value, 2) + QStringLiteral(" ms");  // (a gate's attack: 0.02 ms)
         return value < 10 ? formatFixed(value, 1) + QStringLiteral(" ms") : formatFixed(value, 0) + QStringLiteral(" ms");
     }
     if (unit == u"#") return QString::number(static_cast<long long>(roundHalfEven(value)));  // a count
