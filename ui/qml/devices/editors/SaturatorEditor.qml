@@ -8,11 +8,10 @@ import SUBstation
 // drag it for Drive) with Post Clip under it; Output and Dry/Wet. Then Color:
 // its switch over its pre-shaper EQ on the input and output spectra
 // (SaturatorColorGraph; drag its handles) and its four knobs (Amt Lo, Freq,
-// Width, Amt Hi: Live 12.1's names). Last the curve's
-// own controls: the Waveshaper's six, or the Bass Shaper's Threshold. Every
-// control shows its parameter as it is now (its automation's value while that
-// plays), sets it undoably, touches it when pressed, and right-click gives its
-// menu.
+// Width, Amt Hi: Live 12.1's names). Last the curve's own controls: the
+// Waveshaper's six, or the Bass Shaper's Threshold. Every control shows its
+// parameter as it is now (its automation's value while that plays), sets it
+// undoably, touches it when pressed, and right-click gives its menu.
 Item {
     id: editor
 
@@ -92,16 +91,18 @@ Item {
             anchors.bottom: parent.bottom
             spacing: 4
 
+            // On whole pixels (the front panel's width can be odd), so both buttons' inner edges are sharp.
             ParamButton {
+                id: dc
                 objectName: "dc"
-                width: (front.width - switches.spacing) / 2
+                width: Math.floor((front.width - switches.spacing) / 2)
                 param: p.get("dc")
                 text: qsTr("DC")
                 tooltip: qsTr("DC: removes DC offset from the input before it is shaped")
             }
             ParamButton {
                 objectName: "hq"
-                width: (front.width - switches.spacing) / 2
+                width: front.width - switches.spacing - dc.width
                 param: p.get("hq")
                 text: qsTr("HQ")
                 tooltip: qsTr("Hi-Quality: shapes and clips at 4× the sample rate, so loud high sounds alias far " +

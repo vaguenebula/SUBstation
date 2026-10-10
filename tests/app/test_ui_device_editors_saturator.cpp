@@ -15,6 +15,7 @@
 #include <QStyleHints>
 #include <QTest>
 #include <QUndoStack>
+#include <QtQuickTest/quicktest.h>
 
 #include <cmath>
 #include <map>
@@ -229,6 +230,26 @@ private Q_SLOTS:
                 QVERIFY2(needs <= room, qPrintable(QStringLiteral("%1: %2 px in %3").arg(name).arg(needs).arg(room)));
             }
         }
+
+        // DC and HQ share the front panel's width, 4 px apart, every edge on a whole pixel (an odd width
+        // halved would put the inner edges on half pixels, blurred): at the width the font gives and at one
+        // more, so an odd and an even width are both tried whatever the font.
+        QQuickItem* front = find(s.view, QStringLiteral("front"));
+        const double frontWidth = front->width();
+        for (const double width : {frontWidth, frontWidth + 1}) {
+            front->setWidth(width);
+            QVERIFY(QQuickTest::qWaitForPolish(s.view->window()));  // (the Row placing them)
+            const QRectF panel = rectOf(QStringLiteral("front"));
+            const QRectF dc = rectOf(QStringLiteral("dc")), hq = rectOf(QStringLiteral("hq"));
+            QCOMPARE(dc.left(), panel.left());
+            QCOMPARE(hq.right(), panel.right());
+            QCOMPARE(hq.left() - dc.right(), 4.0);
+            for (const double edge : {dc.left(), dc.right(), hq.left(), hq.right()})
+                QVERIFY2(edge == std::round(edge),
+                         qPrintable(QStringLiteral("%1 wide: an edge at %2").arg(width).arg(edge)));
+        }
+        front->setWidth(frontWidth);  // (the same width as its binding gives, the columns after it where they were)
+        QVERIFY(QQuickTest::qWaitForPolish(s.view->window()));
 
         // No caption or readout is cut short, each knob at either end of its range.
         for (const QString& id : kKnobs) {

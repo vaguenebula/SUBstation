@@ -598,7 +598,7 @@ The editors:
   last, an `EditorDivider` after the front panel and after Color; `implicitWidth` ends 8 px after the last. The front
   panel: Drive (a 40 px knob, bipolar: ±36 dB) over the Type list (a `ParamChoice` as wide as its longest name with its
   arrow, measured with a `FontMetrics` on its font: "Medium Curve" makes it about 99 px, the front panel with it, 84 at
-  least), DC and HQ sharing its width at the bottom; the curve
+  least), DC and HQ sharing its width at the bottom (on whole pixels, so their inner edges are sharp); the curve
   ([SaturatorCurve](../../ui/src/devices/SaturatorCurve.h), 160 px) over the Post Clip list, where Live puts it; Output
   over Dry/Wet. Then Color: the Color switch in a row of its own, its graph
   ([SaturatorColorGraph](../../ui/src/devices/SaturatorColorGraph.h), 220 px) under it (not on it: there it would hide
@@ -625,22 +625,21 @@ The editors:
     fold behind doesn't run through it.
   - Its animation, in `refreshDisplays()`, moved on by `tickSeconds()`: the display `in_peak` (the input's peak every
     128 samples, before Drive) puts two dots on the curve at ± its level, rising at once and falling back (τ 150 ms),
-    fading out in silence (τ 120 ms).
-    The stretch of the curve between them is lit (`drawGlowPolyline`), amber turning red as the curve bends away from
-    its small-signal line there (1 − |f(x)| / (f′(0)·x), eased τ 60 ms; `saturatorSlope`), the dots' halos growing with
-    it; beyond them an afterglow runs out to the highest the dots reached in the last 0.3 s (then falling, τ 250 ms),
-    fading along its length, so a drum loop's hits leave a trail that breathes back. Input over full scale flashes red
-    bars at the plot's sides (fading, τ 300 ms). The In strip under the plot (the dots' level on the x axis: its bar
-    ends straight under them) and the Out strip at its right (`out_peak`, the device's real output, on the y axis,
-    falling back as the dots do) are bars from the middle out, green, yellow from −12 dB, red from −3 dB, their peaks
-    held 1 s as ticks (`MeterBallistics`). The displays' values come a block of audio at a time: a tick without any
-    within 0.1 s of the last (a block longer than a tick, 1024 or 2048 frames) is a gap, not silence, so the levels hold
-    over it (and Color's spectra, below) instead of dipping at the blocks' rate. A new shape (a Type, Drive, Threshold,
-    Post Clip or Waveshaper change, undo, automation) morphs the drawn curve to the new one (τ 40 ms, landing on it
-    exactly), so the ripples swell as WS Depth turns; under its own drag it follows at once. An editor that opens draws
-    the device as it is (its first sync with the device there snaps, both graphs), not a morph from the defaults. The
-    unlit curve is dimmer than the lit stretch. Once the dots, afterglow, meters and morph have settled it doesn't
-    repaint.
+    fading out in silence (τ 120 ms). The stretch of the curve between them is lit (`drawGlowPolyline`), amber turning
+    red as the curve bends away from its small-signal line there (1 − |f(x)| / (f′(0)·x), eased τ 60 ms;
+    `saturatorSlope`), the dots' halos growing with it; beyond them an afterglow runs out to the highest the dots
+    reached in the last 0.3 s (then falling, τ 250 ms), fading along its length, so a drum loop's hits leave a trail
+    that breathes back. Input over full scale flashes red bars at the plot's sides (fading, τ 300 ms). The In strip
+    under the plot (the dots' level on the x axis: its bar ends straight under them) and the Out strip at its right
+    (`out_peak`, the device's real output, on the y axis, falling back as the dots do) are bars from the middle out,
+    green, yellow from −12 dB, red from −3 dB, their peaks held 1 s as ticks (`MeterBallistics`). The displays' values
+    come a block of audio at a time: a tick without any within 0.1 s of the last (a block longer than a tick, 1024 or
+    2048 frames) is a gap, not silence, so the levels hold over it (and Color's spectra, below) instead of dipping at
+    the blocks' rate. A new shape (a Type, Drive, Threshold, Post Clip or Waveshaper change, undo, automation) morphs
+    the drawn curve to the new one (τ 40 ms, landing on it exactly), so the ripples swell as WS Depth turns; under its
+    own drag it follows at once. An editor that opens draws the device as it is (its first sync with the device there
+    snaps, both graphs), not a morph from the defaults. The unlit curve is dimmer than the lit stretch. Once the dots,
+    afterglow, meters and morph have settled it doesn't repaint.
   - Drags: up and down for Drive (0.25 dB a pixel), across for the Bass Shaper's Threshold (0.25 dB) or the
     Waveshaper's Curve (0.5 %), Shift five times as finely, pressed or let go mid-drag without a jump (each move adds
     its own distance), within the parameters' ranges (`saturatorRange()`, the engine's); one undo step per drag, which
