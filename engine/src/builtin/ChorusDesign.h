@@ -25,7 +25,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 
 #include "builtin/DspBlocks.h"
 
@@ -33,8 +32,8 @@ namespace sub::chorus {
 
 enum class Mode { Chorus = 0, Ensemble, Vibrato };
 
-constexpr double kPi = std::numbers::pi;
-constexpr double kTwoPi = 2.0 * kPi;
+using dsp::kPi;
+using dsp::kTwoPi;
 
 constexpr double kMinRate = 0.1, kMaxRate = 15.0;  // Hz
 constexpr double kMinHighPass = 20.0, kMaxHighPass = 2000.0;  // Hz
@@ -255,8 +254,7 @@ private:
 // filtering) at w = 0 and continuous as w grows from there.
 inline double warmLowpassCoefficient(double w, double sampleRate) noexcept {
     if (w <= 0.0) return 0.0;
-    const double cutoff = kWarmCutoff * std::pow(std::min(w, 1.0), -kWarmCutoffSlope);
-    return std::exp(-kTwoPi * cutoff / sampleRate);
+    return dsp::onePoleCutoff(kWarmCutoff * std::pow(std::min(w, 1.0), -kWarmCutoffSlope), sampleRate);
 }
 
 // The high-pass's frequency as it plays: 20..2000 Hz, at most 0.45 of the rate.

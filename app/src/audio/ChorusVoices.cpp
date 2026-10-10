@@ -6,8 +6,6 @@
 
 namespace sub::app {
 
-static_assert(kChorusMinRate == sub::chorus::kMinRate && kChorusMaxRate == sub::chorus::kMaxRate);
-
 namespace {
 
 sub::chorus::Layout engineLayout(const ChorusLayout& layout) {
@@ -17,6 +15,12 @@ sub::chorus::Layout engineLayout(const ChorusLayout& layout) {
 double fraction(double percent) { return std::clamp(percent, 0.0, 100.0) / 100.0; }
 
 }  // namespace
+
+double chorusMinRate() { return sub::chorus::kMinRate; }
+
+double chorusMaxRate() { return sub::chorus::kMaxRate; }
+
+int chorusDisplaySamples() { return sub::chorus::kDisplaySamples; }
 
 bool operator==(const ChorusLayout& a, const ChorusLayout& b) { return engineLayout(a) == engineLayout(b); }
 

@@ -7,6 +7,8 @@
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
 #include <QElapsedTimer>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -55,10 +57,10 @@ class TestUiDeviceEditorsChorus : public QObject, public sub::app::test::EditorH
         const char* name;
         const char* param;
     } kControls[] = {{"modeChorus", "mode"}, {"modeEnsemble", "mode"}, {"modeVibrato", "mode"}, {"taps1", "taps"},
-                     {"taps2", "taps"},      {"time", "time"},         {"hp", "hp"},           {"hpFreq", "hp_freq"},
-                     {"invert", "invert"},   {"rate", "rate"},         {"amount", "amount"},   {"feedback", "feedback"},
-                     {"warmth", "warmth"},   {"width", "width"},       {"offset", "offset"},   {"shape", "shape"},
-                     {"output", "output"},   {"mix", "mix"}};
+                     {"taps2", "taps"}, {"time", "time"}, {"hp", "hp"}, {"hpFreq", "hp_freq"},
+                     {"fbInvert", "fb_invert"}, {"rate", "rate"}, {"amount", "amount"}, {"feedback", "feedback"},
+                     {"warmth", "warmth"}, {"width", "width"}, {"offset", "offset"}, {"shape", "shape"},
+                     {"output", "output"}, {"mix", "mix"}};
 
     // A track playing a 220 Hz tone (at -6 dB) through a Chorus-Ensemble, its editor shown.
     QQuickItem* showChorus() {
@@ -262,6 +264,19 @@ private Q_SLOTS:
         auto* hpFreq = qvariant_cast<ValueBoxItem*>(find(view, QStringLiteral("hpFreq"))->property("box"));
         QVERIFY(hpFreq && hpFreq->logScale());
         QCOMPARE(hpFreq->text(), QStringLiteral("100 Hz"));
+        // Wide enough for its widest values and the automation dot (at 6 px, 2.5 px round: the text centred
+        // clear of it), and Time for its longest choice and its arrow.
+        const QFontMetricsF boxFont(hpFreq->property("font").value<QFont>());
+        for (const double hz : {20.0, 999.0, 1000.0, 1500.0, 2000.0}) {
+            const QString text = formatValue(hz, QStringLiteral("Hz"));
+            QVERIFY2(boxFont.horizontalAdvance(text) + 16 <= hpFreq->width() + 0.5, qPrintable(text));
+        }
+        for (int choice = 0; choice < 6; ++choice) {
+            set("time", choice);
+            QQuickItem* face = button(view, "time");
+            QVERIFY2(face->implicitWidth() <= face->width() + 0.5, qPrintable(face->property("text").toString()));
+        }
+        set("time", 0.0);
 
         // Chorus mode: Taps, Time and Width shown, not Offset or Shape; Ø enabled; the tab lit.
         QVERIFY(lit(view, "modeChorus") && !lit(view, "modeEnsemble") && !lit(view, "modeVibrato"));
@@ -271,7 +286,7 @@ private Q_SLOTS:
         QVERIFY(!find(view, QStringLiteral("offset"))->isVisible());
         QVERIFY(!find(view, QStringLiteral("shape"))->isVisible());
         QVERIFY(!find(view, QStringLiteral("voicesText"))->isVisible());
-        QVERIFY(find(view, QStringLiteral("invert"))->isEnabled());
+        QVERIFY(find(view, QStringLiteral("fbInvert"))->isEnabled());
         QCOMPARE(button(view, "time")->property("text").toString(), QStringLiteral("Auto"));
 
         // The graph: two taps a side, the axis Auto's range (1.5 to 11.5 ms), the readout the detune.
@@ -364,8 +379,9 @@ private Q_SLOTS:
         QCOMPARE(graph->axisLowMs(), 2.5);
         QCOMPARE(graph->axisHighMs(), 12.5);
 
-        // Vibrato: one voice a side; Offset and Shape instead of Width; Ø dimmed and inert. The sets cross-fade
-        // one after the other, never both shown at once (their texts would overlap).
+        // Vibrato: one voice a side; Offset and Shape instead of Width; Feedback and Ø dimmed (no feedback in
+        // Vibrato) but still settable. The sets cross-fade one after the other, never both shown at once (their
+        // texts would overlap).
         QQuickItem* widthSet = find(view, QStringLiteral("width"))->parentItem();
         QQuickItem* vibratoSet = find(view, QStringLiteral("offset"))->parentItem();
         QQuickItem* tapsSet = find(view, QStringLiteral("taps1"))->parentItem();
@@ -388,11 +404,16 @@ private Q_SLOTS:
         QTRY_VERIFY(!find(view, QStringLiteral("width"))->isVisible());
         QCOMPARE(find(view, QStringLiteral("voicesText"))->property("text").toString(),
                  QStringLiteral("1 voice a side"));
-        QVERIFY(!find(view, QStringLiteral("invert"))->isEnabled());
+        QTRY_COMPARE(find(view, QStringLiteral("fbInvert"))->opacity(), 0.55);
+        QTRY_COMPARE(find(view, QStringLiteral("feedback"))->opacity(), 0.55);
+        QVERIFY(find(view, QStringLiteral("fbInvert"))->isEnabled());
+        QVERIFY(find(view, QStringLiteral("feedback"))->isEnabled());
         QCOMPARE(undo()->index(), steps + 2);
-        click(view, "invert");
-        QCOMPARE(value("invert"), 0.0);
-        QCOMPARE(undo()->index(), steps + 2);
+        click(view, "fbInvert");
+        QCOMPARE(value("fb_invert"), 1.0);
+        QCOMPARE(undo()->index(), steps + 3);
+        undo()->undo();
+        QCOMPARE(value("fb_invert"), 0.0);
         tick(40);
         QCOMPARE(graph->axisLowMs(), 0.5);
         QCOMPARE(graph->axisHighMs(), 11.5);
@@ -413,7 +434,8 @@ private Q_SLOTS:
         QCOMPARE(graph->voiceCount(), 4);
         QVERIFY(lit(view, "modeChorus"));
         QTRY_VERIFY(shown(find(view, QStringLiteral("taps1"))) && shown(find(view, QStringLiteral("width"))));
-        QVERIFY(find(view, QStringLiteral("invert"))->isEnabled());
+        QTRY_COMPARE(find(view, QStringLiteral("fbInvert"))->opacity(), 1.0);
+        QTRY_COMPARE(find(view, QStringLiteral("feedback"))->opacity(), 1.0);
         QCOMPARE(float(engineParam("mode")), 0.f);
     }
 
@@ -455,9 +477,9 @@ private Q_SLOTS:
         QTRY_COMPARE(find(view, QStringLiteral("hpFreq"))->opacity(), 1.0);
         QCOMPARE(undo()->count(), steps + 3);
 
-        click(view, "invert");
-        QCOMPARE(value("invert"), 1.0);
-        QVERIFY(lit(view, "invert"));
+        click(view, "fbInvert");
+        QCOMPARE(value("fb_invert"), 1.0);
+        QVERIFY(lit(view, "fbInvert"));
         QCOMPARE(undo()->count(), steps + 4);
 
         // The high-pass's frequency: typed, and dragged in log.
@@ -470,7 +492,7 @@ private Q_SLOTS:
         QCOMPARE(float(engineParam("taps")), 0.f);
         QCOMPARE(float(engineParam("time")), 5.f);
         QCOMPARE(float(engineParam("hp")), 1.f);
-        QCOMPARE(float(engineParam("invert")), 1.f);
+        QCOMPARE(float(engineParam("fb_invert")), 1.f);
         QCOMPARE(float(engineParam("hp_freq")), 1000.f);
 
         while (undo()->index() > steps)
@@ -478,11 +500,11 @@ private Q_SLOTS:
         QCOMPARE(value("taps"), 1.0);
         QCOMPARE(value("time"), 0.0);
         QCOMPARE(value("hp"), 0.0);
-        QCOMPARE(value("invert"), 0.0);
+        QCOMPARE(value("fb_invert"), 0.0);
         QCOMPARE(value("hp_freq"), 100.0);
         QCOMPARE(graph->voiceCount(), 4);
         QCOMPARE(graph->centreMs(), 4.0);
-        QTRY_COMPARE(find(view, QStringLiteral("hpFreq"))->opacity(), 0.5);
+        QTRY_COMPARE(find(view, QStringLiteral("hpFreq"))->opacity(), 0.55);
     }
 
     void graphDrag() {

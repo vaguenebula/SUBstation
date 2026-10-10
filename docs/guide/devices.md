@@ -745,10 +745,11 @@ deeper it is the classic chorus shimmer; with feedback it heads towards flanging
 - **Amount** (0 to 100 %): how far they move, and so how far the copies are detuned. At
   0 % the copies are steady (a short doubling, or with Warmth a gentle saturation of its
   own).
-- **Feedback** (0 to 100 %): how much of each side's output goes back into its delays:
-  more extreme, brighter, metallic towards the top, and the delays ring on for a moment
-  after the sound stops. **Ø** flips the feedback's polarity: hollow at high Feedback
-  (not in Vibrato, where it is dimmed).
+- **Feedback** (0 to 100 %, Chorus and Ensemble): how much of each side's output goes
+  back into its delays: more extreme, brighter, metallic towards the top, and the delays
+  ring on for a moment after the sound stops. **Ø** flips the feedback's polarity:
+  hollow at high Feedback. Vibrato has no feedback: there both are dimmed, and what you
+  set them to waits for Chorus or Ensemble.
 - **Width** (0 to 200 %, Chorus and Ensemble): the chorused sound's stereo width: 0 %
   mono, 100 % as it is, wider above. Even a mono sound comes out in stereo: the two
   sides' delays move differently.
@@ -773,7 +774,8 @@ deeper it is the classic chorus shimmer; with feedback it heads towards flanging
   finely); each drag is one undo step. As sound passes the traces glow; in silence they
   rest, and with the device off or nothing playing they stop and dim.
 - Every control can be automated, and changes don't click: Mode, Taps and Time crossfade
-  to the new voices, and the rest glide.
+  to the new voices, and the rest glide. Switched on in the middle of a sound, its copies
+  of the sound fade in too.
 - Tips: for a surf guitar, Ensemble at 1 to 1.8 Hz with Amount at 100 %; for a vibrato,
   Vibrato with Dry/Wet at 100 % and the Rate at 5 to 7 Hz; for bursts of decaying
   oscillation, automate Ø with Feedback above 90 %.

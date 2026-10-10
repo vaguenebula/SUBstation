@@ -1,17 +1,18 @@
 // The built-in Chorus-Ensemble: modulated delays added to the sound. Its
 // delays are the design's (builtin/ChorusDesign.h, which its editor draws),
 // sample by sample, in every mode and at any sample rate; Ensemble beats and
-// the voices detune as far as the design says; feedback, Invert, Warmth, the
-// high-pass, Width, Output and Dry/Wet do what they say; every control changes
-// without a click; automation plays to the sample; reset and a new rate start
-// it cleanly; it stays stable at the extremes and silence rings out to exact
-// zeros; one channel plays as the left of two; its tail covers its echoes and
-// its displays carry the LFO's phase and the wet's level.
+// the voices detune as far as the design says; feedback (none in Vibrato),
+// Invert, Warmth, the high-pass, Width, Output and Dry/Wet do what they say;
+// every control changes without a click, and so does switching it on in the
+// middle of a sound; automation plays to the sample; reset and a new rate start
+// it cleanly; it stays stable at the extremes, takes NaN and infinity as
+// silence, and silence rings out to exact zeros; one channel plays as the left
+// of two; its tail covers its echoes and its displays carry the LFO's phase and
+// the wet's level.
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <memory>
 #include <random>
 #include <string>
 #include <utility>
@@ -23,73 +24,25 @@
 #include "builtin/DspBlocks.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace chorus = sub::chorus;
 
 namespace {
 
-constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
+constexpr int kBlock = Standalone::kMaxBlock;
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
+using Change = ParamChange;
 
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-};
-
-// A Chorus-Ensemble on its own, outside an engine, at any sample rate:
-// processed in blocks, its changes handed over as automation (so its blocks
-// split there) as the renderer does.
-class Chorus {
+// A Chorus-Ensemble on its own, as the renderer runs it (Standalone), with
+// what its tests add: two channels played at once, and its displays read.
+class Chorus : public Standalone {
 public:
-    explicit Chorus(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("chorus")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
+    explicit Chorus(double rate = kSampleRate, const Values& values = {}) : Standalone("chorus", rate, values) {}
 
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes channels of equal length in place, `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[4] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-        }
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}, int block = 256) {
-        run({&mono}, changes, block);
-        return mono;
-    }
+    using Standalone::play;
     // Two channels: what comes out of each.
     std::pair<Samples, Samples> play(Samples left, Samples right, const std::vector<Change>& changes = {},
                                      int block = 256) {
@@ -101,15 +54,16 @@ public:
     std::vector<float> display(int index) {
         std::vector<float> out;
         uint64_t& position = positions_[static_cast<size_t>(index)];
-        position = processor_->readDisplay(index, position, out);
+        position = processor().readDisplay(index, position, out);
         return out;
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     uint64_t positions_[2] = {};
 };
+
+// After a reset, what goes into the delays fades in over 5 ms: a sound from here on goes in whole.
+constexpr int64_t kSettled = 1024;
 
 // Amount 0, no feedback, no warmth, no high-pass, fully wet at unity: the voices are plain delays.
 const Values kPure = {{"amount", 0.f}, {"feedback", 0.f}, {"warmth", 0.f}, {"hp", 0.f},
@@ -126,10 +80,24 @@ std::string describe(const Values& values) {
     return text;
 }
 
-Samples impulse(size_t length) {
+Samples impulse(size_t length, int64_t at = kSettled) {
     Samples x(length, 0.f);
-    x[0] = 1.f;
+    x[static_cast<size_t>(at)] = 1.f;
     return x;
+}
+
+// `x` silent until kSettled, so it goes into the delays whole.
+Samples settled(Samples x) {
+    std::fill_n(x.begin(), kSettled, 0.f);
+    return x;
+}
+
+// The largest step between one sample and the next over [from, to).
+double largestStep(const Samples& x, int64_t from, int64_t to) {
+    double most = 0.0;
+    for (int64_t i = std::max<int64_t>(from, 1); i < to; ++i)
+        most = std::max(most, std::abs(static_cast<double>(x[static_cast<size_t>(i)]) - x[static_cast<size_t>(i - 1)]));
+    return most;
 }
 
 Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
@@ -298,7 +266,7 @@ TEST_CASE("the chorus is listed with its parameters") {
     CHECK_EQ(info.name, std::string("Chorus-Ensemble"));
     CHECK(!info.isInstrument());
     CHECK(paramIds(info.params) == (std::vector<std::string>{"mode", "taps", "time", "rate", "amount", "feedback",
-                                                             "invert", "width", "offset", "shape", "warmth", "hp",
+                                                             "fb_invert", "width", "offset", "shape", "warmth", "hp",
                                                              "hp_freq", "output", "mix"}));
     struct Expected {
         std::string name, unit;
@@ -319,8 +287,8 @@ TEST_CASE("the chorus is listed with its parameters") {
         {"Offset", "\xc2\xb0", 0.f, 180.f, 0.f, false, {}},
         {"Shape", "%", 0.f, 100.f, 0.f, false, {}},
         {"Warmth", "%", 0.f, 100.f, 0.f, false, {}},
-        {"High-Pass", "", 0.f, 1.f, 0.f, false, offOn},
-        {"High-Pass Freq", "Hz", 20.f, 2000.f, 100.f, true, {}},
+        {"High-pass", "", 0.f, 1.f, 0.f, false, offOn},
+        {"High-pass Freq", "Hz", 20.f, 2000.f, 100.f, true, {}},
         {"Output", "dB", -36.f, 6.f, 0.f, false, {}},
         {"Dry/Wet", "%", 0.f, 100.f, 50.f, false, {}},
     };
@@ -496,7 +464,7 @@ TEST_CASE("at Amount 0 each chorus layout is a plain delay of its centre") {
         const auto [l, r] = c.play(impulse(4096), impulse(4096));
         for (const Samples* side : {&l, &r}) {
             Samples want(side->size(), 0.f);
-            want[static_cast<size_t>(k.delay)] = 1.f;
+            want[static_cast<size_t>(kSettled + k.delay)] = 1.f;
             CHECK_ALLCLOSE(*side, want, 0.0, 1e-6);
         }
     }
@@ -613,31 +581,38 @@ TEST_CASE("the chorus's voices detune as far as the design says") {
 }
 
 TEST_CASE("the chorus's feedback repeats the echoes; Invert flips them; it holds at 100 %") {
-    // 10 ms, one tap, Feedback 50: a loop gain of 0.97 * 0.5.
+    // 10 ms, one tap, Feedback 50: a loop gain of 0.97 * 0.5 (the impulse at 480, the echoes every 480 after).
     for (const bool invert : {false, true}) {
         INFO(invert ? "inverted" : "positive");
         const float on = invert ? 1.f : 0.f;
-        Chorus c(kSampleRate, with(kPure, {{"taps", 0.f}, {"time", 2.f}, {"feedback", 50.f}, {"invert", on}}));
-        const Samples h = c.play(impulse(2000));
+        Chorus c(kSampleRate, with(kPure, {{"taps", 0.f}, {"time", 2.f}, {"feedback", 50.f}, {"fb_invert", on}}));
+        const Samples h = c.play(impulse(2500, 480));
         const float sign = invert ? -1.f : 1.f;
-        CHECK_APPROX_TOL(h[480], 1.0, 0.0, 1e-6);
-        CHECK_APPROX_TOL(h[960], sign * 0.485, 0.0, 1e-3);
-        CHECK_APPROX_TOL(h[1440], 0.485 * 0.485, 0.0, 1e-3);
+        CHECK_APPROX_TOL(h[960], 1.0, 0.0, 1e-6);
+        CHECK_APPROX_TOL(h[1440], sign * 0.485, 0.0, 1e-3);
+        CHECK_APPROX_TOL(h[1920], 0.485 * 0.485, 0.0, 1e-3);
         // Between them, only the DC guard's faint tail (under 7e-4 of an echo each time round).
         for (size_t i = 0; i < h.size(); ++i) {
             if (i % 480 != 0) CHECK(std::abs(h[i]) < 1e-3);
         }
     }
-    // In Vibrato the feedback is always positive: Invert changes nothing.
+    // Vibrato has no feedback (as Live's): Feedback and Invert change nothing, and it has no echoes.
     {
-        const Values vibrato = with(kPure, {{"mode", 2.f}, {"feedback", 50.f}});
-        Chorus off(kSampleRate, vibrato), on(kSampleRate, with(vibrato, {{"invert", 1.f}}));
+        const Values vibrato = with(kPure, {{"mode", 2.f}, {"offset", 90.f}});
         const Samples in = noise(kSampleRate, 4);
-        CHECK_ARRAY_EQUAL(on.play(in), off.play(in));
+        const Samples none = Chorus(kSampleRate, vibrato).play(in);
+        const std::vector<Values> feedback = {{{"feedback", 100.f}}, {{"feedback", 60.f}, {"fb_invert", 1.f}}};
+        for (const Values& more : feedback) {
+            INFO(describe(more));
+            CHECK_ARRAY_EQUAL(Chorus(kSampleRate, with(vibrato, more)).play(in), none);
+        }
+        const Samples h = Chorus(kSampleRate, with(vibrato, {{"feedback", 100.f}})).play(impulse(4096));
+        CHECK_APPROX_TOL(h[kSettled + 288], 1.0, 0.0, 1e-6);  // (6 ms)
+        CHECK(allEqual(slice(h, kSettled + 289), 0.0));
     }
     // Feedback 100 on loud noise: stable (the modulation smears the comb, and a loop gain of 0.97 is stable).
     for (const bool invert : {false, true}) {
-        Chorus c(kSampleRate, {{"feedback", 100.f}, {"invert", invert ? 1.f : 0.f}, {"mix", 100.f}});
+        Chorus c(kSampleRate, {{"feedback", 100.f}, {"fb_invert", invert ? 1.f : 0.f}, {"mix", 100.f}});
         const auto [l, r] = c.play(noise(10 * kSampleRate, 5), noise(10 * kSampleRate, 6));
         CHECK(allFinite(l) && allFinite(r));
         INFO("peak " + std::to_string(std::max(maxAbs(l), maxAbs(r))));
@@ -742,7 +717,7 @@ TEST_CASE("the chorus's Warmth colours gently, darkens, and doesn't alias much")
 
 TEST_CASE("the chorus's high-pass keeps the lows out of the delays") {
     // Amount 0, 10 ms: the output is the crossover's lows now plus its highs 10 ms ago.
-    const Samples in = noise(kSampleRate, 8);
+    const Samples in = settled(noise(kSampleRate, 8));
     Chorus c(kSampleRate, with(kPure, {{"time", 2.f}, {"hp", 1.f}, {"hp_freq", 1000.f}}));
     const Samples out = c.play(in);
     sub::dsp::Crossover crossover;
@@ -839,7 +814,7 @@ TEST_CASE("the chorus's Width, and one channel or three") {
 }
 
 TEST_CASE("the chorus's Output sets the wet's level; Dry/Wet blends it with the input") {
-    const Samples in = noise(kSampleRate, 13);
+    const Samples in = settled(noise(kSampleRate, 13));
     Chorus quieter(kSampleRate, with(kPure, {{"time", 2.f}, {"output", -6.f}}));
     const Samples out = quieter.play(in);
     Samples want(in.size(), 0.f);
@@ -872,8 +847,9 @@ TEST_CASE("changing any chorus control is click-free") {
         {"Mode to Ensemble, then Vibrato", base, {{s(0.5), "mode", 1.f}, {s(1.5), "mode", 2.f}}},
         {"Taps 2 to 1", base, {{s(0.5), "taps", 0.f}}},
         {"Time Auto to 50 ms", base, {{s(0.5), "time", 5.f}}},
-        {"Invert on at Feedback 90", loud, {{s(0.5), "invert", 1.f}}},
-        {"Chorus to Vibrato with Invert on at Feedback 90", with(loud, {{"invert", 1.f}}), {{s(0.5), "mode", 2.f}}},
+        {"Invert on at Feedback 90", loud, {{s(0.5), "fb_invert", 1.f}}},
+        {"Chorus to Vibrato with Invert on at Feedback 90", with(loud, {{"fb_invert", 1.f}}), {{s(0.5), "mode", 2.f}}},
+        {"Vibrato to Chorus at Feedback 90", with(loud, {{"mode", 2.f}}), {{s(0.5), "mode", 0.f}}},
         {"High-pass on, then off", base, {{s(0.5), "hp", 1.f}, {s(1.5), "hp", 0.f}}},
         {"Rate 0.1 to 15 Hz", with(base, {{"rate", 0.1f}}), {{s(0.5), "rate", 15.f}}},
         {"Rate 15 to 0.1 Hz", with(base, {{"rate", 15.f}}), {{s(0.5), "rate", 0.1f}}},
@@ -1001,12 +977,12 @@ TEST_CASE("reset and a new sample rate start the chorus from silence") {
 }
 
 TEST_CASE("the chorus stays stable at the extremes and at any sample rate") {
-    const Values lowest = {{"mode", 0.f},  {"taps", 0.f},  {"time", 0.f},    {"rate", 0.1f},    {"amount", 0.f},
-                           {"feedback", 0.f}, {"invert", 0.f}, {"width", 0.f}, {"offset", 0.f},  {"shape", 0.f},
-                           {"warmth", 0.f}, {"hp", 0.f},     {"hp_freq", 20.f}, {"output", -36.f}, {"mix", 0.f}};
-    const Values highest = {{"mode", 0.f},    {"taps", 1.f},  {"time", 5.f},   {"rate", 15.f},     {"amount", 100.f},
-                            {"feedback", 100.f}, {"invert", 1.f}, {"width", 200.f}, {"warmth", 100.f}, {"hp", 1.f},
-                            {"hp_freq", 2000.f}, {"output", 6.f}, {"mix", 100.f}};
+    const Values lowest = {{"mode", 0.f}, {"taps", 0.f}, {"time", 0.f}, {"rate", 0.1f}, {"amount", 0.f},
+                           {"feedback", 0.f}, {"fb_invert", 0.f}, {"width", 0.f}, {"offset", 0.f}, {"shape", 0.f},
+                           {"warmth", 0.f}, {"hp", 0.f}, {"hp_freq", 20.f}, {"output", -36.f}, {"mix", 0.f}};
+    const Values highest = {{"mode", 0.f}, {"taps", 1.f}, {"time", 5.f}, {"rate", 15.f}, {"amount", 100.f},
+                            {"feedback", 100.f}, {"fb_invert", 1.f}, {"width", 200.f}, {"warmth", 100.f},
+                            {"hp", 1.f}, {"hp_freq", 2000.f}, {"output", 6.f}, {"mix", 100.f}};
     const Values vibrato = with(highest, {{"mode", 2.f}, {"shape", 100.f}, {"offset", 180.f}});
     const Values ensemble = with(highest, {{"mode", 1.f}, {"time", 0.f}});
     const Values lowestWet = with(lowest, {{"mix", 100.f}});
@@ -1113,14 +1089,14 @@ TEST_CASE("the chorus's tail covers its echoes; it has no latency") {
                                          {{"taps", 0.f}, {"time", 5.f}},
                                          {{"mode", 1.f}},
                                          {{"mode", 2.f}, {"offset", 90.f}},
-                                         {{"taps", 0.f}, {"time", 1.f}, {"warmth", 100.f}, {"invert", 1.f}}};
+                                         {{"taps", 0.f}, {"time", 1.f}, {"warmth", 100.f}, {"fb_invert", 1.f}}};
     for (const Values& layout : layouts) {
         INFO(describe(layout));
         Chorus c(kSampleRate, with(with(kPure, {{"amount", 100.f}, {"feedback", 100.f}}), layout));
-        const auto tail = static_cast<size_t>(c.processor().tailSamples());
-        const Samples h = c.play(impulse(tail + kSampleRate));
-        const double first = maxAbs(slice(h, 0, 2700));
-        const double after = maxAbs(slice(h, static_cast<int64_t>(tail)));
+        const auto tail = static_cast<int64_t>(c.processor().tailSamples());
+        const Samples h = c.play(impulse(static_cast<size_t>(kSettled + tail + kSampleRate)));
+        const double first = maxAbs(slice(h, kSettled, kSettled + 2700));
+        const double after = maxAbs(slice(h, kSettled + tail));
         INFO("first echo " + std::to_string(first) + ", after the tail " + std::to_string(after));
         CHECK(after < 1e-3 * first);
     }
@@ -1165,4 +1141,76 @@ TEST_CASE("the chorus's displays: the LFO's phase and the wet's level") {
     c.play(Samples(kSampleRate, 0.f));
     const std::vector<float> silent = c.display(1);
     for (size_t k = 10; k < silent.size(); ++k) CHECK_EQ(silent[k], -90.f);
+}
+
+TEST_CASE("the chorus switched on in the middle of a sound doesn't click") {
+    // As the renderer switches a device on: reset at a block's start, its output then faded in from its input
+    // over 5 ms. Its lines start empty; what goes into them fades in too, so each voice's copy of the sound
+    // starts as smoothly, a delay later (mostly after the renderer's fade), instead of with a step mid-waveform.
+    // The largest step from one sample to the next, from 10 ms before the switch until 20 ms after the longest
+    // delay, is no larger than 1.25 times the larger of the tone's own and the device's always on, plus 0.005.
+    const Samples in = tone(440.0, 1.0, kSampleRate, 0.3);
+    const int64_t at = 24064;          // (a block's start)
+    const auto fade = samples(0.005);  // Renderer::kSwitchFade
+    const std::vector<Values> settings = {
+        {},
+        {{"mode", 1.f}},
+        {{"mode", 2.f}},
+        {{"mode", 2.f}, {"amount", 100.f}, {"offset", 180.f}, {"mix", 100.f}},
+        {{"time", 5.f}},
+        {{"time", 5.f}, {"taps", 0.f}, {"amount", 100.f}, {"feedback", 80.f}, {"mix", 100.f}},
+        {{"time", 3.f}, {"hp", 1.f}, {"warmth", 100.f}, {"feedback", 50.f}, {"fb_invert", 1.f}},
+        {{"mix", 100.f}, {"amount", 100.f}, {"rate", 15.f}},
+    };
+    for (const Values& values : settings) {
+        INFO(describe(values));
+        const Samples on = Chorus(kSampleRate, values).play(in);
+        Chorus c(kSampleRate, values);
+        c.play(slice(in, 0, at));  // (heard before it was switched off)
+        c.processor().reset();
+        const Samples rest = slice(in, at);
+        const Samples y = c.play(rest);
+        Samples switched = in;
+        for (size_t s = 0; s < y.size(); ++s) {
+            const float gain = std::min(1.f, static_cast<float>(s + 1) / static_cast<float>(fade));
+            switched[static_cast<size_t>(at) + s] = rest[s] + gain * (y[s] - rest[s]);
+        }
+        const double longest = chorus::kMaxDelayMs;  // (50 ms and its swing, at most)
+        const int64_t from = at - samples(0.01), to = at + samples((longest + 20.0) / 1000.0);
+        const double steepest = std::max(largestStep(on, from, to), largestStep(in, from, to));
+        const double step = largestStep(switched, from, to);
+        INFO("a step of " + std::to_string(step) + ", " + std::to_string(steepest) + " without the switch");
+        CHECK(step <= 1.25 * steepest + 0.005);
+    }
+}
+
+TEST_CASE("the chorus takes NaN and infinity in its input as silence") {
+    // BuiltinProcessor::process() takes what isn't audio (NaN, infinity, beyond 1e30) as 0 before the device
+    // sees it, so nothing of it stays in the lines, the loop or the filters: what comes out is what the same
+    // input with 0 there gives, bit for bit, through the sound and the silence after it.
+    const std::vector<Values> settings = {
+        {},
+        {{"feedback", 100.f}, {"warmth", 100.f}, {"hp", 1.f}, {"mix", 100.f}},
+        {{"mode", 1.f}, {"feedback", 90.f}, {"fb_invert", 1.f}, {"width", 200.f}},
+        {{"mode", 2.f}, {"amount", 100.f}, {"shape", 50.f}, {"mix", 0.f}, {"hp", 1.f}},
+    };
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                            -std::numeric_limits<float>::infinity(), 3e38f}) {
+        for (const Values& values : settings) {
+            INFO(std::to_string(bad) + ": " + describe(values));
+            Samples left = noise(kSampleRate, 29), right = noise(kSampleRate, 30);
+            left.resize(static_cast<size_t>(2 * kSampleRate), 0.f);
+            right.resize(static_cast<size_t>(2 * kSampleRate), 0.f);
+            Samples cleanLeft = left, cleanRight = right;
+            for (const size_t i : {size_t{1000}, size_t{20000}}) {
+                left[i] = right[i + 7] = bad;
+                cleanLeft[i] = cleanRight[i + 7] = 0.f;
+            }
+            const auto [l, r] = Chorus(kSampleRate, values).play(left, right);
+            const auto [cl, cr] = Chorus(kSampleRate, values).play(cleanLeft, cleanRight);
+            CHECK(allFinite(l) && allFinite(r));
+            CHECK_ARRAY_EQUAL(l, cl);
+            CHECK_ARRAY_EQUAL(r, cr);
+        }
+    }
 }

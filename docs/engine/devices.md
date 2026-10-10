@@ -1330,14 +1330,14 @@ graph shares.
 | `time` | Delay Time | | Auto, 7 ms, 10 ms, 20 ms, 35 ms, 50 ms (a list; Chorus only) | Auto |
 | `rate` | Rate | Hz | 0.1..15, log | 0.8 |
 | `amount` | Amount | % | 0..100 | 50 |
-| `feedback` | Feedback | % | 0..100 | 0 |
-| `invert` | Feedback Invert | | Off, On (not in Vibrato) | Off |
+| `feedback` | Feedback | % | 0..100 (not in Vibrato) | 0 |
+| `fb_invert` | Feedback Invert | | Off, On (not in Vibrato) | Off |
 | `width` | Width | % | 0..200 (not in Vibrato) | 100 |
 | `offset` | Offset | ° | 0..180 (Vibrato only) | 0 |
 | `shape` | Shape | % | 0..100 (Vibrato only) | 0 |
 | `warmth` | Warmth | % | 0..100 | 0 |
-| `hp` | High-Pass | | Off, On | Off |
-| `hp_freq` | High-Pass Freq | Hz | 20..2000, log | 100 |
+| `hp` | High-pass | | Off, On | Off |
+| `hp_freq` | High-pass Freq | Hz | 20..2000, log | 100 |
 | `output` | Output | dB | -36..6 | 0 |
 | `mix` | Dry/Wet | % | 0..100 | 50 |
 
@@ -1389,7 +1389,8 @@ comes back.
     any delay, and doesn't build up round the loop) and a limiter (the identity within ±1, `sign(x) (1 + tanh(|x| -
     1))` beyond it: never past ±2), so even a loud tone on the loop's resonance at Feedback 100 % stays within the
     input and ±2 (without it, it would head for 33 times the tone). 100 % is a loop gain of 0.97.
-    Invert flips its sign (hollow, nasal combs); in Vibrato the feedback is always positive.
+    Invert flips its sign (hollow, nasal combs). Vibrato has none, as Live's (whose Feedback and Ø are greyed
+    there): going into it takes the gain down to 0, and Feedback and Invert wait for Chorus or Ensemble.
   - The wet (with the lows added back while the high-pass is on): Width scales its side (0 % mono, 100 % as it is,
     200 % twice as wide; 100 % in Vibrato), Output its level, and Dry/Wet blends it with the dry as the Delay's does
     (fully dry, the input passes bit for bit; with the high-pass on, through the crossover's all-pass).
@@ -1402,8 +1403,9 @@ comes back.
     amount and filter and the crossover's coefficients follow their glides the same way, sample by sample. The LFO's
     phase integrates the rate, so a jump of Rate never clicks.
   - Dry/Wet, Output, Width and the high-pass switch glide per sample through two one-poles of 6 ms each (a jump is
-    90 % there in 23 ms, and lands exactly within about 120 ms), the feedback's signed gain (Invert, and going into
-    Vibrato, pass through 0) and the DC blocker's blend through two of 10 ms.
+    90 % there in 23 ms, and lands exactly within about 120 ms), the feedback's signed gain (Invert passes it through
+    0, Vibrato takes it to 0) and the DC blocker's blend through two of 10 ms (`dsp::Glide`; the per-chunk glides
+    keep their own, solved over a fraction of a sample as well, so they land alike however a block cuts the chunks).
   - A change of Mode, Taps or Time cross-fades over 30 ms (an S-curve) from the old voices' reading of the lines to
     the new voices' (both read the same lines, so the feedback carries the blend); a change during a fade starts when
     it is done. A change that doesn't apply to the mode (Taps in Ensemble) changes nothing.
@@ -1415,23 +1417,31 @@ comes back.
   fill: nothing is allocated).
 - `prepare()` allocates the lines (60 ms each, rounded up to a power of two), works out the glides' steps and resets.
   `reset()` clears every line and filter, starts the LFO again at phase 0 (so offline renders repeat exactly) and snaps
-  every glide and ramp to its parameter.
-- **Denormals**: the crossovers' and the low-passes' states are flushed below 1e-20 after each stretch, the DC
+  every glide and ramp to its parameter. The lines then hold none of the sound, so what goes into them fades in over
+  5 ms (an S-curve, as long as the renderer's switch fade): a device switched on in the middle of a sound (reset as
+  it comes on, its output faded in) starts each voice's copy of it smoothly, a delay later, instead of with a step
+  mid-waveform after the renderer's fade is over. (The first 5 ms of a sound that starts with a render reach the
+  delays faded too.) A change of the channel count, which clears them, does the same.
+- Input that isn't audio (NaN, infinity, beyond 1e30) is silence (`BuiltinProcessor::process()`), so nothing of it
+  stays in the lines, the loop or the filters.
+- **Denormals**: the crossovers' (`Crossover::flush()`) and the low-passes' states are flushed below 1e-20 after each
+  stretch, the DC
   blockers flush their own, and what is fed back is gated below 1e-15, so silence rings out to exact zeros (after
   Feedback 90 %, in about 2 s).
 - `latencySamples()` is 0: the delay is the effect. `tailSamples()`: the layout's longest delay at any Amount
   (`chorus::highestMs`) times one plus the repeats until the feedback has taken an echo down 60 dB (`-3 / log10(0.97 ×
-  feedback)`, at most 1000), and 50 ms for the filters; at most 60 s. 2952 samples at the defaults (48 kHz); 12.4 s at
-  50 ms with Feedback 100 %. Fully dry, 0 (with the high-pass on, 50 ms for the dry's crossover).
+  feedback)`, at most 1000; none in Vibrato), and 50 ms for the filters; at most 60 s. 2952 samples at the defaults
+  (48 kHz); 12.4 s at 50 ms with Feedback 100 %. Fully dry, 0 (with the high-pass on, 50 ms for the dry's crossover).
 - **Displays**, a value per 128 samples each (`chorus::kDisplaySamples`), published together so value k of each stands
   for the same samples: `phase` (the LFO's phase, 0..1, at the end of those samples: the editor draws every voice
   from it with the shared maths, so its traces move as the delays do) and `level` (the wet's peak after Output, both
-  sides, in dB, floor -90: the traces' glow).
+  sides, in dB, floor -90 (`kLevelFloorDb`): the traces' glow). The editor reads the rate through the application
+  layer (`chorusDisplaySamples()`).
 - **Design**: [ChorusDesign.h](../../engine/src/builtin/ChorusDesign.h) (namespace `sub::chorus`, inline, no Qt)
   holds the layouts (`layout()`, which normalises what a mode doesn't use), `centreMs`, `swingMs`, `lowestMs` /
   `highestMs`, `voicePhase`, `lfoValue`, `delayMs`, the detune (`detuneUpCents`, `peakDetuneCents`), the warmth's
   curve (`WarmCurve`, its antiderivative, `warm`; `WarmStage`, the device's anti-aliased stage) and filter
-  (`warmLowpassCoefficient`), and `limitFeedback`. The application layer's
+  (`warmLowpassCoefficient`, through `dsp::onePoleCutoff`), and `limitFeedback`. The application layer's
   `chorusDelayMs()` and its neighbours ([app/src/audio/ChorusVoices.h](../../app/src/audio/ChorusVoices.h)) wrap it
   for the editor's graph, so the delays drawn are the delays that play.
 - At 48 kHz on two channels it took about 0.3 % of one core at its defaults, and under 0.6 % at its heaviest
@@ -2160,15 +2170,20 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   feedback, ping pong, freeze, the filter, the modes (with automation changing the time), and its display.
 - [test_chorus_engine.cpp](../../tests/engine/test_chorus_engine.cpp): its listing and the design's figures (the
   warmth's curve, its antiderivative and its stage among them); passing the input bit for bit fully dry (with the
-  high-pass on, the crossover's all-pass); each layout a plain delay of its centre at Amount 0;
+  high-pass on, the crossover's all-pass); each layout a plain delay of its centre at Amount 0 (the impulses after
+  the lines' fade-in, as the tests' sounds that must reach the delays whole);
   the delays, sample by sample on a ramp, in every mode (Auto's centre following Amount, two taps and Ensemble's three
   averaging out, Vibrato's Offset and triangle, the fixed Times, fractional delays at 44.1 kHz, and at 96 kHz); Ensemble
-  beating; the detune; feedback's echoes, Invert (ignored in Vibrato), the limiter holding a tone on the loop's
+  beating; the detune; feedback's echoes, Invert, no feedback in Vibrato (Feedback and Invert changing nothing
+  there), the limiter holding a tone on the loop's
   resonance and DC not building up; Warmth's gentle distortion and level at -6 and 0 dBFS, its low-pass and its
   aliasing at 5, 9 and 13 kHz; the high-pass split (to 1e-5), the lows unchorused and, half wet, the lows below it
   whole; Width (ignored in Vibrato); one channel as the left of two, a third untouched; Output and Dry/Wet; every
   control changing without a click, both ways for the continuous ones (a 6th-difference measure, against an unfaded
-  switch); automation through the engine, to the sample; any block size; reset, repeatability and a
+  switch); switched on in the middle of a 440 Hz tone (reset there, its output faded in as the renderer does) with
+  no step larger than the tone's or the device's always on, in every mode and at the longest delays; NaN, infinity
+  and 3e38 in the input as silence, bit for bit; automation through the engine, to the sample; any block size;
+  reset, repeatability and a
   new rate; stability at the extremes at 44.1 to 192 kHz, under random automation of every control and with Mode
   turning round every 64 samples; silence ringing out to exact zeros; the tail; the displays (the level after
   Output).

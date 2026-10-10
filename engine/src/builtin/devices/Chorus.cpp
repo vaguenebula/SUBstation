@@ -8,7 +8,7 @@
 //
 // Per channel (up to two; more pass through untouched), a sample at a time:
 //
-// - The High-Pass splits the input with a Linkwitz-Riley crossover: the highs go
+// - The High-pass splits the input with a Linkwitz-Riley crossover: the highs go
 //   into the delays, the lows pass to the wet unmodulated (so a bass stays solid
 //   and a fully wet Vibrato keeps its lows). The dry goes through the same
 //   crossover (its lows and highs summed: an all-pass, flat in level), so it is
@@ -24,11 +24,12 @@
 //   (it sits in the feedback loop, where an oversampler's latency can't go), a
 //   one-pole low-pass after the voices, and a 5 Hz DC blocker on the wet while
 //   it plays (the bias makes DC). At 0 the wet is untouched.
-// - Feedback: the wet, through a second 5 Hz DC blocker (so a DC offset doesn't
-//   build up round the loop) and a limiter (the identity within ±1, never
-//   beyond ±2), back into the line; Invert flips its sign (not in Vibrato).
+// - Feedback (Chorus and Ensemble: Vibrato has none, as Live's): the wet,
+//   through a second 5 Hz DC blocker (so a DC offset doesn't build up round the
+//   loop) and a limiter (the identity within ±1, never beyond ±2), back into
+//   the line; Invert flips its sign.
 // - Width (Chorus, Ensemble) scales the wet's side; Output its level; Dry/Wet
-//   blends it with the dry (fully dry with the High-Pass off, the input passes
+//   blends it with the dry (fully dry with the High-pass off, the input passes
 //   bit for bit).
 //
 // Smoothing, so no control clicks or zippers:
@@ -42,13 +43,18 @@
 //   filter and the crossover's coefficients follow their glides the same way,
 //   sample by sample. The LFO's phase integrates the rate, so a jump never
 //   clicks.
-// - Dry/Wet, Output, Width, the feedback's signed gain (Invert ramps through
-//   0), the high-pass switch and the DC blocker's blend glide per sample, two
-//   one-poles in a row each.
+// - Dry/Wet, Output, Width, the feedback's signed gain (Invert ramps it
+//   through 0, Vibrato down to it), the high-pass switch and the DC blocker's
+//   blend glide per sample, two one-poles in a row each.
 // - A change of Mode, Taps or Time cross-fades (30 ms, an S-curve) from the old
 //   voices' reading of the lines to the new one's (both read the same lines, so
 //   the feedback carries the blend); a change during a fade starts when it is
 //   done.
+// - After a reset (the device switched on in the middle of a sound, say) the
+//   lines are empty: what goes into them fades in over 5 ms (an S-curve), as
+//   the renderer fades the device's output in, so each voice's copy of a sound
+//   already playing starts as smoothly, one delay later, instead of with a step
+//   mid-waveform.
 //
 // Every recursive state is flushed below 1e-20 after each stretch and the
 // feedback is gated below 1e-15, so silence rings out to exact zeros. The
@@ -78,8 +84,9 @@ constexpr int kMaxVoices = chorus::kMaxVoices;
 constexpr int kChunk = chorus::kChunk;                    // samples per update of the modulation
 constexpr int kDisplaySamples = chorus::kDisplaySamples;  // samples per display value
 constexpr double kFadeSeconds = 0.03;  // Mode, Taps and Time
+constexpr double kFreshSeconds = 0.005;  // what goes into the lines after a reset (Renderer::kSwitchFade's length)
 
-// The glides worked out per chunk: each two one-poles in a row of this time constant.
+// The glides worked out per chunk: each two one-poles in a row of this time constant (s).
 constexpr double kRateGlide = 0.01;
 constexpr double kAmountGlide = 0.025;
 constexpr double kShapeGlide = 0.01;
@@ -87,15 +94,13 @@ constexpr double kOffsetGlide = 0.05;
 constexpr double kWarmthGlide = 0.01;
 constexpr double kHighPassGlide = 0.01;
 constexpr double kGlideLanded = 1e-9;  // a glide this close to its target lands on it
-// And per sample.
+// And per sample (dsp::Glide).
 constexpr double kGainRamp = 0.006;      // Dry/Wet, Output, Width, the high-pass switch
 constexpr double kFeedbackRamp = 0.01;   // the feedback's gain, the DC blocker's blend
 constexpr double kRampLanded = 1e-7;
 
 constexpr float kFeedbackGate = 1e-15f;  // fed back below this: nothing (a dying loop drains to zeros)
-
-// 0 at 0, 1 at 1, flat at both ends: the layout cross-fade's shape.
-inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
+constexpr float kLevelFloorDb = -90.f;   // the level display's floor (silence)
 
 // A step of a glide: e^(-h / tau) and h / tau, for h samples and a one-pole time constant of tau samples.
 struct Step {
@@ -110,7 +115,10 @@ struct Step {
 // Two one-poles in a row gliding to a target, solved exactly in continuous time
 // over a step of any length: a jump eases in and out (its speed starts at 0),
 // and the glide sampled at a chunk's middle and end lies on one smooth curve. It
-// lands on the target exactly once within `landed` of it.
+// lands on the target exactly once within `landed` of it. (dsp::Glide, the
+// per-sample ramps', moves a whole sample at a time: a chunk's half is often a
+// fraction of one, 3.5 samples for a chunk of 7, and the glide must land in the
+// same place however a block's end cuts the chunks.)
 struct Ease {
     double first = 0.0, value = 0.0;
 
@@ -148,7 +156,7 @@ struct Quad {
 class ChorusProcessor final : public BuiltinProcessor {
 public:
     enum Param {
-        Mode = 0, Taps, Time, Rate, Amount, Feedback, Invert, Width, Offset, Shape, Warmth,
+        Mode = 0, Taps, Time, Rate, Amount, Feedback, FeedbackInvert, Width, Offset, Shape, Warmth,
         HighPass, HighPassFreq, Output, Mix,
         NumParams
     };
@@ -160,12 +168,14 @@ public:
     std::string name() const override { return "Chorus-Ensemble"; }
 
     // The longest delay (at any Amount) times the repeats until the feedback has
-    // taken an echo down 60 dB, and 50 ms for the filters; at most 60 s. Fully
-    // dry, nothing (or with the high-pass on, the dry's crossover: 50 ms).
+    // taken an echo down 60 dB (none in Vibrato), and 50 ms for the filters; at
+    // most 60 s. Fully dry, nothing (or with the high-pass on, the dry's
+    // crossover: 50 ms).
     int tailSamples() const override {
         if (param(Mix) <= 0.f) return isOn(HighPass) ? static_cast<int>(0.05 * sampleRate_) : 0;
-        const double longest = chorus::highestMs(targetLayout()) * sampleRate_ / 1000.0;
-        const double gain = chorus::kFeedbackScale * std::clamp(param(Feedback), 0.f, 100.f) / 100.0;
+        const Targets t = targets();
+        const double longest = chorus::highestMs(t.layout) * sampleRate_ / 1000.0;
+        const double gain = std::abs(t.feedback);
         const double repeats = gain > 0.001 ? std::min(1000.0, -3.0 / std::log10(gain)) : 0.0;
         const double samples = longest * (1.0 + repeats) + 0.05 * sampleRate_;
         return static_cast<int>(std::min(samples, 60.0 * sampleRate_));
@@ -187,14 +197,15 @@ public:
             warmthSteps_[len] = Step::of(half, kWarmthGlide * sampleRate);
             highPassSteps_[len] = Step::of(half, kHighPassGlide * sampleRate);
         }
-        gainStep_ = Step::of(1.0, kGainRamp * sampleRate);
-        feedbackStep_ = Step::of(1.0, kFeedbackRamp * sampleRate);
+        gainShare_ = 1.0 - onePoleCoefficient(kGainRamp, sampleRate);
+        feedbackShare_ = 1.0 - onePoleCoefficient(kFeedbackRamp, sampleRate);
         fadeLength_ = std::max(1, static_cast<int>(std::lround(kFadeSeconds * sampleRate)));
+        freshLength_ = std::max(1, static_cast<int>(std::lround(kFreshSeconds * sampleRate)));
         reset();
     }
 
-    // Silent, the LFO back at its start (offline renders repeat exactly), and
-    // every glide where the parameters are.
+    // Silent, the LFO back at its start (offline renders repeat exactly), every
+    // glide where the parameters are, and what goes into the lines fading in.
     void reset() override {
         clearState();
         lfo_.reset();
@@ -247,7 +258,7 @@ protected:
             if (displayCount_ >= kDisplaySamples) {
                 const auto phase = static_cast<float>(lfo_.phase());
                 publish(PhaseDisplay, phase < 1.f ? phase : 0.f);  // (a phase a hair under 1 rounds to it)
-                publish(LevelDisplay, std::max(-90.f, gainToDb(peak_)));
+                publish(LevelDisplay, std::max(kLevelFloorDb, gainToDb(peak_)));
                 displayCount_ = 0;
                 peak_ = 0.f;
             }
@@ -293,8 +304,8 @@ private:
         t.mix = std::clamp(param(Mix) / 100.0, 0.0, 1.0);
         t.gain = dbToGain(param(Output));
         t.width = vibrato ? 1.0 : std::clamp(param(Width) / 100.0, 0.0, 2.0);
-        const double sign = isOn(Invert) && !vibrato ? -1.0 : 1.0;
-        t.feedback = sign * chorus::kFeedbackScale * std::clamp(param(Feedback) / 100.0, 0.0, 1.0);
+        const double sign = isOn(FeedbackInvert) ? -1.0 : 1.0;
+        t.feedback = vibrato ? 0.0 : sign * chorus::kFeedbackScale * std::clamp(param(Feedback) / 100.0, 0.0, 1.0);
         t.highPass = isOn(HighPass) ? 1.0 : 0.0;
         return t;
     }
@@ -427,16 +438,21 @@ private:
         dsp::CrossoverCoefficients crossover = crossover_;
         float peak = peak_;
         for (int i = at; i < at + len; ++i) {
-            const auto mix = static_cast<float>(mix_.step(t.mix, gainStep_, kRampLanded));
-            const auto gain = static_cast<float>(gain_.step(t.gain, gainStep_, kRampLanded));
-            const auto width = static_cast<float>(width_.step(t.width, gainStep_, kRampLanded));
-            const auto highPass = static_cast<float>(highPass_.step(t.highPass, gainStep_, kRampLanded));
-            const auto feedback = static_cast<float>(feedback_.step(t.feedback, feedbackStep_, kRampLanded));
-            const auto dcBlend = static_cast<float>(dcBlend_.step(dcTarget, feedbackStep_, kRampLanded));
+            const auto mix = static_cast<float>(mix_.next(t.mix, gainShare_, kRampLanded));
+            const auto gain = static_cast<float>(gain_.next(t.gain, gainShare_, kRampLanded));
+            const auto width = static_cast<float>(width_.next(t.width, gainShare_, kRampLanded));
+            const auto highPass = static_cast<float>(highPass_.next(t.highPass, gainShare_, kRampLanded));
+            const auto feedback = static_cast<float>(feedback_.next(t.feedback, feedbackShare_, kRampLanded));
+            const auto dcBlend = static_cast<float>(dcBlend_.next(dcTarget, feedbackShare_, kRampLanded));
             float fadeIn = 1.f;
             if (fading) {
-                fadeIn = static_cast<float>(sCurve(std::min(1.0, (fadeAt_ + 1) / fadeLength)));
+                fadeIn = static_cast<float>(dsp::sCurve(std::min(1.0, (fadeAt_ + 1) / fadeLength)));
                 ++fadeAt_;
+            }
+            float fresh = 1.f;  // what goes into the lines, after a reset
+            if (freshAt_ < freshLength_) {
+                fresh = static_cast<float>(dsp::sCurve(static_cast<double>(freshAt_ + 1) / freshLength_));
+                ++freshAt_;
             }
             if (warmthMoving) {
                 warmth = std::clamp(warmthPath.next(), 0.0, 1.0);
@@ -453,7 +469,7 @@ private:
                 crossovers_[c].process(crossover, x, low, high);
                 // The high-pass on, the dry is the crossover's all-pass (in phase with the wet's lows).
                 dry[c] = x + highPass * ((low + high) - x);
-                const float lineSource = (1.f - highPass) * x + highPass * high;
+                const float lineSource = fresh * ((1.f - highPass) * x + highPass * high);
 
                 float raw = readVoices(*heard[0], c, voices[0]) * scale[0];
                 if (fading) raw = fadeIn * raw + (1.f - fadeIn) * (readVoices(*heard[1], c, voices[1]) * scale[1]);
@@ -490,7 +506,9 @@ private:
         if (fading_ && fadeAt_ >= fadeLength_) fading_ = false;
     }
 
+    // Every line and filter silent; what goes into the lines fades in again (they hold none of the sound).
     void clearState() noexcept {
+        freshAt_ = 0;
         for (auto& line : lines_) line.reset();
         for (auto& x : crossovers_) x.reset();
         for (auto& lp : lowpasses_) lp.reset();
@@ -499,16 +517,10 @@ private:
         for (auto& warmer : warmers_) warmer.reset();
     }
 
-    // Flushes what has died away to zero, so silence never runs into denormals.
+    // Flushes what has died away to zero, so silence never runs into denormals (the DC blockers flush their own).
     void flushStates() noexcept {
-        const auto flush = [](float& v) { v = static_cast<float>(dsp::flushTiny(v)); };
-        for (auto& x : crossovers_) {
-            for (dsp::Svf* svf : {&x.split, &x.low, &x.high}) {
-                flush(svf->ic1);
-                flush(svf->ic2);
-            }
-        }
-        for (auto& lp : lowpasses_) flush(lp.z);
+        for (auto& x : crossovers_) x.flush();
+        for (auto& lp : lowpasses_) lp.z = dsp::flushTiny(lp.z);
     }
 
     static const std::vector<ParamInfo>& infos() {
@@ -520,13 +532,13 @@ private:
              true},
             {"amount", "Amount", "%", 0.f, 100.f, 50.f},
             {"feedback", "Feedback", "%", 0.f, 100.f, 0.f},
-            {"invert", "Feedback Invert", "", 0.f, 1.f, 0.f, false, offOnLabels()},
+            {"fb_invert", "Feedback Invert", "", 0.f, 1.f, 0.f, false, offOnLabels()},
             {"width", "Width", "%", 0.f, 200.f, 100.f},
             {"offset", "Offset", "\xc2\xb0", 0.f, 180.f, 0.f},  // (a degree sign, in UTF-8)
             {"shape", "Shape", "%", 0.f, 100.f, 0.f},
             {"warmth", "Warmth", "%", 0.f, 100.f, 0.f},
-            {"hp", "High-Pass", "", 0.f, 1.f, 0.f, false, offOnLabels()},
-            {"hp_freq", "High-Pass Freq", "Hz", static_cast<float>(chorus::kMinHighPass),
+            {"hp", "High-pass", "", 0.f, 1.f, 0.f, false, offOnLabels()},
+            {"hp_freq", "High-pass Freq", "Hz", static_cast<float>(chorus::kMinHighPass),
              static_cast<float>(chorus::kMaxHighPass), 100.f, true},
             {"output", "Output", "dB", -36.f, 6.f, 0.f},
             {"mix", "Dry/Wet", "%", 0.f, 100.f, 50.f},
@@ -552,9 +564,9 @@ private:
     std::array<Step, kChunk + 1> rateSteps_{}, amountSteps_{}, shapeSteps_{}, offsetSteps_{}, warmthSteps_{},
         highPassSteps_{};
 
-    // Glided per sample.
-    Ease mix_, gain_, width_, feedback_, highPass_, dcBlend_;
-    Step gainStep_, feedbackStep_;
+    // Glided per sample: each pole's share of the way a sample.
+    dsp::Glide mix_, gain_, width_, feedback_, highPass_, dcBlend_;
+    double gainShare_ = 0.0035, feedbackShare_ = 0.0021;
 
     // Warmth and its filter, and the crossover, while their glides hold still.
     float lowpass_ = 0.f;
@@ -567,6 +579,7 @@ private:
     int current_ = 0;
     bool fading_ = false;
     int fadeAt_ = 0, fadeLength_ = 1440;
+    int freshAt_ = 0, freshLength_ = 240;  // the lines' input fading in after a reset
 
     int displayCount_ = 0;  // samples into the display value
     float peak_ = 0.f;      // the wet's peak over it

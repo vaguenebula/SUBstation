@@ -1,6 +1,5 @@
 #include "devices/ChorusGraph.h"
 
-#include "devices/DisplayClock.h"
 #include "devices/EditorPaint.h"
 #include "input/GestureKey.h"
 #include "model/Device.h"
@@ -30,14 +29,6 @@ constexpr double kFrozenDim = 0.6;
 constexpr int kVibrato = 2;  // the mode's index
 
 double frac(double x) { return x - std::floor(x); }
-
-// `a` mixed with `b` by `t` (0: a), alpha and all.
-QColor mix(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    auto between = [t](double from, double to) { return float(from + (to - from) * t); };
-    return QColor::fromRgbF(between(a.redF(), b.redF()), between(a.greenF(), b.greenF()),
-                            between(a.blueF(), b.blueF()), between(a.alphaF(), b.alphaF()));
-}
 
 QColor scaledAlpha(const QColor& color, double alpha) {
     return withAlpha(color, int(std::lround(color.alpha() * std::clamp(alpha, 0.0, 1.0))));
@@ -185,21 +176,15 @@ void ChorusGraph::sync() {
 }
 
 void ChorusGraph::refreshDisplays() {
-    // The time since the last tick: at least a clock period (so ticks by hand animate as the clock
-    // would), at most 0.1 s for the easing; a longer gap (hidden, or the clock held up) counts whole
-    // towards the values' absence.
-    const double elapsed = clock_.isValid() ? double(clock_.restart()) / 1000.0 : 0.0;
-    if (!clock_.isValid())
-        clock_.start();
-    const double dt = std::clamp(elapsed, kDisplayRefreshMs / 1000.0, 0.1);
-    const double gap = std::max(dt, elapsed);
+    const double dt = tickSeconds();
 
-    // The phase: on at the rate, pulled towards the engine's newest (the first, or after a gap, taken as it is).
+    // The phase: on at the rate, pulled towards the engine's newest (the first values, or those after a while
+    // without any, taken as they are).
     if (!frozen_)
         estimate_ += rate_ * dt;
     const std::vector<float> phases = readDisplay(QStringLiteral("phase"));
     const std::vector<float> levels = readDisplay(QStringLiteral("level"));
-    const bool afresh = !haveValues_ || sinceValues_ + gap > kSnapSeconds;  // (values after a gap: history)
+    const bool afresh = !haveValues_ || sinceValues_ > kSnapSeconds;
     if (!phases.empty()) {
         const double newest = std::isfinite(phases.back()) ? frac(double(phases.back())) : 0.0;
         if (!afresh) {
@@ -211,18 +196,18 @@ void ChorusGraph::refreshDisplays() {
         haveValues_ = true;
         sinceValues_ = 0.0;
     } else {
-        sinceValues_ += gap;
+        sinceValues_ += dt;
     }
     estimate_ = frac(estimate_);
     frozen_ = !enabled_ || !haveValues_ || sinceValues_ > kSnapSeconds;
 
     // The wet's level: its loudest over the last tick's sound, through the meter's ballistics (held without
-    // values). Only the newest values count: the first read (an editor opening, or shown again) brings the
-    // display's whole history, seconds of it, which is no longer sounding.
+    // values). Only the newest values count: a read can bring a backlog (an editor opening, or shown again,
+    // reads the display's history, seconds of it), which is no longer sounding.
     if (frozen_) {
         meter_.reset();
     } else if (!levels.empty()) {
-        const auto recent = afresh ? size_t{1} : size_t(std::ceil(gap * sampleRate() / 128.0)) + 1;
+        const auto recent = size_t(std::ceil(dt * sampleRate() / sub::app::chorusDisplaySamples())) + 1;
         double loudest = -120.0;
         for (auto level = levels.end() - std::ptrdiff_t(std::min(recent, levels.size())); level != levels.end();
              ++level) {
@@ -233,7 +218,7 @@ void ChorusGraph::refreshDisplays() {
     }
     resting_ = frozen_ || meter_.level <= kSilentDb;
     // Resting, the traces hold where they are (a change then reshapes them in place); sound back, they take
-    // the phase again. The first values, or values after a gap, are taken at once either way.
+    // the phase again. The first values, or values after a while without any, are taken at once either way.
     const bool snapped = resting_ && afresh && !phases.empty() && drawn_ != estimate_;
     if (!resting_ || snapped)
         drawn_ = estimate_;
@@ -264,7 +249,7 @@ void ChorusGraph::mousePressEvent(QMouseEvent* event) {
     gesture_ = newGestureKey();
     axis_ = DragAxis::None;
     lastAt_ = event->position();
-    lastRate_ = std::clamp(rate_, sub::app::kChorusMinRate, sub::app::kChorusMaxRate);
+    lastRate_ = std::clamp(rate_, sub::app::chorusMinRate(), sub::app::chorusMaxRate());
     lastAmount_ = amount_;
     startDrag(event->modifiers().testFlag(Qt::ShiftModifier));
     update();
@@ -291,7 +276,7 @@ void ChorusGraph::mouseMoveEvent(QMouseEvent* event) {
     lastAt_ = at;
     if (axis_ == DragAxis::Rate) {
         const double rate = pressedRate_ * std::pow(2.0, (pressedAt_.y() - at.y()) / kRatePixels / scale);
-        lastRate_ = std::clamp(rate, sub::app::kChorusMinRate, sub::app::kChorusMaxRate);
+        lastRate_ = std::clamp(rate, sub::app::chorusMinRate(), sub::app::chorusMaxRate());
         setParams({{QStringLiteral("rate"), std::round(lastRate_ * 1000.0) / 1000.0}}, gesture_);
     } else {
         const double amount = pressedAmount_ + (at.x() - pressedAt_.x()) * 100.0 / kAmountPixels / scale;
@@ -322,8 +307,8 @@ void ChorusGraph::mouseUngrabEvent() {
 QColor ChorusGraph::voiceColour(const ChorusLayout& layout, int channel, int voice) const {
     if (mix_ <= 0.0)
         return scaledAlpha(Theme::kTextDisabled, dim_.value);  // none of it heard
-    QColor colour = mix(channel == 0 ? Theme::kScopeLine : kRightColour, Theme::kText, 0.22 * voice);
-    colour = mix(colour, Theme::kMeterHigh, 0.45 * std::clamp(warmth_ / 100.0, 0.0, 1.0));
+    QColor colour = mixColor(channel == 0 ? Theme::kScopeLine : kRightColour, Theme::kText, 0.22 * voice);
+    colour = mixColor(colour, Theme::kMeterHigh, 0.45 * std::clamp(warmth_ / 100.0, 0.0, 1.0));
     double alpha = (0.55 + 0.45 * glow_.value) * dim_.value;
     if (channel == 1 && layout.mode != kVibrato)
         alpha *= 0.45 + 0.55 * std::min(1.0, std::max(0.0, width_) / 100.0);  // narrow: towards mono
@@ -336,7 +321,8 @@ void ChorusGraph::drawVoices(SgPainter& p, const ChorusLayout& layout, double al
     const QRectF r = plot();
     const double now = nowX(), span = now - r.left();
     const double window = std::max(window_.value, 1e-6);
-    const double stroke = 1.5 + std::clamp(feedback_ / 100.0, 0.0, 1.0);
+    const double feedback = layout.mode == kVibrato ? 0.0 : std::clamp(feedback_ / 100.0, 0.0, 1.0);  // (none there)
+    const double stroke = 1.5 + feedback;
     const bool heard = mix_ > 0.0;
     const int voices = sub::app::chorusVoices(layout);
     const int columns = std::max(1, int(std::ceil(span)));

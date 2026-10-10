@@ -9,15 +9,17 @@
 // turning the Amount visibly grows the swing; the centre is dashed (in Auto it
 // rises and falls with the Amount). Left voices are orange, right ones blue,
 // each voice of a side a little lighter; Warmth tints them towards red, Feedback
-// thickens them, a narrow Width fades the right side towards the left.
+// thickens them (not in Vibrato, which has none), a narrow Width fades the right
+// side towards the left.
 //
 // Every delay is worked out by the engine's own maths (sub::app::chorusDelayMs,
 // the application layer's wrapper of ChorusDesign.h), from the LFO's phase the
 // engine publishes (display `phase`): an estimate that runs on at the rate each
 // display tick and is pulled towards the engine's newest value (snapping to the
-// first after a gap), so the traces scroll smoothly at the display's rate while
-// the dots move as the delays do. The wet's level (display `level`), through
-// meter ballistics, makes the traces and the dots glow as sound passes.
+// first after a while without any), so the traces scroll smoothly at the
+// display's rate while the dots move as the delays do. The wet's level (display
+// `level`), through meter ballistics, makes the traces and the dots glow as
+// sound passes.
 // Mode, Taps, Time, Amount, Shape and Offset changes ease (the old voices, their
 // dots and their axis' figures fading out as the new fade in, as the engine
 // cross-fades them); the device off or nothing rendering, the traces stop and
@@ -33,7 +35,6 @@
 #include "devices/EditorPaint.h"
 
 #include <QColor>
-#include <QElapsedTimer>
 #include <QPointF>
 #include <QRectF>
 #include <QString>
@@ -165,7 +166,6 @@ private:
     double sinceValues_ = 0.0;  // seconds of ticks since the last values
     bool frozen_ = true;
     bool resting_ = true;
-    QElapsedTimer clock_;
 
     // A drag: its merge key ("": none), where it started (or Shift last changed) and the values then, and
     // where it was last and what that set (held to the ranges, not yet rounded).

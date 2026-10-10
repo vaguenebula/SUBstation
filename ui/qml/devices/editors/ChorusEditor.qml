@@ -7,10 +7,11 @@ import SUBstation
 // step with the sound, glowing as it passes; drag up and down for the Rate,
 // across for the Amount), and under it the high-pass with its frequency and, in
 // Chorus mode, Taps and Time; beside it Rate over Amount, Feedback (with Ø, its
-// polarity) over Warmth, Width (in Vibrato: Offset over Shape), and Output over
-// Dry/Wet. Every control shows its parameter as it is now (its automation's
-// value while that plays), sets it undoably, touches it when pressed, and
-// right-click gives its menu.
+// polarity; both dimmed in Vibrato, which has no feedback, but still settable)
+// over Warmth, Width (in Vibrato: Offset over Shape), and Output over Dry/Wet.
+// Every control shows its parameter as it is now (its automation's value while
+// that plays), sets it undoably, touches it when pressed, and right-click gives
+// its menu.
 Item {
     id: editor
 
@@ -29,6 +30,8 @@ Item {
     // The mode: 0 Chorus, 1 Ensemble, 2 Vibrato.
     readonly property int mode: p.get("mode") ? p.get("mode").index : 0
     readonly property bool highPassOn: p.get("hp") ? p.get("hp").value >= 0.5 : false
+    // A control that does nothing now (in this mode, or with its switch off) but can still be set: dimmed.
+    readonly property real dim: 0.55
 
     // The cross-fades between what one mode shows and another's (the strip's Taps and Time or its voices,
     // column 3's Width or Offset and Shape): 1 for the first, 0 for the second, eased. The old set fades out
@@ -57,8 +60,8 @@ Item {
         id: p
         trackId: editor.trackId
         deviceId: editor.deviceId
-        ids: ["mode", "taps", "time", "rate", "amount", "feedback", "invert", "width", "offset", "shape", "warmth", "hp",
-              "hp_freq", "output", "mix"]
+        ids: ["mode", "taps", "time", "rate", "amount", "feedback", "fb_invert", "width", "offset", "shape", "warmth",
+              "hp", "hp_freq", "output", "mix"]
     }
 
     // How many voices a side the strip names outside Chorus mode (kept while it fades out).
@@ -113,7 +116,8 @@ Item {
             }
             ToolTip.visible: graphHover.hovered && !graphHover.point.pressedButtons
             ToolTip.delay: 700
-            ToolTip.text: qsTr("Each voice's delay as it moves, in step with the sound (orange left, blue right). Drag up and down for the Rate, across for the Amount")
+            ToolTip.text: qsTr("Each voice's delay as it moves, in step with the sound (orange left, blue right). "
+                               + "Drag up and down for the Rate, across for the Amount")
         }
 
         Item {
@@ -128,12 +132,13 @@ Item {
                 width: 22
                 param: p.get("hp")
                 iconName: "filter_highpass"
-                tooltip: qsTr("High-pass: below this frequency the sound isn't chorused (the lows pass through unmodulated)")
+                tooltip: qsTr("High-pass: below this frequency the sound isn't chorused "
+                              + "(the lows pass through unmodulated)")
             }
+            // As wide as its widest value and the automation dot (the box's implicit width, from sampleText).
             ParamBox {
                 objectName: "hpFreq"
                 x: 25
-                width: 54
                 param: p.get("hp_freq")
                 logScale: true
                 decimals: 0
@@ -141,8 +146,9 @@ Item {
                 formatter: v => param ? param.format(v) : ""
                 parser: text => param ? param.parse(text) : null
                 sampleText: "2.00 kHz"
-                tooltip: qsTr("High-pass: below this frequency the sound isn't chorused (the lows pass through unmodulated)")
-                opacity: editor.highPassOn ? 1 : 0.5
+                tooltip: qsTr("High-pass: below this frequency the sound isn't chorused "
+                              + "(the lows pass through unmodulated)")
+                opacity: editor.highPassOn ? 1 : editor.dim
                 Behavior on opacity {
                     NumberAnimation {
                         duration: 120
@@ -150,14 +156,20 @@ Item {
                 }
             }
 
-            // Chorus mode's Taps and Time.
+            // Chorus mode's Taps and Time, at the strip's right end: Time as wide as its longest choice with the
+            // arrow, the Taps buttons 4 px before it, their caption 4 px before them.
             Item {
                 id: chorusOptions
                 anchors.fill: parent
                 opacity: Math.max(0, 2 * editor.chorusShown - 1)
                 visible: opacity > 0
 
-                readonly property int tapsX: 138  // the first Taps button; the caption ends 4 px before it
+                readonly property real tapsX: time.x - 4 - 34  // the first Taps button (two of 16, 2 apart)
+
+                FontMetrics {
+                    id: timeFont
+                    font: time.button.font
+                }
 
                 EditorCaption {
                     objectName: "tapsCaption"
@@ -177,16 +189,20 @@ Item {
                         param: p.get("taps")
                         choice: index
                         text: modelData
-                        tooltip: qsTr("Taps: one modulated delay a side (simpler and thicker, as a pedal) or two moving opposite ways")
+                        tooltip: qsTr("Taps: one modulated delay a side (simpler and thicker, as a pedal) "
+                                      + "or two moving opposite ways")
                     }
                 }
                 ParamChoice {
+                    id: time
                     objectName: "time"
-                    x: 176
-                    width: parent.width - x
+                    x: parent.width - width
+                    width: Math.ceil(names.reduce((widest, name) => Math.max(widest, timeFont.advanceWidth(name)), 0))
+                           + button.leftPadding + button.rightPadding
                     anchors.verticalCenter: parent.verticalCenter
                     param: p.get("time")
-                    tooltip: qsTr("Time: the delays' length. Auto follows the Amount (the classic chorus); a fixed time holds still, for basses and guitars")
+                    tooltip: qsTr("Time: the delays' length. Auto follows the Amount (the classic chorus); "
+                                  + "a fixed time holds still, for basses and guitars")
                 }
             }
             // Ensemble's and Vibrato's voices instead.
@@ -242,19 +258,25 @@ Item {
             id: feedback
             objectName: "feedback"
             x: knobs.column(1) + knobs.inset
+            opacity: editor.mode !== 2 ? 1 : editor.dim
             param: p.get("feedback")
             title: qsTr("Feedback")
-            tooltip: qsTr("Feedback: how much of each side's output goes back into its delays")
+            tooltip: qsTr("Feedback: how much of each side's output goes back into its delays (not in Vibrato)")
         }
         ParamButton {
-            objectName: "invert"
+            objectName: "fbInvert"
             x: feedback.x + feedback.width
             y: feedback.y + feedback.knob.y + feedback.knob.height / 2 - height / 2
             width: editor.invertWidth
-            param: p.get("invert")
+            opacity: editor.mode !== 2 ? 1 : editor.dim
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: 120
+                }
+            }
+            param: p.get("fb_invert")
             text: "Ø"
             tooltip: qsTr("Invert the feedback's polarity: hollow at high Feedback (not in Vibrato)")
-            enabled: editor.mode !== 2
         }
         EditorKnob {
             objectName: "warmth"
@@ -262,7 +284,8 @@ Item {
             y: knobs.bottomRow
             param: p.get("warmth")
             title: qsTr("Warmth")
-            tooltip: qsTr("Warmth: a subtle distortion and darkening of the chorused sound (a distortion of its own at Amount 0)")
+            tooltip: qsTr("Warmth: a subtle distortion and darkening of the chorused sound "
+                          + "(a distortion of its own at Amount 0)")
         }
 
         // The mode's column: Width, or in Vibrato Offset over Shape.
