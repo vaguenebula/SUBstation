@@ -3,6 +3,7 @@
 #include "devices/DisplayClock.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "audio/BridgeTypes.h"
 #include "audio/EngineBridge.h"
@@ -118,6 +119,7 @@ void DeviceCanvas::readDevice() {
     defaults_.clear();
     automatable_.clear();
     displays_.clear();
+    displaySamples_.clear();
     const bool alive = device() != nullptr;
     if (alive) {
         for (const sub::app::ProcessorParam& param : session_->bridge()->deviceParams(trackId_, deviceId_)) {
@@ -126,8 +128,10 @@ void DeviceCanvas::readDevice() {
                 automatable_.append(param.id);
         }
         const QList<sub::app::ProcessorDisplay> displays = session_->bridge()->processorDisplays(trackId_, deviceId_);
-        for (int i = 0; i < displays.size(); ++i)
+        for (int i = 0; i < displays.size(); ++i) {
             displays_.insert(displays[i].id, i);
+            displaySamples_.insert(displays[i].id, std::max(1, displays[i].samplesPerValue));
+        }
     }
     if (alive != alive_) {
         alive_ = alive;
@@ -239,6 +243,15 @@ std::pair<qint64, std::vector<float>> DeviceCanvas::readDisplayAt(const QString&
 }
 
 std::vector<float> DeviceCanvas::readDisplay(const QString& displayId) { return readDisplayAt(displayId).second; }
+
+std::vector<float> DeviceCanvas::readRecent(const QString& displayId, double seconds) {
+    std::vector<float> values = readDisplay(displayId);
+    const double perValue = displaySamples_.value(displayId, 1);
+    const auto recent = static_cast<size_t>(std::max(1.0, std::ceil(seconds * sampleRate() / perValue)));
+    if (values.size() > recent)
+        values.erase(values.begin(), values.end() - static_cast<std::ptrdiff_t>(recent));
+    return values;
+}
 
 double DeviceCanvas::tickSeconds() {
     constexpr double kTick = kDisplayRefreshMs / 1000.0;

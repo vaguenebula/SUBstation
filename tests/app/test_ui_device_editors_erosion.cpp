@@ -202,11 +202,33 @@ private Q_SLOTS:
     }
 
     void opensAsTheDeviceIs() {
-        // An editor opened on an Erosion playing its sine alone shows Width dimmed and the sine's glyph lit at
-        // once (the graph's weights, which the editor binds to, are the device's as it is made).
+        // The graph's Noise Blend weights, which the editor's glyphs and Width's dimming bind to, are only ever
+        // the device's: given its session, track and device one at a time (as QML sets them), on a device left
+        // at Blend 100 (the noise alone), it never reports what value() reads before the device is there (0s:
+        // Blend 0's weights, the sine alone).
         track_ = audioTrackWith(tone(3000.0, kSampleRate), QStringLiteral("tone"), 1.0);
         QVERIFY(!track_.isEmpty());
         device_ = editor()->addDevice(track_, QStringLiteral("erosion"));
+        QCOMPARE(value("blend"), 100.0);
+        {
+            ErosionGraph graph;
+            QList<QPair<double, double>> reported;
+            connect(&graph, &ErosionGraph::weightsChanged, this,
+                    [&] { reported.append({graph.sineWeight(), graph.noiseWeight()}); });
+            graph.setSession(session_.get());
+            graph.setTrackId(track_);
+            graph.setDeviceId(device_);
+            QVERIFY(graph.alive());
+            for (const auto& [sine, noise] : std::as_const(reported)) {
+                QVERIFY2(sine == 0.0 && noise == 1.0,
+                         qPrintable(QStringLiteral("reported %1, %2").arg(sine).arg(noise)));
+            }
+            QCOMPARE(graph.sineWeight(), 0.0);
+            QCOMPARE(graph.noiseWeight(), 1.0);
+        }
+
+        // An editor opened on an Erosion playing its sine alone shows Width dimmed and the sine's glyph lit at
+        // once.
         set("blend", 0.0);
         QQuickItem* view = show(QStringLiteral("erosion"), track_, device_);
         QVERIFY(view);
@@ -574,6 +596,41 @@ private Q_SLOTS:
         refreshDisplays();
         QVERIFY2(graph->erosionDb() > -40.0, qPrintable(QString::number(graph->erosionDb())));
         QVERIFY(graph->activity() > 0.1 && scope->activity() > 0.1);
+    }
+
+    void newestValuesAtEachDisplaysRate() {
+        // What the graph and the scope read the `erosion` display with (DeviceCanvas::readRecent): of what came
+        // since the last read, only the newest values covering the time asked, at the display's own rate (the
+        // meter's, a value per many samples; the input's, a value per sample); at least one; none if none came.
+        QVERIFY(showErosion());
+        set("amount", 50.0);
+        struct Probe : DeviceCanvas {
+            void paint(SgPainter&) override {}
+        } all, recent;
+        for (Probe* probe : {&all, &recent}) {
+            probe->setSession(session_.get());
+            probe->setTrackId(track_);
+            probe->setDeviceId(device_);
+        }
+        int meterRate = 0;
+        for (const ProcessorDisplay& display : bridge()->processorDisplays(track_, device_)) {
+            if (display.id == QLatin1String("erosion"))
+                meterRate = display.samplesPerValue;
+        }
+        QVERIFY(meterRate > 1);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        const std::vector<float> meter = all.readDisplay(QStringLiteral("erosion"));
+        const std::vector<float> input = all.readDisplay(QStringLiteral("input"));
+        const std::vector<float> newestMeter =
+            recent.readRecent(QStringLiteral("erosion"), ErosionGraph::kRecentSeconds);
+        const std::vector<float> newestInput = recent.readRecent(QStringLiteral("input"), 0.01);
+        const auto meterCount = size_t(std::ceil(ErosionGraph::kRecentSeconds * kSampleRate / meterRate));
+        QVERIFY(meter.size() > meterCount && input.size() > size_t(kSampleRate / 100));
+        QVERIFY(newestMeter == std::vector<float>(meter.end() - std::ptrdiff_t(meterCount), meter.end()));
+        QVERIFY(newestInput == std::vector<float>(input.end() - kSampleRate / 100, input.end()));
+        engine()->renderOffline(0.0, kSampleRate / 10);
+        QCOMPARE(recent.readRecent(QStringLiteral("erosion"), 0.0).size(), size_t(1));
+        QVERIFY(recent.readRecent(QStringLiteral("erosion"), 1.0).empty());
     }
 
     void displaysReachTheEditor() {

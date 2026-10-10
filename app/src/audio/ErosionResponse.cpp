@@ -47,13 +47,11 @@ QPair<double, double> erosionBlendWeights(double blend) {
     return {weights.sine, weights.noise};
 }
 
-double erosionRecentDb(const std::vector<float>& values, double sampleRate) {
-    const auto recent = static_cast<size_t>(
-        std::max(1.0, std::ceil(kErosionRecentSeconds * sampleRate / sub::erosion::kMeterSamples)));
+double erosionPeakDb(const std::vector<float>& values) {
     double db = kErosionFloorDb;
-    for (size_t i = values.size() - std::min(values.size(), recent); i < values.size(); ++i) {
-        if (std::isfinite(values[i]))
-            db = std::max(db, double(values[i]));
+    for (const float value : values) {
+        if (std::isfinite(value))
+            db = std::max(db, double(value));
     }
     return db;
 }

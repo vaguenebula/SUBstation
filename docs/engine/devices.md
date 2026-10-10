@@ -1289,8 +1289,8 @@ clean delay of its latency.
   and `stereoSpread` the blend's and Stereo's gains. The application layer's
   [app/src/audio/ErosionResponse.h](../../app/src/audio/ErosionResponse.h) (`erosionBandMagnitude`,
   `erosionBandEdges`, `erosionExcursionText`...) wraps them for the editor, so the band drawn is the filter that
-  plays; `erosionRecentDb` reads the `erosion` display's newest values at its rate (`kMeterSamples`) and floor
-  (`kFloorDb`: the application layer's `kErosionFloorDb` is checked equal to it).
+  plays; `erosionPeakDb` reads the `erosion` display's values against its floor (`kFloorDb`: the application
+  layer's `kErosionFloorDb` is checked equal to it).
 - About 0.21 % of one core at 48 kHz stereo, at the defaults and at Amount 100 %, Noise Blend 50 %, Stereo 100 %
   (0.12 % at Amount 0); about 0.26 % with all five controls gliding all the time (measured with
   `builtin_devices_bench` on a 2.1 GHz Xeon).

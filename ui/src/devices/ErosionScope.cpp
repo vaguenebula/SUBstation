@@ -111,7 +111,7 @@ void ErosionScope::refreshDisplays() {
     cloudMoved = sideRms_.step(cloudEase, 1e-3) || cloudMoved;
 
     // How much is being eroded now, as the graph has it: the newest values (the read may hold a backlog's).
-    const double db = sub::app::erosionRecentDb(readDisplay(QStringLiteral("erosion")), sampleRate());
+    const double db = sub::app::erosionPeakDb(readRecent(QStringLiteral("erosion"), ErosionGraph::kRecentSeconds));
     const bool moved = ErosionGraph::easeActivity(activity_, db, dt);
 
     // Traced while it erodes, and for a moment after a change; in silence it holds still.

@@ -90,6 +90,10 @@ public:
     std::vector<float> readDisplay(const QString& displayId);
     // The same with the absolute index of the first value.
     std::pair<qint64, std::vector<float>> readDisplayAt(const QString& displayId);
+    // The newest of the display's values since the last call: those covering the last `seconds` of audio
+    // at its rate (its samples per value), at least one if any came. A read can hold a long backlog (an
+    // editor shown, or shown again, after the sound stopped), where a meter or an activity wants what is now.
+    std::vector<float> readRecent(const QString& displayId, double seconds);
 
     // Reads everything again, as a change of the device would.
     Q_INVOKABLE void refresh();
@@ -136,6 +140,7 @@ private:
     QStringList automatable_;         // those that can follow automation
     bool following_ = false;          // any of them does now
     QMap<QString, int> displays_;     // display id -> index
+    QMap<QString, int> displaySamples_;  // display id -> the samples each value stands for
     QHash<QString, quint64> positions_;  // "<processor>:<display>" -> where to read from
     QList<QMetaObject::Connection> connections_;
     DoubleClicks doubleClicks_;

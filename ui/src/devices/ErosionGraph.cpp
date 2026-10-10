@@ -173,7 +173,7 @@ void ErosionGraph::refreshDisplays() {
     const double rate = sampleRate();
     const std::vector<float> input = readDisplay(QStringLiteral("input"));
     const std::vector<float> output = readDisplay(QStringLiteral("output"));
-    const std::vector<float> erosion = readDisplay(QStringLiteral("erosion"));
+    const std::vector<float> erosion = readRecent(QStringLiteral("erosion"), kRecentSeconds);
 
     // The spectra, while sound comes or they still show some (falling back): silence costs no FFT.
     const bool wasLive = !inColumns_.empty() || !outColumns_.empty();
@@ -189,7 +189,7 @@ void ErosionGraph::refreshDisplays() {
 
     // How much is being eroded now (not a backlog's worth: shown after the sound stopped, the first read
     // holds the loud past): rising quickly, falling back over half a second.
-    erosionDb_ = sub::app::erosionRecentDb(erosion, rate);
+    erosionDb_ = sub::app::erosionPeakDb(erosion);
     const bool moved = easeActivity(activity_, erosionDb_, dt);
     if (activity_.value > 0.0) {
         shimmerStep(dt);
@@ -324,9 +324,7 @@ void ErosionGraph::wheelEvent(QWheelEvent* event) {
     }
     // Notches in a quick burst are one undo step. Ctrl turns finely (Shift+wheel scrolls the device chain
     // before the graph sees it).
-    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGestureMs)
-        wheelGesture_ = newGestureKey();
-    wheelClock_.start();
+    const QString burst = wheelGesture_.key();
     const double octaves = delta / 120.0 * ((event->modifiers() & Qt::ControlModifier) ? 1.0 / 16.0 : kWheelOctaves);
     const double width = rounded(
         std::clamp(width_ * std::exp2(octaves), sub::app::kErosionMinWidth, sub::app::kErosionMaxWidth), 0.001);
@@ -337,7 +335,7 @@ void ErosionGraph::wheelEvent(QWheelEvent* event) {
         pressedY_ = virtual_.y();
         apply();
     } else {
-        setParams({{QStringLiteral("width"), width}}, wheelGesture_, tr("Change Erosion Width"));
+        setParams({{QStringLiteral("width"), width}}, burst, tr("Change Erosion Width"));
     }
     event->accept();
 }

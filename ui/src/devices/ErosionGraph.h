@@ -23,8 +23,8 @@
 #include "audio/ErosionResponse.h"
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
+#include "input/GestureKey.h"
 
-#include <QElapsedTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include <random>
@@ -51,7 +51,6 @@ public:
     static constexpr double kWidthPixels = 40.0;       // Alt-dragged up this far, the Filter Width doubles
     static constexpr double kWheelOctaves = 0.25;      // a wheel notch multiplies it by 2^0.25 (Ctrl: 2^(1/16))
     static constexpr double kFine = 0.15;              // Shift-dragged, the dot moves this share of the mouse's way
-    static constexpr int kWheelGestureMs = 400;        // wheel notches closer than this are one undo step
     static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout
     static constexpr double kDotRadius = 5.0;          // the dot's ring (2 px wide),
     static constexpr double kHaloGrowth = 6.0;         // and how far its halo reaches past it, eroding hard
@@ -62,6 +61,9 @@ public:
     static constexpr double kActivitySpanDb = 48.0;
     static constexpr double kActivityRiseSeconds = 0.037;
     static constexpr double kActivityFallSeconds = 0.19;
+    // What a refresh counts of the `erosion` display (the graph's and the scope's): the newest values, those
+    // covering this long (about two refreshes; DeviceCanvas::readRecent), not a backlog's.
+    static constexpr double kRecentSeconds = 0.035;
 
     // `activity` moved `dtSeconds` on towards what `erosionDb` says; whether it moved.
     static bool easeActivity(Eased& activity, double erosionDb, double dtSeconds);
@@ -96,7 +98,7 @@ public:
     // How much the sound is being eroded (0..1, eased): what the shimmer, the halo and the spike's trembling follow.
     double activity() const { return activity_.value; }
     // How much the last refresh says the device erodes now (dB; sub::app::kErosionFloorDb without any): the
-    // newest `erosion` values it read (sub::app::erosionRecentDb), not a backlog's.
+    // most of the newest `erosion` values it read (kRecentSeconds of them, sub::app::erosionPeakDb).
     double erosionDb() const { return erosionDb_; }
     // Whether the input's spectrum shows anything above its floor.
     bool spectrumLive() const { return !inColumns_.empty(); }
@@ -147,8 +149,8 @@ private:
     std::pair<double, double> edges_{0.0, 0.0};
     bool altHeld_ = false, animating_ = false;
     Drag drag_ = Drag::None;
-    QString gesture_, wheelGesture_;  // merge keys: the drag's, the wheel's burst
-    QElapsedTimer wheelClock_;
+    QString gesture_;            // the drag's merge key
+    WheelGesture wheelGesture_;  // the wheel's: one per burst of notches
     // Where the drag has the dot (not held to the plot: dragged out and back, it comes back under the
     // mouse), and where the mouse was.
     QPointF virtual_, last_;
