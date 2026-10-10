@@ -34,9 +34,9 @@ struct LogAxis {
     double from = 0.0, length = 1.0;
 
     double position(double value) const { return from + std::log(value / low) / std::log(high / low) * length; }
-    // The value at `position`, held to low..high.
-    double valueAt(double position) const {
-        const double fraction = std::clamp((position - from) / length, 0.0, 1.0);
+    // The value at pixel `at`, held to low..high.
+    double valueAt(double at) const {
+        const double fraction = std::clamp((at - from) / length, 0.0, 1.0);
         return low * std::pow(high / low, fraction);
     }
 };

@@ -48,8 +48,8 @@ TEST_CASE("a name is appended with one separator, none after a drive alone on Wi
     std::string drive = "C:";
     appendName(drive, std::string_view("a.wav"));
     CHECK_EQ(drive, kSeparator == '\\' ? std::string("C:a.wav") : std::string("C:/a.wav"));
-    CHECK(isSeparator('/'));
-    CHECK_EQ(isSeparator('\\'), kSeparator == '\\');
+    static_assert(isSeparator('/'));
+    static_assert(isSeparator('\\') == (kSeparator == '\\'));
 }
 
 TEST_CASE("paths compare as the file system does") {

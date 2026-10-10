@@ -26,6 +26,11 @@ add_library(sub_intelligence STATIC
     src/similarity/Similarity.cpp
     src/similarity/SoundIndex.cpp
     src/similarity/SoundStore.cpp)
+if (WIN32)
+    # <windows.h> comes in through miniaudio's and Essentia's headers: without
+    # NOMINMAX its min and max macros break std::min and std::max.
+    target_compile_definitions(sub_intelligence PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+endif()
 add_library(sub::intelligence ALIAS sub_intelligence)
 target_include_directories(sub_intelligence PUBLIC src)
 # The operating system: sub_platform (platform/), which the other layers share.
