@@ -1,18 +1,21 @@
 // The Gate's editor (ui/qml/devices/editors/GateEditor.qml, GateGraph,
 // GateKeyGraph) loaded as the device view loads it, over a real engine: it fits
-// the view's height; every control is bound to its parameter (undoably, its
-// value as it is now); the threshold and return lines (either taken when they
-// are one) and the key filter's dot drag in one undo step each, the lines give
-// their parameters' menus; what the engine renders reaches the display, which
-// scrolls and stops, goes idle when nothing comes, and repaints only for what
-// shows; the key dot is blue for the key's level now, falls quickly, and the
-// blue where the gate passes shows over the levels; listening, the label pulses
-// only while sound comes; the sidechain section folds and unfolds, follows the
-// sidechain and its EQ (what is set for later dimmed but settable), its cells
-// and the Lookahead list as wide as their values; the key filter's curve is the
-// engine's, its dot follows the mouse, Ctrl and the wheel set the bell's Q. With
-// SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
+// the view's height, and is as wide as its texts need in any font (every
+// caption, readout and list whole); every control is bound to its parameter
+// (undoably, its value as it is now); the threshold and return lines (either
+// taken when they are one) and the key filter's dot drag in one undo step each,
+// the lines give their parameters' menus; what the engine renders reaches the
+// display, which scrolls and stops, goes idle when nothing comes, and repaints
+// only for what shows; the key dot is blue for the key's level now, falls
+// quickly, and the blue where the gate passes shows over the levels; listening,
+// the label pulses only while sound comes; the sidechain section folds and
+// unfolds, follows the sidechain and its EQ (what is set for later dimmed but
+// settable), its cells as wide as their texts; the key filter's curve is the
+// engine's, its dot follows the mouse, Ctrl and the wheel set the bell's Q.
+// With SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
 
+#include <QFontMetricsF>
+#include <QJSValue>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -133,6 +136,38 @@ class TestUiDeviceEditorsGate : public QObject, public sub::app::test::EditorHar
         return item->mapRectToItem(in, QRectF(0, 0, item->width(), item->height()));
     }
 
+    // What of an EditorKnob's texts isn't whole (empty if all are): its caption, and every text its readout
+    // takes across the knob's range (in its own scale; the parameter's, or its formatter's), in the readout's
+    // font. The caption is centred over the knob.
+    QString cutShort(QQuickItem* view, const char* name) {
+        QQuickItem* cell = find(view, QString::fromLatin1(name));
+        const KnobItem* dial = knob(view, name);
+        if (!cell || !dial)
+            return QStringLiteral("%1: none").arg(QLatin1String(name));
+        QQuickItem* caption = cell->childItems().first();  // (caption, knob, readout)
+        QQuickItem* readout = cell->childItems().last();
+        if (caption->property("truncated").toBool() || caption->property("contentWidth").toDouble() > caption->width())
+            return QStringLiteral("%1: its caption").arg(QLatin1String(name));
+        if (std::abs(rectIn(caption, view).center().x() - rectIn(cell->childItems().at(1), view).center().x()) > 0.5)
+            return QStringLiteral("%1: its caption off its knob").arg(QLatin1String(name));
+        auto* param = cell->property("param").value<QObject*>();
+        const QJSValue formatter = cell->property("formatter").value<QJSValue>();
+        const QFontMetricsF metrics(readout->property("font").value<QFont>());
+        for (int i = 0; i <= 200; ++i) {
+            const double t = i / 200.0;
+            const double v = dial->logScale() ? dial->from() * std::pow(dial->to() / dial->from(), t)
+                                              : dial->from() + (dial->to() - dial->from()) * t;
+            QString text;
+            if (formatter.isCallable())
+                text = formatter.call({QJSValue(v)}).toString();
+            else
+                QMetaObject::invokeMethod(param, "format", Q_RETURN_ARG(QString, text), Q_ARG(double, v));
+            if (text.isEmpty() || metrics.horizontalAdvance(text) > readout->width())
+                return QStringLiteral("%1: \"%2\" in %3 px").arg(QLatin1String(name), text).arg(readout->width());
+        }
+        return {};
+    }
+
     double latencyOf(const Shown& shown) {
         const auto id = bridge()->engineDeviceId(shown.track, shown.device);
         return id ? engine()->processorInfo(*id).latency : -1;
@@ -162,7 +197,9 @@ private Q_SLOTS:
         QQuickItem* view = shown.view;
         QVERIFY2(view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(view->implicitWidth(), 566.0);
+        // As wide as it lays itself out (each part as its texts need: checked below).
+        const double folded = view->property("foldedWidth").toDouble();
+        QCOMPARE(view->implicitWidth(), folded);
 
         // Every control, each at its parameter's default.
         const char* names[] = {"threshold", "return", "floor", "attack", "hold", "release", "flip", "lookahead",
@@ -208,11 +245,42 @@ private Q_SLOTS:
         QCOMPARE(graph.top(), 6.0);
         QCOMPARE(graph.bottom(), view->height() - 6);
         for (const char* name : {"threshold", "return", "floor", "attack", "hold", "release", "flip", "lookahead",
-                                 "sidechainFold"}) {
+                                 "lookaheadCaption", "sidechainFold"}) {
             const QRectF rect = rectIn(find(view, QString::fromLatin1(name)), view);
             QVERIFY2(body.adjusted(8, 6, -8, -6).contains(rect), name);
             QVERIFY2(!rect.intersects(graph), name);
         }
+        // The knobs in a grid of equal cells 4 px apart, 10 px after the display; the column beside them 8 px
+        // after it, Flip, the Lookahead list and its caption spanning it, and the editor ending 8 px after it.
+        const double cell = rectIn(find(view, QStringLiteral("threshold")), view).width();
+        const char* grid[2][3] = {{"threshold", "return", "floor"}, {"attack", "hold", "release"}};
+        for (const auto& row : grid) {
+            double left = graph.right() + 10;
+            for (const char* name : row) {
+                const QRectF rect = rectIn(find(view, QString::fromLatin1(name)), view);
+                QCOMPARE(rect.left(), left);
+                QCOMPARE(rect.width(), cell);
+                left = rect.right() + 4;
+            }
+        }
+        const QRectF side = rectIn(find(view, QStringLiteral("gateSide")), view);
+        QCOMPARE(side.left(), rectIn(find(view, QStringLiteral("floor")), view).right() + 8);
+        for (const char* name : {"flip", "lookahead", "lookaheadCaption"}) {
+            const QRectF rect = rectIn(find(view, QString::fromLatin1(name)), view);
+            QCOMPARE(rect.left(), side.left());
+            QCOMPARE(rect.right(), side.right());
+        }
+        QCOMPARE(side.right() + 8, folded);
+        // Every text whole: the knobs' captions and readouts (whatever their values), the column's caption,
+        // Flip's name (with the room round it a button's face has).
+        for (const char* name : {"threshold", "return", "floor", "attack", "hold", "release"}) {
+            const QString problem = cutShort(view, name);
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
+        }
+        QQuickItem* lookaheadCaption = find(view, QStringLiteral("lookaheadCaption"));
+        QVERIFY2(lookaheadCaption->property("contentWidth").toDouble() <= lookaheadCaption->width(),
+                 qPrintable(QString::number(lookaheadCaption->property("contentWidth").toDouble())));
+        QVERIFY(button(view, "flip")->implicitWidth() <= button(view, "flip")->width());
         QTest::qWait(50);
         const QImage shot = grab();
         save(shot, QStringLiteral("gate-idle.png"));
@@ -671,7 +739,8 @@ private Q_SLOTS:
         const double sectionWidth = view->property("sectionWidth").toDouble();
         click(find(view, QStringLiteral("sidechainFold")));
         QTRY_COMPARE_WITH_TIMEOUT(section->width(), sectionWidth, 300);
-        QTRY_COMPARE(view->implicitWidth(), 566.0 + sectionWidth + 13);
+        const double folded = view->property("foldedWidth").toDouble();
+        QTRY_COMPARE(view->implicitWidth(), folded + sectionWidth + 13);
         QVERIFY(view->implicitHeight() <= bodyHeight());
         QVERIFY(fitted());
         const QRectF inside = rectIn(section, view);
@@ -682,6 +751,28 @@ private Q_SLOTS:
             QVERIFY2(item, name);
             QVERIFY2(inside.contains(rectIn(item, view)), name);
         }
+        // Along its top, the source, Listen and EQ from its left edge, 6 px apart, the types side by side at its
+        // right edge, after them; under them the knobs spanning it, each cell as wide as its texts need.
+        double left = inside.left() - 6;
+        for (const char* name : {"sidechainSource", "sc_listen", "sc_eq"}) {
+            const QRectF rect = rectIn(find(view, QString::fromLatin1(name)), view);
+            QCOMPARE(rect.left(), left + 6);
+            left = rect.right();
+        }
+        QVERIFY(rectIn(find(view, QStringLiteral("eqType0")), view).left() >= left + 2);
+        QCOMPARE(rectIn(find(view, QStringLiteral("eqType5")), view).right(), inside.right());
+        QCOMPARE(rectIn(find(view, QStringLiteral("sc_gain")), view).left(), inside.left());
+        QCOMPARE(rectIn(find(view, QStringLiteral("sc_eq_gain")), view).right(), inside.right());
+        for (const char* name : {"sc_gain", "sc_mix", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"}) {
+            const QString problem = cutShort(view, name);
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
+        }
+        // "No Sidechain" whole beside its arrow; "EQ" inside its button, 2 px clear of either side.
+        QQuickItem* sourceLabel = find(view, QStringLiteral("sidechainSource"))
+                                      ->property("contentItem").value<QQuickItem*>()->childItems().first();
+        QVERIFY(!sourceLabel->property("truncated").toBool());
+        QQuickItem* eq = button(view, "sc_eq");
+        QVERIFY(eq->property("implicitContentWidth").toDouble() + 4 <= eq->width());
         QVERIFY(rectIn(shown.graph, view).left() >= inside.right() + 6);
         auto enabled = [&](const char* name) { return find(view, QString::fromLatin1(name))->isEnabled(); };
         auto checked = [&](int type) {
@@ -790,9 +881,9 @@ private Q_SLOTS:
         // Shown again (the editor made anew), it keeps its section unfolded; folded, the width comes back.
         QQuickItem* again = show(QStringLiteral("gate"), shown.track, shown.device);
         QVERIFY(again);
-        QCOMPARE(again->implicitWidth(), 566.0 + sectionWidth + 13);
+        QCOMPARE(again->implicitWidth(), folded + sectionWidth + 13);
         click(find(again, QStringLiteral("sidechainFold")));
-        QTRY_COMPARE(again->implicitWidth(), 566.0);
+        QTRY_COMPARE(again->implicitWidth(), folded);
     }
 
     void keyGraph() {
@@ -801,7 +892,8 @@ private Q_SLOTS:
         auto value = [&](const char* id) { return param(shown.track, shown.device, QString::fromLatin1(id)); };
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
                           centerOf(find(shown.view, QStringLiteral("sidechainFold"))));
-        QTRY_COMPARE(shown.view->implicitWidth(), 566.0 + shown.view->property("sectionWidth").toDouble() + 13);
+        QTRY_COMPARE(shown.view->implicitWidth(), shown.view->property("foldedWidth").toDouble()
+                                                     + shown.view->property("sectionWidth").toDouble() + 13);
         QVERIFY(fitted());
         auto* graph = find<GateKeyGraph>(shown.view, QStringLiteral("keyGraph"));
         QVERIFY(graph);
@@ -959,7 +1051,8 @@ private Q_SLOTS:
         editor()->setDeviceParam(shown.track, shown.device, QStringLiteral("sc_eq_q"), 2.0);
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
                           centerOf(find(shown.view, QStringLiteral("sidechainFold"))));
-        QTRY_COMPARE(shown.view->implicitWidth(), 566.0 + shown.view->property("sectionWidth").toDouble() + 13);
+        QTRY_COMPARE(shown.view->implicitWidth(), shown.view->property("foldedWidth").toDouble()
+                                                     + shown.view->property("sectionWidth").toDouble() + 13);
         QVERIFY(fitted());
         QTest::mouseMove(window_, QPoint(1, 1));
         play(30);

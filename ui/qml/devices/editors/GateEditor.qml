@@ -29,11 +29,32 @@ Item {
     readonly property alias lineMenu: lineMenu  // (the threshold's or Return's, from the display's lines)
     // Whether the sidechain section shows: view state (DeviceViews), so a frame made again keeps it.
     readonly property bool sidechainShown: DeviceViews.value(deviceId, "sidechain", false)
-    readonly property int foldedWidth: 566
-    // The section's knob cells, each as wide as its parameter's widest value needs.
-    readonly property int scCellWidth: Math.max(46, Math.ceil(scWidest.advanceWidth))
-    readonly property int eqCellWidth: Math.max(52, Math.ceil(eqWidest.advanceWidth))
+    // The widths, measured in the fonts their texts are drawn in, so that the editor fits whatever font the
+    // UI gets (the numbers are the least: the layout in the house font). The knobs' cells as wide as their
+    // captions and widest readouts; the column beside them as its caption, Flip and the Lookahead list.
+    readonly property int knobCellWidth: Math.max(56, ...[thresholdCell, returnCell, floorCell, attackCell, holdCell,
+                                                          releaseCell].map(cellNeeds))
+    readonly property int sideWidth: Math.ceil(Math.max(56, lookaheadCaption.implicitWidth, flip.implicitWidth,
+                                                        lookahead.needs))
+    // The editor without its sidechain section: the display, the knobs, the column beside them.
+    readonly property int foldedWidth: side.x + sideWidth + 8
+    // The section's knob cells: Gain and Dry/Wet, then the EQ's three (which fill the row its buttons
+    // above need, should those be wider).
+    readonly property int scCellWidth: Math.max(46, cellNeeds(scGain), cellNeeds(scMix))
+    readonly property int eqCellWidth: Math.max(52, cellNeeds(eqFreq), cellNeeds(eqQ), cellNeeds(eqGain),
+                                                Math.ceil((buttonsWidth - 2 * scCellWidth - 6) / 3))
+    // The buttons along its top: the source, Listen and EQ at the left, the EQ's types at the right.
+    readonly property int buttonsWidth: eqButton.x + eqButton.width + 2 + 6 * 17
     readonly property int sectionWidth: 2 * scCellWidth + 6 + 3 * eqCellWidth
+    // The captions' and readouts' widest digit (see cellNeeds()).
+    readonly property string wideDigit: {
+        let widest = "0"
+        for (const digit of "123456789") {
+            if (textFont.advanceWidth(digit) > textFont.advanceWidth(widest))
+                widest = digit
+        }
+        return widest
+    }
     // How far the main panel moves right for the sidechain section: its width, and the divider with
     // the space round it (13 px), in step with the section as it unfolds.
     readonly property real shift: section.width * (sectionWidth + 13) / sectionWidth
@@ -56,15 +77,30 @@ Item {
               "sc_listen", "sc_eq", "sc_eq_type", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"]
     }
 
-    TextMetrics {
-        id: scWidest
-        font: Theme.uiFont(8)  // (EditorReadout's)
-        text: "-70.0 dB"
-    }
-    TextMetrics {
-        id: eqWidest
+    // The captions' and readouts' font (EditorCaption's, EditorReadout's).
+    FontMetrics {
+        id: textFont
         font: Theme.uiFont(8)
-        text: "15.00 kHz"
+    }
+
+    // What an EditorKnob's cell needs to show its caption and every readout whole: its parameter's text
+    // (or its formatter's) at either end of its range and at points across it (in its own scale), each
+    // also with every digit of a number but its first the font's widest (a font's digits can differ in
+    // width: so the values between the points are measured too).
+    function cellNeeds(knob) {
+        const param = knob ? knob.param : null
+        let widest = knob ? textFont.advanceWidth(knob.title) : 0
+        if (param && param.valid) {
+            const lo = param.minimum, hi = param.maximum
+            const log = param.logScale && lo > 0
+            for (let i = 0; i <= 32; ++i) {
+                const v = log ? lo * Math.pow(hi / lo, i / 32) : lo + (hi - lo) * i / 32
+                const text = knob.formatter ? knob.formatter(v) : param.format(v)
+                const wide = text.replace(/\d[\d.]*/g, n => n[0] + n.slice(1).replace(/\d/g, editor.wideDigit))
+                widest = Math.max(widest, textFont.advanceWidth(text), textFont.advanceWidth(wide))
+            }
+        }
+        return Math.ceil(widest)
     }
 
     // Floor at its bottom is silence (the engine's rule, through the graph).
@@ -155,7 +191,9 @@ Item {
             RoleButton {
                 id: source
                 objectName: "sidechainSource"
-                width: 96
+                // "No Sidechain" whole beside the arrow (a track's name is elided).
+                width: Math.max(96, Math.ceil(sourceFont.advanceWidth(qsTr("No Sidechain"))) + leftPadding
+                                + rightPadding + 2 + 2 + sourceArrow.width + 2)
                 height: 16
                 role: "small"
                 leftPadding: 4
@@ -166,6 +204,11 @@ Item {
                 tooltip: qsTr("Where the key comes from: choose a track to open the gate with\n"
                               + "(the device's sidechain menu)")
                 onClicked: editor.sidechainMenuRequested(source)
+
+                FontMetrics {
+                    id: sourceFont
+                    font: source.font
+                }
                 // Its name (elided) and an arrow, as a drop-down's.
                 contentItem: Item {
                     Text {
@@ -190,8 +233,9 @@ Item {
                 }
             }
             ParamButton {
+                id: listenButton
                 objectName: "sc_listen"
-                x: 102
+                x: source.width + 6
                 width: 20
                 param: p.get("sc_listen")
                 iconName: "headphones"
@@ -199,15 +243,16 @@ Item {
                 tooltip: qsTr("Listen: hear the key (the sidechain, filtered by the EQ) instead of the output")
             }
             ParamButton {
+                id: eqButton
                 objectName: "sc_eq"
-                x: 128
-                width: 22
+                x: listenButton.x + listenButton.width + 6
+                width: Math.max(22, Math.ceil(button.implicitContentWidth) + 6)
                 param: p.get("sc_eq")
                 text: qsTr("EQ")
                 tooltip: qsTr("EQ: open the gate from a band of the key only")
             }
-            // The EQ's type, a button each (its shape drawn as the EQ's bands' are), dimmed while the EQ
-            // is off.
+            // The EQ's type, a button each (its shape drawn as the EQ's bands' are), at the section's right
+            // edge, dimmed while the EQ is off.
             Repeater {
                 model: [qsTr("Low Shelf"), qsTr("Bell"), qsTr("High Shelf"), qsTr("Low-pass"), qsTr("Band-pass"),
                         qsTr("High-pass")]
@@ -218,7 +263,7 @@ Item {
                     // The S/C EQ Type's values (Live's order) as the EQ's types.
                     readonly property var kinds: [EqGraph.LowShelf, EqGraph.Bell, EqGraph.HighShelf, EqGraph.HighCut,
                                                   EqGraph.BandPass, EqGraph.LowCut]
-                    x: 152 + 17 * index
+                    x: editor.sectionWidth - 17 * (6 - index)
                     y: 1
                     width: 17
                     height: 15
@@ -313,6 +358,7 @@ Item {
                     tooltip: qsTr("Key EQ width or resonance (bell, low-, band-, high-pass)")
                 }
                 EditorKnob {
+                    id: eqGain
                     objectName: "sc_eq_gain"
                     x: eqQ.x + eqQ.width
                     width: editor.eqCellWidth
@@ -371,7 +417,7 @@ Item {
             deviceId: editor.deviceId
             x: 28
             y: 6
-            width: 280
+            width: implicitWidth
             height: Math.max(implicitHeight, editor.height - 12)
 
             // A line right-clicked: its parameter's menu.
@@ -397,7 +443,7 @@ Item {
 
         Grid {
             id: knobGrid
-            x: 318
+            x: graph.x + graph.width + 10
             y: Math.max(6, Math.round((editor.height - implicitHeight) / 2))
             columns: 3
             columnSpacing: 4
@@ -406,22 +452,24 @@ Item {
             EditorKnob {
                 id: thresholdCell
                 objectName: "threshold"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("threshold")
                 title: qsTr("Threshold")
                 tooltip: qsTr("Threshold: the level at which the gate opens (the blue line)")
             }
             EditorKnob {
+                id: returnCell
                 objectName: "return"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("return")
                 title: qsTr("Return")
                 tooltip: qsTr("Return: how far below the threshold the level must fall before the gate closes "
                               + "again\n(the orange line); more stops chatter")
             }
             EditorKnob {
+                id: floorCell
                 objectName: "floor"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("floor")
                 title: qsTr("Floor")
                 formatter: v => editor.floorText(v)
@@ -432,60 +480,74 @@ Item {
             EditorKnob {
                 id: attackCell
                 objectName: "attack"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("attack")
                 title: qsTr("Attack")
                 tooltip: qsTr("Attack: how long the gate takes to open; very short can click, "
                               + "long softens the onset")
             }
             EditorKnob {
+                id: holdCell
                 objectName: "hold"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("hold")
                 title: qsTr("Hold")
                 tooltip: qsTr("Hold: how long the gate stays open after the level falls below the return line")
             }
             EditorKnob {
+                id: releaseCell
                 objectName: "release"
-                width: 56
+                width: editor.knobCellWidth
                 param: p.get("release")
                 title: qsTr("Release")
                 tooltip: qsTr("Release: how long the gate then takes to close")
             }
         }
 
-        // Beside the knobs: Flip level with the first row's, Lookahead with the second's.
-        ParamButton {
-            objectName: "flip"
-            x: 502
-            y: knobGrid.y + thresholdCell.y + thresholdCell.knob.y
-               + Math.round((thresholdCell.knob.height - height) / 2)
-            width: 56
-            param: p.get("flip")
-            text: qsTr("Flip")
-            tooltip: qsTr("Flip: the gate works in reverse: only what is below the threshold passes")
-        }
-        EditorCaption {
-            x: 502
-            y: knobGrid.y + attackCell.y
-            width: 56
-            text: qsTr("Lookahead")
-        }
-        ParamChoice {
-            id: lookahead
-            objectName: "lookahead"
-            x: 502
-            y: knobGrid.y + attackCell.y + attackCell.knob.y + Math.round((attackCell.knob.height - height) / 2)
-            // As wide as the knobs' column, or as its longest choice and the arrow need.
-            width: Math.max(56, Math.ceil(Math.max(0, ...names.map(name => lookaheadFont.advanceWidth(name))))
-                                + button.leftPadding + button.rightPadding)
-            param: p.get("lookahead")
-            tooltip: qsTr("Lookahead: the gate sees what comes this much ahead, to open before a transient\n"
-                          + "(adds as much latency)")
+        // The column beside the knobs, 8 px after them (the grid's width as it will be laid out): Flip level
+        // with the first row's knobs, Lookahead with the second's.
+        Item {
+            id: side
+            objectName: "gateSide"
+            x: knobGrid.x + 3 * editor.knobCellWidth + 2 * knobGrid.columnSpacing + 8
+            width: editor.sideWidth
+            height: parent.height
 
-            FontMetrics {
-                id: lookaheadFont
-                font: lookahead.button.font
+            ParamButton {
+                id: flip
+                objectName: "flip"
+                y: knobGrid.y + thresholdCell.y + thresholdCell.knob.y
+                   + Math.round((thresholdCell.knob.height - height) / 2)
+                width: parent.width
+                param: p.get("flip")
+                text: qsTr("Flip")
+                tooltip: qsTr("Flip: the gate works in reverse: only what is below the threshold passes")
+            }
+            EditorCaption {
+                id: lookaheadCaption
+                objectName: "lookaheadCaption"
+                y: knobGrid.y + attackCell.y
+                width: parent.width
+                text: qsTr("Lookahead")
+            }
+            ParamChoice {
+                id: lookahead
+                objectName: "lookahead"
+                // What it needs: its longest choice and the arrow.
+                readonly property real needs: Math.max(0, ...names.map(name => lookaheadFont.advanceWidth(name)))
+                                              + button.leftPadding + button.rightPadding
+
+                y: knobGrid.y + attackCell.y + attackCell.knob.y
+                   + Math.round((attackCell.knob.height - height) / 2)
+                width: parent.width
+                param: p.get("lookahead")
+                tooltip: qsTr("Lookahead: the gate sees what comes this much ahead, to open before a transient\n"
+                              + "(adds as much latency)")
+
+                FontMetrics {
+                    id: lookaheadFont
+                    font: lookahead.button.font
+                }
             }
         }
     }

@@ -5,7 +5,7 @@
 // step each (showing the automation of what they move most), and the displays
 // reaching the graphs (rendering offline), holding over the gaps between
 // blocks and letting them settle, a backlog of display values counting for
-// nothing; it fits, every list and readout whole. With
+// nothing; it fits in any font, every list, switch and readout whole. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs,
 // with signal flowing, in four of its modes.
 
@@ -18,8 +18,10 @@
 #include <QUndoStack>
 #include <QtQuickTest/quicktest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -194,10 +196,10 @@ private Q_SLOTS:
         QCOMPARE(find(s.view, QStringLiteral("shaperTitle"))->property("text").toString(),
                  QStringLiteral("Waveshaper"));
 
-        auto rectOf = [&](const QString& id) {
-            QQuickItem* item = find(s.view, id);
+        auto rectOfItem = [&](QQuickItem* item) {
             return item->mapRectToItem(s.view, QRectF(0, 0, item->width(), item->height()));
         };
+        auto rectOf = [&](const QString& id) { return rectOfItem(find(s.view, id)); };
         // The columns, 8 px apart (a 1 px line and 8 px more before Color and before the shaper's
         // controls), inside the body's margins; the editor as wide as they are.
         const std::vector<std::pair<QString, double>> order = {{QStringLiteral("front"), 8.0},
@@ -216,8 +218,30 @@ private Q_SLOTS:
             right = r.right();
         }
         QCOMPARE(s.view->implicitWidth(), right + 8);
-        QCOMPARE(columns.at(QStringLiteral("curveColumn")).width(), double(SaturatorCurve::kWidth));
-        QCOMPARE(columns.at(QStringLiteral("colorSection")).width(), double(SaturatorColorGraph::kWidth));
+        // The graphs span their columns, each at least its own width.
+        for (const auto& [graph, column, least] :
+             {std::tuple{"saturatorCurve", "curveColumn", SaturatorCurve::kWidth},
+              std::tuple{"saturatorColor", "colorSection", SaturatorColorGraph::kWidth}}) {
+            const QRectF plot = rectOf(QString::fromLatin1(graph)), within = columns.at(QString::fromLatin1(column));
+            QCOMPARE(plot.left(), within.left());
+            QCOMPARE(plot.width(), within.width());
+            QVERIFY2(within.width() >= least, column);
+        }
+        // Color's knobs side by side under its graph, 4 px apart, its section wider than the graph's own width
+        // only as far as they need (a wide font's readouts). The Waveshaper's two rows of three fill their
+        // section, which is as wide as they need, or as the title and the Bass Shaper's controls need.
+        const QRectF color = columns.at(QStringLiteral("colorSection"));
+        double knobsRight = color.left() - 4;
+        for (const QString& id : kColorKnobs) {
+            QCOMPARE(rectOf(id).left(), knobsRight + 4);
+            knobsRight = rectOf(id).right();
+        }
+        QCOMPARE(color.right(), std::max(color.left() + SaturatorColorGraph::kWidth, knobsRight));
+        const QRectF shaper = columns.at(QStringLiteral("shaperSection"));
+        for (const char* id : {"ws_drive", "ws_damp"})
+            QCOMPARE(rectOf(QString::fromLatin1(id)).left(), shaper.left());
+        for (const char* id : {"ws_curve", "ws_period"})
+            QCOMPARE(rectOf(QString::fromLatin1(id)).right(), shaper.right());
 
         // The lists as wide as their longest names with the arrow, in the font they are drawn in (the
         // Type list, "Medium Curve", widening the front panel past its 84 px).
@@ -252,20 +276,50 @@ private Q_SLOTS:
         front->setWidth(frontWidth);  // (the same width as its binding gives, the columns after it where they were)
         QVERIFY(QQuickTest::qWaitForPolish(s.view->window()));
 
-        // No caption or readout is cut short, each knob at either end of its range.
+        // No caption or readout is cut short, each knob at either end of its range; each caption is centred
+        // over its knob.
         for (const QString& id : kKnobs) {
             const double before = param(s.track, s.device, id);
+            QQuickItem* cell = find(s.view, id);
             for (const bool high : {false, true}) {
                 KnobItem* knob = knobOf(s.view, id);
                 editor()->setDeviceParam(s.track, s.device, id, high ? knob->to() : knob->from());
                 QCoreApplication::processEvents();
-                for (QQuickItem* text : find(s.view, id)->childItems()) {
+                for (QQuickItem* text : cell->childItems()) {
                     if (text->inherits("QQuickText"))
                         QVERIFY2(!text->property("truncated").toBool(),
                                  qPrintable(id + QStringLiteral(": ") + text->property("text").toString()));
                 }
             }
             editor()->setDeviceParam(s.track, s.device, id, before);
+            if (cell->isVisible()) {
+                const QRectF caption = rectOfItem(cell->childItems().first());
+                const QRectF dial = rectOfItem(cell->childItems().at(1));
+                QVERIFY2(std::abs(caption.center().x() - dial.center().x()) <= 0.5, qPrintable(id));
+            }
+        }
+        // Nor would a readout be at any other value: every text its parameter takes across its range (in its
+        // own scale) fits it, in the font it is drawn in.
+        for (const QString& id : kKnobs) {
+            QQuickItem* readout = find(s.view, id)->childItems().last();
+            auto* param = find(s.view, id)->property("param").value<QObject*>();
+            const KnobItem* knob = knobOf(s.view, id);
+            const QFontMetricsF metrics(readout->property("font").value<QFont>());
+            for (int i = 0; i <= 200; ++i) {
+                const double t = i / 200.0;
+                const double v = knob->logScale() ? knob->from() * std::pow(knob->to() / knob->from(), t)
+                                                  : knob->from() + (knob->to() - knob->from()) * t;
+                QString text;
+                QVERIFY(QMetaObject::invokeMethod(param, "format", Q_RETURN_ARG(QString, text), Q_ARG(double, v)));
+                QVERIFY2(metrics.horizontalAdvance(text) <= readout->width(),
+                         qPrintable(QStringLiteral("%1: %2 in %3 px").arg(id, text).arg(readout->width())));
+            }
+        }
+        // The switches show their names whole, with the room round them a button's face has.
+        for (const char* id : {"dc", "hq", "color"}) {
+            QQuickItem* face = buttonOf(find(s.view, QString::fromLatin1(id)));
+            QVERIFY2(face->implicitWidth() <= face->width(),
+                     qPrintable(QStringLiteral("%1: %2 in %3").arg(id).arg(face->implicitWidth()).arg(face->width())));
         }
 
         // Nothing overlaps: each control stays in its column, the shown shaper section with the
@@ -314,12 +368,16 @@ private Q_SLOTS:
                                      !find(s.view, QStringLiteral("waveshaperSection"))->isVisible(),
                                  500);
         inColumns(16);
-        // (the hint under the Threshold too, its text within its width)
+        // (the hint under the Threshold too, and the section's title, each text within its width)
         QQuickItem* hint = find(s.view, QStringLiteral("bassHint"));
         QVERIFY(hint && hint->isVisible());
         QVERIFY(columns.at(QStringLiteral("shaperSection")).contains(rectOf(QStringLiteral("bassHint"))));
-        QVERIFY2(hint->property("contentWidth").toDouble() <= hint->width(),
-                 qPrintable(QString::number(hint->property("contentWidth").toDouble())));
+        for (QQuickItem* text : {hint, find(s.view, QStringLiteral("shaperTitle"))})
+            QVERIFY2(text->property("contentWidth").toDouble() <= text->width(),
+                     qPrintable(QStringLiteral("%1: %2 in %3")
+                                    .arg(text->property("text").toString())
+                                    .arg(text->property("contentWidth").toDouble())
+                                    .arg(text->width())));
     }
 
     // --- Every control sets its parameter undoably, and the engine follows ---------------------

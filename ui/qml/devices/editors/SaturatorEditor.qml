@@ -27,13 +27,34 @@ Item {
     readonly property bool bass: type === curve.bassShaperType
     readonly property bool colorOn: p.get("color") ? p.get("color").value >= 0.5 : false
 
-    // The Type list as wide as its longest name with its arrow (and the front panel with it).
-    readonly property real typeListWidth: {
-        const names = typeChoice.names
-        let widest = 0
-        for (let i = 0; i < names.length; ++i)
-            widest = Math.max(widest, listFont.advanceWidth(names[i]))
-        return Math.ceil(widest + typeChoice.button.leftPadding + typeChoice.button.rightPadding) + 2
+    // The widths, measured in the fonts their texts are drawn in, so that the editor fits whatever font the
+    // UI gets (the numbers are the least: the layout in the house font). The Type list as wide as its longest
+    // name with its arrow, and the front panel with it; each column's knob cells as wide as their captions
+    // and widest readouts.
+    readonly property real typeListWidth: listWidth(typeChoice)
+    readonly property int frontWidth: Math.ceil(Math.max(84, typeListWidth, cellNeeds(drive),
+                                                         2 * Math.max(dc.implicitWidth, hq.implicitWidth)
+                                                         + switches.spacing))
+    readonly property int levelsCell: Math.max(62, cellNeeds(outputKnob), cellNeeds(mixKnob))
+    readonly property int colorCell: Math.max(52, ...[baseKnob, freqKnob, widthKnob, depthKnob].map(cellNeeds))
+    // (the Waveshaper's rows fill their section, as wide as its title and the Bass Shaper's controls need too)
+    readonly property int shaperCell: {
+        const knobs = Math.max(...[wsDrive, wsLin, wsCurve, wsDamp, wsDepth, wsPeriod].map(cellNeeds))
+        const others = Math.max(...editor.shaperTitles.map(title => titleFont.advanceWidth(title)),
+                                bassHint.implicitWidth, editor.bassCell)
+        return Math.max(52, knobs, Math.ceil((others - 2 * wsTop.spacing) / 3))
+    }
+    readonly property int bassCell: Math.max(62, cellNeeds(thresholdKnob))
+    // The shaper section's title: the Waveshaper's or the Bass Shaper's.
+    readonly property var shaperTitles: [qsTr("Waveshaper"), qsTr("Bass Shaper")]
+    // The captions' and readouts' widest digit (see cellNeeds()).
+    readonly property string wideDigit: {
+        let widest = "0"
+        for (const digit of "123456789") {
+            if (textFont.advanceWidth(digit) > textFont.advanceWidth(widest))
+                widest = digit
+        }
+        return widest
     }
 
     // Columns 8 px apart: the front panel (Drive, the curve, Output and Dry/Wet), a line, Color, a line, the
@@ -42,9 +63,46 @@ Item {
     implicitHeight: 6 + Math.max(front.implicitHeight, curveColumn.implicitHeight, levels.implicitHeight,
                                  colorSection.implicitHeight, shaperSection.implicitHeight) + 6
 
+    // The captions' and readouts' font (EditorCaption's, EditorReadout's), and the shaper's title's.
+    FontMetrics {
+        id: textFont
+        font: Theme.uiFont(8)
+    }
+    FontMetrics {
+        id: titleFont
+        font: shaperTitle.font
+    }
     FontMetrics {
         id: listFont
         font: typeChoice.button.font
+    }
+
+    // A list's width: its longest name with its arrow.
+    function listWidth(choice) {
+        let widest = 0
+        for (const name of choice.names)
+            widest = Math.max(widest, listFont.advanceWidth(name))
+        return Math.ceil(widest + choice.button.leftPadding + choice.button.rightPadding) + 2
+    }
+
+    // What an EditorKnob's cell needs to show its caption and every readout whole: its parameter's text
+    // (or its formatter's) at either end of its range and at points across it (in its own scale), each
+    // also with every digit of a number but its first the font's widest (a font's digits can differ in
+    // width: so the values between the points are measured too).
+    function cellNeeds(knob) {
+        const param = knob ? knob.param : null
+        let widest = knob ? textFont.advanceWidth(knob.title) : 0
+        if (param && param.valid) {
+            const lo = param.minimum, hi = param.maximum
+            const log = param.logScale && lo > 0
+            for (let i = 0; i <= 32; ++i) {
+                const v = log ? lo * Math.pow(hi / lo, i / 32) : lo + (hi - lo) * i / 32
+                const text = knob.formatter ? knob.formatter(v) : param.format(v)
+                const wide = text.replace(/\d[\d.]*/g, n => n[0] + n.slice(1).replace(/\d/g, editor.wideDigit))
+                widest = Math.max(widest, textFont.advanceWidth(text), textFont.advanceWidth(wide))
+            }
+        }
+        return Math.ceil(widest)
     }
 
     DeviceParamMap {
@@ -62,7 +120,7 @@ Item {
         objectName: "front"
         x: 8
         y: 6
-        width: Math.max(84, editor.typeListWidth)
+        width: editor.frontWidth
         height: editor.height - 12
         implicitHeight: drive.height + 4 + typeChoice.height + 4 + switches.height
 
@@ -101,6 +159,7 @@ Item {
                 tooltip: qsTr("DC: removes DC offset from the input before it is shaped")
             }
             ParamButton {
+                id: hq
                 objectName: "hq"
                 width: front.width - switches.spacing - dc.width
                 param: p.get("hq")
@@ -116,7 +175,7 @@ Item {
         objectName: "curveColumn"
         x: front.x + front.width + 8
         y: 6
-        width: 160
+        width: Math.max(curve.implicitWidth, editor.listWidth(clip))
         height: editor.height - 12
         implicitHeight: curve.implicitHeight + 4 + clip.height
 
@@ -156,7 +215,7 @@ Item {
         objectName: "levels"
         x: curveColumn.x + curveColumn.width + 8
         y: 6
-        width: 62
+        width: editor.levelsCell
         height: editor.height - 12
         implicitHeight: outputKnob.height + 6 + mixKnob.height
 
@@ -191,7 +250,8 @@ Item {
         objectName: "colorSection"
         x: colorDivider.x + 9
         y: 6
-        width: 220
+        // The graph's width, or the knobs' under it where they need more.
+        width: Math.max(colorGraph.implicitWidth, 4 * editor.colorCell + 3 * colorKnobs.spacing)
         height: editor.height - 12
         implicitHeight: colorSwitch.height + 4 + colorGraph.implicitHeight + 4 + colorKnobs.height
 
@@ -199,7 +259,7 @@ Item {
         ParamButton {
             id: colorSwitch
             objectName: "color"
-            width: 44
+            width: Math.max(44, Math.ceil(implicitWidth))
             param: p.get("color")
             text: qsTr("Color")
             tooltip: qsTr("Color: two filters around the curve. What they boost is driven harder (then turned " +
@@ -230,7 +290,9 @@ Item {
             spacing: 4
 
             EditorKnob {
+                id: baseKnob
                 objectName: "base"
+                width: editor.colorCell
                 size: 24
                 param: p.get("base")
                 title: qsTr("Amt Lo")
@@ -239,7 +301,9 @@ Item {
                 opacity: editor.colorOn ? 1 : 0.55
             }
             EditorKnob {
+                id: freqKnob
                 objectName: "freq"
+                width: editor.colorCell
                 size: 24
                 param: p.get("freq")
                 title: qsTr("Freq")
@@ -247,7 +311,9 @@ Item {
                 opacity: editor.colorOn ? 1 : 0.55
             }
             EditorKnob {
+                id: widthKnob
                 objectName: "width"
+                width: editor.colorCell
                 size: 24
                 param: p.get("width")
                 title: qsTr("Width")
@@ -255,7 +321,9 @@ Item {
                 opacity: editor.colorOn ? 1 : 0.55
             }
             EditorKnob {
+                id: depthKnob
                 objectName: "depth"
+                width: editor.colorCell
                 size: 24
                 param: p.get("depth")
                 title: qsTr("Amt Hi")
@@ -278,7 +346,7 @@ Item {
         objectName: "shaperSection"
         x: shaperDivider.x + 9
         y: 6
-        width: 164
+        width: 3 * editor.shaperCell + 2 * wsTop.spacing
         height: editor.height - 12
         implicitHeight: shaperTitle.height + 4 + Math.max(waveshaperSection.implicitHeight, bassSection.implicitHeight)
 
@@ -289,7 +357,7 @@ Item {
             height: 16
             verticalAlignment: Text.AlignVCenter
             font: Theme.uiFont(8, true)
-            text: editor.bass ? qsTr("Bass Shaper") : qsTr("Waveshaper")
+            text: editor.shaperTitles[editor.bass ? 1 : 0]
             color: editor.bass || editor.waveshaper ? Theme.accent : Theme.textDim
             Behavior on color {
                 ColorAnimation {
@@ -320,7 +388,9 @@ Item {
                 spacing: 4
 
                 EditorKnob {
+                    id: wsDrive
                     objectName: "ws_drive"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_drive")
                     title: qsTr("Drive")
@@ -328,7 +398,9 @@ Item {
                     opacity: editor.waveshaper ? 1 : 0.55
                 }
                 EditorKnob {
+                    id: wsLin
                     objectName: "ws_lin"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_lin")
                     title: qsTr("Lin")
@@ -336,7 +408,9 @@ Item {
                     opacity: editor.waveshaper ? 1 : 0.55
                 }
                 EditorKnob {
+                    id: wsCurve
                     objectName: "ws_curve"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_curve")
                     title: qsTr("Curve")
@@ -350,7 +424,9 @@ Item {
                 spacing: 4
 
                 EditorKnob {
+                    id: wsDamp
                     objectName: "ws_damp"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_damp")
                     title: qsTr("Damp")
@@ -358,7 +434,9 @@ Item {
                     opacity: editor.waveshaper ? 1 : 0.55
                 }
                 EditorKnob {
+                    id: wsDepth
                     objectName: "ws_depth"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_depth")
                     title: qsTr("Depth")
@@ -366,7 +444,9 @@ Item {
                     opacity: editor.waveshaper ? 1 : 0.55
                 }
                 EditorKnob {
+                    id: wsPeriod
                     objectName: "ws_period"
+                    width: editor.shaperCell
                     size: 24
                     param: p.get("ws_period")
                     title: qsTr("Period")
@@ -392,15 +472,17 @@ Item {
             }
 
             EditorKnob {
+                id: thresholdKnob
                 objectName: "threshold"
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: 62
+                width: editor.bassCell
                 param: p.get("threshold")
                 title: qsTr("Threshold")
                 tooltip: qsTr("Threshold: the Bass Shaper is linear below it and saturates above it; at 0 dB it " +
                               "clips hard")
             }
             EditorReadout {
+                id: bassHint
                 objectName: "bassHint"
                 width: parent.width
                 color: Theme.textDim
