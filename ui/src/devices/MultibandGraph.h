@@ -11,22 +11,26 @@
 // change in figures. Drag a block's edge for its threshold, inside a block up or
 // down for its ratio (the block's level follows the mouse): one undo step per
 // gesture. Ctrl: every band at once; Alt: both thresholds of a band together;
-// Shift: finely. Double-click resets; the wheel steps.
+// Shift: finely. Double-click resets; the wheel steps (a run of it is one
+// gesture). Ctrl+Alt and Shift+wheel are the device chain's (it scrolls).
 //
 // It reads the device's displays (`<band>_in`, `_out`, `_gain`) each display
-// tick, the latest tick's worth only, and eases everything it draws there:
-// meters with ballistics, the gain change, each side's glow while it works,
-// highlights under the mouse, lanes dimmed when switched off or muted by a
-// solo. Once all of it has settled, it stops repainting.
+// tick, the recent ones only (a stall's backlog is old audio), and eases
+// everything it draws there: meters with ballistics, the gain change, each
+// side's glow while it works, highlights under the mouse, lanes dimmed when
+// switched off or muted by a solo. Once all of it has settled, it stops
+// repainting.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
 #include <QElapsedTimer>
+#include <QVariant>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
 #include <optional>
+#include <utility>
 
 namespace sub::ui {
 
@@ -40,7 +44,7 @@ public:
     enum Band { Low = 0, Mid = 1, High = 2 };  // as the engine's; drawn High on top
     enum Side { Below = 0, Above = 1 };
     static constexpr int kBands = 3;
-    static constexpr int kWidth = 300, kHeaderHeight = 16, kMinRowHeight = 38;
+    static constexpr int kWidth = 268, kHeaderHeight = 16, kMinRowHeight = 38;
     static constexpr double kFloorDb = -80.0, kCeilingDb = 6.0;  // the level axis, linear
     static constexpr double kHandleGrab = 5.0;    // px either side of a threshold's line
     static constexpr double kRatioPixels = 30.0;  // dragged this far, a ratio doubles (or halves)
@@ -49,7 +53,9 @@ public:
     static constexpr double kWheelGesture = 0.6;  // s: wheel notches this close are one undo step
     static constexpr double kTick = 0.016;        // s per display tick, for the animation
     static constexpr int kHoldTicks = 15;         // ticks without values before the meters let go
-    static constexpr double kTickSpan = 0.021;    // s of display values a tick looks at (the latest)
+    // s of display values a tick looks at, the latest: a whole buffer's arrive at once (2048 samples at 44.1 kHz,
+    // 46 ms), and older ones are a stall's backlog (a hidden editor shown again, an offline render).
+    static constexpr double kRecentSpan = 0.1;
     static constexpr int kMeterSamples = 256;     // audio per display value (the device's)
 
     explicit MultibandGraph(QQuickItem* parent = nullptr);
@@ -76,6 +82,12 @@ public:
     // Where a steady level `inDb` comes out of the band's dynamics: inDb + multibandGainDb(its settings).
     double staticOutDb(int band, double inDb) const;
     bool bandOn(int band) const { return bands_[index(band)].on; }  // Mid always; High and Low their switch
+    // The gain change drawn on a lane's bar, dB: from where the level would be without it (never past the level
+    // before it: the out meter stops at the floor, a change can go on far under it) to the out level.
+    std::pair<double, double> changeSpan(int band) const;
+    // Where the static curve is taking the band, dB, by what the displays last reported: none while the
+    // dynamics have settled there (within 0.5 dB, a level under the floor as at it) or nothing sounds.
+    std::optional<double> targetMarkerDb(int band) const;
     bool sidechained() const { return sidechained_; }
 
     // The animation's state (each eased per tick).
@@ -87,8 +99,9 @@ public:
     }
     bool animating() const { return animating_; }  // the last tick moved something (and repainted)
 
-    Q_INVOKABLE QString ratioText(double ratio) const;          // "4.00:1", "1:2.00"
-    Q_INVOKABLE double parseRatio(const QString& text) const;  // 0: unreadable
+    Q_INVOKABLE QString ratioText(double ratio) const;           // "1:4.00", "1:0.500"
+    Q_INVOKABLE double parseRatio(const QString& text) const;   // 0: unreadable
+    Q_INVOKABLE QVariant parseTime(const QString& text) const;  // ms ("250 ms", "1.5 s", "80"); null: unreadable
 
 Q_SIGNALS:
     void layoutChanged();
@@ -124,7 +137,7 @@ private:
         bool on = true;
         MeterBallistics in, out;
         Eased gain;
-        double inRead = kFloorDb, outRead = kFloorDb, gainRead = 0.0;  // the display's latest (held)
+        double inRead = kFloorDb, outRead = kFloorDb, gainRead = 0.0;  // the displays' latest (held a while)
         std::array<Eased, 2> glow;         // [Below, Above]: the side is working
         std::array<Eased, 2> handleLight;  // under the mouse or dragged
         std::array<Eased, 2> blockLight;
@@ -174,7 +187,10 @@ private:
     std::optional<Target> hover_;
     std::optional<QPointF> hoverAt_;  // the mouse over a lane (the static curve's hairline)
     std::optional<Drag> drag_;
-    QString wheelGesture_;
+    // A run of the wheel: one gesture on one target, worked out from where it started (as a drag is), so the
+    // small steps of a high-resolution wheel or a touchpad add up rather than each being rounded away.
+    std::optional<Drag> wheel_;
+    double wheelNotches_ = 0.0;
     QElapsedTimer wheelClock_;
 };
 

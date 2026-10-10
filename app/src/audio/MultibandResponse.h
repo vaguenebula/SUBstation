@@ -1,9 +1,12 @@
 #pragma once
 // Multiband Dynamics' gain law, as its editor draws and reads it out: the
 // engine's own (engine/src/builtin/MultibandDesign.h), so what the graph shows
-// a level getting is what plays. And its ratios as typed: "4:1", "1:2", "0.5".
+// a level getting is what plays. And its ratios and times as typed: "1:4",
+// "4:1", "0.5"; "250 ms", "1.5 s".
 
 #include <QString>
+
+#include <optional>
 
 namespace sub::app {
 
@@ -17,8 +20,14 @@ inline constexpr double kMultibandMinRatio = 0.25, kMultibandMaxRatio = 100.0;
 double multibandGainDb(double levelDb, double above, double aboveRatio, double below, double belowRatio,
                        bool softKnee, double amountPercent);
 
-// A typed ratio: "4", "4:1", "4.00:1", "1:2", "1:2.00", "0.5", " 1 : 2.00 " ("a:b" is a / b, so "1:2" is
-// 0.5 and "2:1" is 2), held to 0.25..100; 0 for text it can't read ("", "x", "1:0", "0", "-2").
+// A typed ratio R, as formatValue's `ratio` unit prints it, Live's way, "1:R" ("1:4", "1:4.00", " 1 : 0.5 ",
+// "1:inf"), or the R alone ("4", "0.5"), or as a compressor writes it ("4:1" is 4; any "a:b" not starting with
+// 1 is a / b); held to 0.25..100; 0 for text it can't read ("", "x", "1:0", "0", "-2"). Live's own field takes a
+// bare number as 1 / R; here it is R, the number the box shows.
 double multibandParseRatio(const QString& text);
+
+// A typed time, in milliseconds (the attack's and release's unit): "250", "250 ms", "1.5 s", "1.5s"; a bare
+// number is milliseconds. Nothing for text it can't read or a negative time.
+std::optional<double> multibandParseMs(const QString& text);
 
 }  // namespace sub::app

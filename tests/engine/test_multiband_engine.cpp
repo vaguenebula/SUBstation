@@ -189,10 +189,10 @@ Samples mix(const std::vector<Samples>& parts) {
     return sum;
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
+// The largest 6th difference over [from, to): a steep high-pass (|2 sin(pi f /
+// sr)|^6), 8 times (18 dB) more sensitive at Nyquist than at a quarter of the
+// sample rate and 2 10^5 times more than at 2 kHz (48 kHz). A step of d shows as
+// up to 10 d; a smooth signal well below Nyquist hardly at all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     std::vector<double> d(x.begin(), x.end());
     for (int k = 0; k < 6; ++k)
@@ -646,6 +646,19 @@ TEST_CASE("multiband: a sidechain keys each band by the same band of the key") {
     // A silent sidechain keys nothing: it doesn't fall back to its own input.
     engine.setProcessorSidechain(device, engine.addTrack(), sub::SidechainTap::PreFader);
     for (const double level : levels()) CHECK_APPROX_TOL(level, 0.0, 0.0, 0.1);
+
+    // Keyed, a band's `in` display is the trigger's level, what its thresholds are compared with: the key's
+    // band, after the band's Input; at Sidechain Mix 0 the device's own.
+    for (const float scMix : {100.f, 0.f}) {
+        INFO("sc_mix " + std::to_string(scMix));
+        Multiband direct(base({{"mid_in", 6.f}, {"sc_mix", scMix}}));
+        Samples l = tone(1000.0, 0.5, 0.1), r = l;
+        const Samples key = tone(1000.0, 0.5, 0.5);
+        direct.run({&l, &r}, {}, 256, {&key, &key}, true);
+        const double trigger = scMix > 0.f ? 0.5 : 0.1;
+        CHECK_APPROX_TOL(direct.display("mid_in").back(), db(trigger * lowShare(1000.0, 2500.0)) + 6.0, 0.0, 0.1);
+        CHECK_EQ(direct.display("mid_out").back(), direct.display("mid_in").back());  // (1:1: no change)
+    }
 }
 
 TEST_CASE("multiband: one channel is keyed by both of the key's, and a key connected again starts from silence") {
@@ -902,6 +915,25 @@ TEST_CASE("multiband: its stereo is linked, and a silent side stays silent") {
     Samples quiet = tone(1000.0, 1.0, 0.05), loud = tone(1000.0, 1.0, 0.5);
     linked.run({&quiet, &loud});
     CHECK_APPROX_TOL(levelDb(quiet), db(0.05) + (db(0.5) + 20.0) * -0.75, 0.0, 0.05);
+
+    // RMS on two channels that differ reads the louder channel's power, as on one: each channel's mean square,
+    // the larger taken (the mean of the larger square each sample would read about 2.1 dB hot on these).
+    Multiband rmsMode(single({{"mode", 1.f}}));
+    Samples sine = tone(1000.0, 0.5, 0.5), cosine(sine.size());
+    for (size_t i = 0; i < cosine.size(); ++i)
+        cosine[i] = static_cast<float>(0.5 * std::cos(2.0 * kPi * 1000.0 * static_cast<double>(i) / kSampleRate));
+    rmsMode.run({&sine, &cosine});
+    CHECK_APPROX_TOL(rmsMode.display("mid_in").back(), db(0.5) - 3.0103, 0.0, 0.05);
+    Multiband wide(single({{"mode", 1.f}}));
+    Samples left = noise(kSampleRate, 21, 0.3f), right = noise(kSampleRate, 22, 0.3f);
+    const double louder = 20.0 * std::log10(std::max(rms(slice(left, at(0.5))), rms(slice(right, at(0.5)))));
+    wide.run({&left, &right});
+    const std::vector<float> read = wide.display("mid_in");
+    double mean = 0.0;
+    for (size_t i = read.size() / 2; i < read.size(); ++i) mean += read[i];
+    mean /= static_cast<double>(read.size() - read.size() / 2);
+    INFO("decorrelated noise: read " + std::to_string(mean) + " dB, the louder channel " + std::to_string(louder));
+    CHECK_APPROX_TOL(mean, louder, 0.0, 0.5);
 }
 
 TEST_CASE("multiband: its tail covers the crossovers' ringing") {

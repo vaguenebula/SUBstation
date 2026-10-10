@@ -3,7 +3,8 @@
 // real engine; its controls bound to their parameters (undoably, and the engine
 // has what they set), the graph's drags, double-clicks and wheel (one undo step
 // a gesture), the displays reaching the graph as the engine renders, and its
-// animation easing and settling. Also the `ratio` unit and the ratios typed. With
+// animation easing and settling. Also the `ratio` unit and the ratios and times
+// typed, which need no window (they run on any platform). With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there.
 
 #include <QGuiApplication>
@@ -15,7 +16,9 @@
 #include <QTest>
 #include <QUndoStack>
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -41,6 +44,11 @@ constexpr int kBelow = MultibandGraph::Below, kAbove = MultibandGraph::Above;
 class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::EditorHarness {
     Q_OBJECT
 
+    // A file name of its own for a track's audio: the engine keeps sources by their path, and a file written
+    // again under one name while an earlier test's load of it is still reading can leave that load's audio.
+    QString fileName(const char* name) { return QString::fromLatin1(name) + QString::number(++files_); }
+    int files_ = 0;
+
     // A track playing `mono` with a Multiband Dynamics on it, `settings` set first, its editor shown.
     struct Shown {
         QString track, device;
@@ -50,7 +58,7 @@ class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::Edit
     Shown showDevice(const sub::app::OrderedMap<QString, double>& settings = {},
                      const std::vector<float>& mono = tone(1000.0, kSampleRate)) {
         Shown shown;
-        shown.track = audioTrackWith(mono, QStringLiteral("tone"), 1.0);
+        shown.track = audioTrackWith(mono, fileName("tone"), 1.0);
         if (shown.track.isEmpty())
             return shown;
         shown.device = editor()->addDevice(shown.track, QStringLiteral("multiband"));
@@ -87,24 +95,33 @@ class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::Edit
     }
     // One undo step more than `before`, nothing to redo.
     bool oneStepAfter(int before) { return undo()->index() == before + 1 && undo()->count() == undo()->index(); }
+    // The application layer's texts: plain checks, no window.
+    static bool headless(const char* function) {
+        return std::strcmp(function, "ratioTexts") == 0 || std::strcmp(function, "timeTexts") == 0;
+    }
 
 private Q_SLOTS:
     void initTestCase() {
-        if (!haveDisplay())
-            QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
-        startHost();
+        if (haveDisplay())
+            startHost();
     }
 
     void cleanupTestCase() { stopHost(); }
 
-    void init() { clearHost(); }
+    void init() {
+        if (headless(QTest::currentTestFunction()))
+            return;
+        if (!haveDisplay())
+            QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
+        clearHost();
+    }
 
     void fitsAndShowsEveryControl() {
         const Shown s = showDevice();
         QVERIFY(s.view && s.graph);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(s.view->implicitWidth(), 780.0);
+        QCOMPARE(s.view->implicitWidth(), 800.0);
 
         // The device's own controls: within the body, their rows one under the other.
         QQuickItem* globals = find(s.view, QStringLiteral("globals"));
@@ -134,7 +151,7 @@ private Q_SLOTS:
         QCOMPARE(box(s.view, "midAbove")->text(), QStringLiteral("-20.0 dB"));
         QCOMPARE(box(s.view, "midBelow")->value(), -40.0);
         QCOMPARE(box(s.view, "midAboveRatio")->value(), 1.0);
-        QCOMPARE(box(s.view, "midAboveRatio")->text(), QStringLiteral("1.00:1"));
+        QCOMPARE(box(s.view, "midAboveRatio")->text(), QStringLiteral("1:1.00"));
         QCOMPARE(box(s.view, "xoverLow")->value(), 120.0);
         QCOMPARE(box(s.view, "xoverHigh")->value(), 2500.0);
         QCOMPARE(box(s.view, "xoverHigh")->text(), QStringLiteral("2.50 kHz"));
@@ -143,6 +160,36 @@ private Q_SLOTS:
             qvariant_cast<QQuickItem*>(find(s.view, QStringLiteral("amount"))->property("knob"))->property("knob"));
         QVERIFY(amount);
         QCOMPARE(amount->value(), 100.0);
+
+        // Every box is as wide as its widest text and the automation dot beside it need (the dot never covers
+        // a minus sign), and the columns don't overlap.
+        for (const char* band : {"high", "mid", "low"}) {
+            for (const char* field : {"In", "Out", "Above", "AboveRatio", "Below", "BelowRatio", "Attack", "Release"}) {
+                const QString name = QString::fromLatin1(band) + QString::fromLatin1(field);
+                QQuickItem* item = find(s.view, name);
+                QVERIFY2(item->width() >= item->implicitWidth(),
+                         qPrintable(QStringLiteral("%1: %2 < %3").arg(name).arg(item->width()).arg(
+                             item->implicitWidth())));
+            }
+        }
+        for (const char* name : {"xoverHigh", "xoverLow"})
+            QVERIFY2(find(s.view, QString::fromLatin1(name))->width() >=
+                         find(s.view, QString::fromLatin1(name))->implicitWidth(),
+                     name);
+        auto left = [&](const char* name) {
+            return find(s.view, QString::fromLatin1(name))->mapToItem(s.view, QPointF(0, 0)).x();
+        };
+        auto right = [&](const char* name) {
+            QQuickItem* item = find(s.view, QString::fromLatin1(name));
+            return item->mapToItem(s.view, QPointF(item->width(), 0)).x();
+        };
+        const char* const columns[] = {"xoverHigh", "midIn",        "multibandGraph", "midAbove",
+                                       "midAboveRatio", "midOut", "globals"};
+        for (std::size_t i = 1; i < std::size(columns); ++i)
+            QVERIFY2(right(columns[i - 1]) <= left(columns[i]), columns[i]);
+        QVERIFY(left("xoverHigh") >= 8 && right("globals") <= s.view->width() - 8);
+        QCOMPARE(left("midAttack"), left("midAbove"));
+        QCOMPARE(right("midRelease"), right("midAboveRatio"));
 
         // The rows line up with the graph's lanes.
         for (const auto& [name, band] :
@@ -238,28 +285,51 @@ private Q_SLOTS:
         QCOMPARE(value("soft_knee"), 1.0);
         QVERIFY(oneStepAfter(before));
 
-        // Ratios typed as Live and the house print them.
+        // Ratios typed as Live writes them ("1:2": 2 dB past the threshold come out as 1), bare (the number
+        // after "1:") or as a compressor writes them ("4:1").
         ValueBoxItem* ratio = box(s.view, "midAboveRatio");
         QVERIFY(ratio);
         before = undo()->index();
         QVERIFY(ratio->applyTyped(QStringLiteral("1:2")));
-        QCOMPARE(value("mid_above_ratio"), 0.5);
+        QCOMPARE(value("mid_above_ratio"), 2.0);
         QCOMPARE(ratio->text(), QStringLiteral("1:2.00"));
         QVERIFY(oneStepAfter(before));
         before = undo()->index();
-        QVERIFY(ratio->applyTyped(QStringLiteral("1:3")));
+        QVERIFY(ratio->applyTyped(QStringLiteral("1:66.7")));  // Over The Top's
+        QVERIFY(std::abs(value("mid_above_ratio") - 66.7) < 1e-9);
+        QCOMPARE(ratio->text(), QStringLiteral("1:66.7"));
+        QVERIFY(oneStepAfter(before));
+        before = undo()->index();
+        QVERIFY(ratio->applyTyped(QStringLiteral("0.333")));
         QVERIFY(std::abs(value("mid_above_ratio") - 0.333) < 1e-9);
-        QCOMPARE(ratio->text(), QStringLiteral("1:3.00"));
+        QCOMPARE(ratio->text(), QStringLiteral("1:0.333"));
         QVERIFY(oneStepAfter(before));
         before = undo()->index();
         QVERIFY(ratio->applyTyped(QStringLiteral("4:1")));
         QCOMPARE(value("mid_above_ratio"), 4.0);
-        QCOMPARE(ratio->text(), QStringLiteral("4.00:1"));
+        QCOMPARE(ratio->text(), QStringLiteral("1:4.00"));
         QVERIFY(oneStepAfter(before));
         before = undo()->index();
         QVERIFY(!ratio->applyTyped(QStringLiteral("x")));
         QCOMPARE(value("mid_above_ratio"), 4.0);
         QCOMPARE(undo()->index(), before);
+        // Times typed in either unit their boxes show ("1.5 s", "250 ms"); a bare number is milliseconds.
+        ValueBoxItem* release = box(s.view, "midRelease");
+        before = undo()->index();
+        QVERIFY(release->applyTyped(QStringLiteral("1.5 s")));
+        QCOMPARE(value("mid_release"), 1500.0);
+        QCOMPARE(release->text(), QStringLiteral("1.50 s"));
+        QVERIFY(oneStepAfter(before));
+        QVERIFY(release->applyTyped(QStringLiteral("250ms")));
+        QCOMPARE(value("mid_release"), 250.0);
+        QVERIFY(release->applyTyped(QStringLiteral("80")));
+        QCOMPARE(value("mid_release"), 80.0);
+        QCOMPARE(release->text(), QStringLiteral("80 ms"));
+        before = undo()->index();
+        QVERIFY(!release->applyTyped(QStringLiteral("soon")));
+        QCOMPARE(undo()->index(), before);
+        QVERIFY(box(s.view, "midAttack")->applyTyped(QStringLiteral("0.5 ms")));
+        QCOMPARE(value("mid_attack"), 0.5);
         // A crossover typed as a frequency.
         QVERIFY(box(s.view, "xoverLow")->applyTyped(QStringLiteral("0.2k")));
         QCOMPARE(value("xover_low"), 200.0);
@@ -292,9 +362,11 @@ private Q_SLOTS:
 
         // Above dragged past Below pushes it along: still one step.
         before = undo()->index();
-        const double to = graph->xOfDb(-50.0) - graph->aboveHandle(kMid).x();
-        drag(graph, graph->aboveHandle(kMid), QPoint(int(std::lround(to)), 0), 4);
-        QVERIFY2(std::abs(value("mid_above") + 50.0) <= 0.2, qPrintable(QString::number(value("mid_above"))));
+        const int to = int(std::lround(graph->xOfDb(-50.0) - graph->aboveHandle(kMid).x()));
+        drag(graph, graph->aboveHandle(kMid), QPoint(to, 0), 4);
+        const double pushed = -20.0 + to / graph->pixelsPerDb();  // (about -50, in whole pixels)
+        QVERIFY2(std::abs(value("mid_above") - pushed) <= 0.06 && value("mid_above") < -49.0,
+                 qPrintable(QString::number(value("mid_above"))));
         QCOMPARE(value("mid_below"), value("mid_above"));
         QVERIFY(oneStepAfter(before));
 
@@ -399,6 +471,12 @@ private Q_SLOTS:
         QVERIFY(oneStepAfter(before));
         QCOMPARE(value("low_above"), -20.0);
 
+        // Ctrl+Alt-drag is the device chain's (it scrolls by hand): the graph leaves the press.
+        before = undo()->index();
+        drag(graph, graph->aboveHandle(kHigh), QPoint(-20, 0), 2, Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(value("high_above"), -20.0);
+        QCOMPARE(undo()->index(), before);
+
         // Ctrl on a ratio: every band's, times as much.
         before = undo()->index();
         drag(graph, graph->belowBlockPoint(kLow), QPoint(0, -30), 3, Qt::ControlModifier);
@@ -444,6 +522,36 @@ private Q_SLOTS:
         wheel(scenePoint(graph, graph->aboveHandle(kHigh)), -120);
         QCOMPARE(value("high_above"), -20.5);
         QVERIFY(oneStepAfter(before));
+
+        // A high-resolution wheel (a touchpad, a smooth-scrolling mouse): its small steps add up over a run, as a
+        // drag's moves do, rather than each being rounded away or held in 1:1's detent.
+        before = undo()->index();
+        const QPoint lowBlock = scenePoint(graph, graph->aboveBlockPoint(kLow));
+        for (int i = 0; i < 16; ++i)  // four notches in quarters
+            wheel(lowBlock, 30);
+        QVERIFY2(std::abs(value("low_above_ratio") - 0.707) < 1e-9,
+                 qPrintable(QString::number(value("low_above_ratio"))));
+        for (int i = 0; i < 16; ++i)  // and back
+            wheel(lowBlock, -30);
+        QCOMPARE(value("low_above_ratio"), 1.0);
+        QVERIFY(oneStepAfter(before));
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("low_below"), -40.0);  // (apart from Above)
+        before = undo()->index();
+        const QPoint lowHandle = scenePoint(graph, graph->aboveHandle(kLow));
+        for (int i = 0; i < 16; ++i)  // two notches in eighths
+            wheel(lowHandle, 15);
+        QCOMPARE(value("low_above"), -19.0);
+        wheel(lowHandle, 8);  // (a fifteenth of a notch, 0.03 dB: nothing yet)
+        QCOMPARE(value("low_above"), -19.0);
+        for (int i = 0; i < 7; ++i)
+            wheel(lowHandle, 8);
+        QCOMPARE(value("low_above"), -18.7);
+        QVERIFY(oneStepAfter(before));
+        // Shift+wheel is the device chain's (it scrolls): the graph leaves it.
+        before = undo()->index();
+        wheel(lowHandle, 120, Qt::ShiftModifier);
+        QCOMPARE(value("low_above"), -18.7);
+        QCOMPARE(undo()->index(), before);
     }
 
     void displaysReachTheGraph() {
@@ -496,6 +604,79 @@ private Q_SLOTS:
         QCOMPARE(graph->outPeak(kMid), MultibandGraph::kFloorDb);
     }
 
+    void aCutUnderTheFloorStopsAtTheLevelBefore() {
+        // Gate-like downward expansion, one band, Peak, Below -40 at 1:0.250: a steady tone at -55 dB comes out
+        // at -100, under the graph's floor.
+        const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
+                                    {QStringLiteral("high_on"), 0.0},
+                                    {QStringLiteral("mode"), 0.0},
+                                    {QStringLiteral("mid_below"), -40.0},
+                                    {QStringLiteral("mid_below_ratio"), 0.25}},
+                                   tone(1000.0, kSampleRate, std::pow(10.0, -55.0 / 20.0)));
+        QVERIFY(s.view && s.graph);
+        MultibandGraph* graph = s.graph;
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);  // (within the hold: as if it played on)
+        QVERIFY2(std::abs(graph->inLevel(kMid) + 55.0) < 0.3, qPrintable(QString::number(graph->inLevel(kMid))));
+        QCOMPARE(graph->outLevel(kMid), MultibandGraph::kFloorDb);
+        QVERIFY2(std::abs(graph->gainShown(kMid) + 45.0) < 0.5, qPrintable(QString::number(graph->gainShown(kMid))));
+        // The change drawn runs from the out meter, at the floor, to the level before it, not on past it.
+        const auto [from, to] = graph->changeSpan(kMid);
+        QCOMPARE(to, MultibandGraph::kFloorDb);
+        QCOMPARE(from, graph->inLevel(kMid));
+        // Settled there: no target marker (a target under the floor is at it).
+        QVERIFY(!graph->targetMarkerDb(kMid));
+    }
+
+    void glowsWhileTheBandIsWorked() {
+        // Over The Top's kind of Below (-40 at 1:4, lifting quiet sound) on one band.
+        const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
+                                    {QStringLiteral("high_on"), 0.0},
+                                    {QStringLiteral("mode"), 0.0},
+                                    {QStringLiteral("mid_below"), -40.0},
+                                    {QStringLiteral("mid_below_ratio"), 4.0}},
+                                   tone(1000.0, kSampleRate, 0.5));
+        QVERIFY(s.view && s.graph);
+        MultibandGraph* graph = s.graph;
+        // A tone at -6 dB, which it leaves alone. Once the audio stops the meter falls through the Below region,
+        // but that isn't the band being lifted: no glow, no marker.
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        double most = 0.0, lowest = 0.0;
+        bool marker = false;
+        for (int i = 0; i < 200; ++i) {
+            refreshDisplays();
+            most = std::max(most, graph->glow(kMid, kBelow));
+            marker = marker || graph->targetMarkerDb(kMid).has_value();
+            lowest = std::min(lowest, graph->inLevel(kMid));
+        }
+        QVERIFY(lowest < -60.0);  // (the meter did fall through it)
+        QVERIFY2(most < 0.01, qPrintable(QString::number(most)));
+        QVERIFY(!marker);
+        // Under the threshold (Input -24 dB, Below -20: 10 dB under), the Below side glows while it plays, and
+        // lets go once the audio has stopped.
+        editor()->setDeviceParams(s.track, s.device,
+                                  {{QStringLiteral("mid_in"), -24.0}, {QStringLiteral("mid_below"), -20.0}});
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);
+        QVERIFY2(graph->glow(kMid, kBelow) > 0.9, qPrintable(QString::number(graph->glow(kMid, kBelow))));
+        QVERIFY2(std::abs(graph->gainTarget(kMid) - 7.5) < 0.2, qPrintable(QString::number(graph->gainTarget(kMid))));
+        ticks(MultibandGraph::kHoldTicks + 60);
+        QVERIFY2(graph->glow(kMid, kBelow) < 0.1, qPrintable(QString::number(graph->glow(kMid, kBelow))));
+    }
+
+    void aWholeBufferIsRead() {
+        // A 2048-sample buffer's eight display values arrive at once (43 ms at 48 kHz) and a tick reads them
+        // all: a 10 kHz burst in its first quarter shows on the high band.
+        std::vector<float> burst(2048, 0.f);
+        const std::vector<float> part = tone(10000.0, 512, 0.5);
+        std::copy(part.begin(), part.end(), burst.begin());
+        const Shown s = showDevice({{QStringLiteral("mode"), 0.0}}, burst);
+        QVERIFY(s.view && s.graph);
+        engine()->renderOffline(0.0, 2048);
+        refreshDisplays();
+        QVERIFY2(s.graph->inLevel(kHigh) > -7.0, qPrintable(QString::number(s.graph->inLevel(kHigh))));
+    }
+
     void lanesAndHighlightsEase() {
         const Shown s = showDevice();
         QVERIFY(s.view && s.graph);
@@ -541,7 +722,7 @@ private Q_SLOTS:
         QVERIFY(!find(s.view, QStringLiteral("scMix"))->isEnabled());
         QVERIFY(!find(s.view, QStringLiteral("sidechainButton"))->property("checked").toBool());
 
-        const QString other = audioTrackWith(tone(60.0, kSampleRate), QStringLiteral("kick"), 1.0);
+        const QString other = audioTrackWith(tone(60.0, kSampleRate), fileName("kick"), 1.0);
         QVERIFY(!other.isEmpty());
         QVERIFY(editor()->trySetDeviceSidechain(s.track, s.device, other));
         QVERIFY(s.graph->sidechained());
@@ -555,22 +736,28 @@ private Q_SLOTS:
     }
 
     void ratioTexts() {
-        QCOMPARE(formatValue(4.0, QStringLiteral("ratio")), QStringLiteral("4.00:1"));
-        QCOMPARE(formatValue(66.7, QStringLiteral("ratio")), QStringLiteral("66.7:1"));
-        QCOMPARE(formatValue(100.0, QStringLiteral("ratio")), QStringLiteral("100:1"));
-        QCOMPARE(formatValue(1.0, QStringLiteral("ratio")), QStringLiteral("1.00:1"));
-        QCOMPARE(formatValue(0.5, QStringLiteral("ratio")), QStringLiteral("1:2.00"));
-        QCOMPARE(formatValue(0.25, QStringLiteral("ratio")), QStringLiteral("1:4.00"));
+        // Live's notation, "1:R" (R dB past the threshold come out as 1), three significant digits.
+        QCOMPARE(formatValue(4.0, QStringLiteral("ratio")), QStringLiteral("1:4.00"));
+        QCOMPARE(formatValue(66.7, QStringLiteral("ratio")), QStringLiteral("1:66.7"));
+        QCOMPARE(formatValue(100.0, QStringLiteral("ratio")), QStringLiteral("1:100"));
+        QCOMPARE(formatValue(1.0, QStringLiteral("ratio")), QStringLiteral("1:1.00"));
+        QCOMPARE(formatValue(0.5, QStringLiteral("ratio")), QStringLiteral("1:0.500"));
+        QCOMPARE(formatValue(0.25, QStringLiteral("ratio")), QStringLiteral("1:0.250"));
+        QCOMPARE(formatValue(10.0, QStringLiteral("ratio")), QStringLiteral("1:10.0"));
 
+        // Typed: Live's way, the R alone, or as a compressor writes it ("4:1"; any "a:b" not starting with 1).
+        QCOMPARE(multibandParseRatio(QStringLiteral("1:4")), 4.0);
+        QCOMPARE(multibandParseRatio(QStringLiteral("1:66.7")), 66.7);  // Over The Top's Above
+        QCOMPARE(multibandParseRatio(QStringLiteral(" 1 : 0.5 ")), 0.5);
+        QCOMPARE(multibandParseRatio(QStringLiteral("1:inf")), 100.0);  // (Live's brick wall: held)
         QCOMPARE(multibandParseRatio(QStringLiteral("4")), 4.0);
+        QCOMPARE(multibandParseRatio(QStringLiteral("0.5")), 0.5);
         QCOMPARE(multibandParseRatio(QStringLiteral("4:1")), 4.0);
         QCOMPARE(multibandParseRatio(QStringLiteral("4.00:1")), 4.0);
-        QCOMPARE(multibandParseRatio(QStringLiteral("1:2")), 0.5);
-        QCOMPARE(multibandParseRatio(QStringLiteral(" 1 : 2.00 ")), 0.5);
-        QCOMPARE(multibandParseRatio(QStringLiteral("0.5")), 0.5);
+        QCOMPARE(multibandParseRatio(QStringLiteral("3:2")), 1.5);
         QCOMPARE(multibandParseRatio(QStringLiteral("1000")), 100.0);  // held
-        QCOMPARE(multibandParseRatio(QStringLiteral("1:8")), 0.25);
-        for (const char* text : {"x", "", "1:0", "0", "-2", "1:2:3", "a:1"})
+        QCOMPARE(multibandParseRatio(QStringLiteral("1:0.1")), 0.25);
+        for (const char* text : {"x", "", "1:0", "0", "-2", "1:2:3", "a:1", "1:-4", "nan", "-inf"})
             QVERIFY2(multibandParseRatio(QString::fromLatin1(text)) == 0.0, text);
         for (const double r : {0.25, 0.3, 0.333, 0.5, 0.77, 1.0, 1.5, 3.33, 4.0, 9.99, 10.0, 66.7, 99.5, 100.0}) {
             const double back = multibandParseRatio(formatValue(r, QStringLiteral("ratio")));
@@ -581,6 +768,24 @@ private Q_SLOTS:
         QVERIFY(std::abs(multibandGainDb(-60.0, -20.0, 1.0, -40.0, 4.0, false, 100.0) - 15.0) < 1e-5);
         QVERIFY(std::abs(multibandGainDb(-60.0, -20.0, 1.0, -40.0, 4.0, false, 50.0) - 7.5) < 1e-5);
         QVERIFY(std::abs(multibandGainDb(-20.0, -20.0, 4.0, -40.0, 1.0, true, 100.0) + 0.5625) < 1e-5);
+    }
+
+    void timeTexts() {
+        // Attack and release typed in either unit their boxes show; a bare number is milliseconds.
+        QCOMPARE(multibandParseMs(QStringLiteral("250")), std::optional<double>(250.0));
+        QCOMPARE(multibandParseMs(QStringLiteral("250 ms")), std::optional<double>(250.0));
+        QCOMPARE(multibandParseMs(QStringLiteral("250ms")), std::optional<double>(250.0));
+        QCOMPARE(multibandParseMs(QStringLiteral("1.5 s")), std::optional<double>(1500.0));
+        QCOMPARE(multibandParseMs(QStringLiteral(" 2 S ")), std::optional<double>(2000.0));
+        QCOMPARE(multibandParseMs(QStringLiteral("0.1 ms")), std::optional<double>(0.1));
+        QCOMPARE(multibandParseMs(QStringLiteral("0")), std::optional<double>(0.0));
+        for (const char* text : {"", "x", "ms", "s", "-5 ms", "1.5 min", "nan", "inf"})
+            QVERIFY2(!multibandParseMs(QString::fromLatin1(text)), text);
+        // What the boxes show reads back.
+        for (const double ms : {0.15, 5.0, 99.0, 250.0, 1500.0, 3000.0}) {
+            const std::optional<double> back = multibandParseMs(formatValue(ms, QStringLiteral("ms")));
+            QVERIFY2(back && std::abs(*back / ms - 1.0) < 0.01, qPrintable(QString::number(ms)));
+        }
     }
 
     void screenshot() {
@@ -627,7 +832,7 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(-24, 0));
 
         // The Time fields, keyed by a sidechain, Soft Knee, the static curve read under the mouse.
-        const QString kick = audioTrackWith(tone(60.0, kSampleRate, 0.8), QStringLiteral("kick"), 1.0);
+        const QString kick = audioTrackWith(tone(60.0, kSampleRate, 0.8), fileName("kick"), 1.0);
         QVERIFY(editor()->trySetDeviceSidechain(s.track, s.device, kick));
         editor()->setDeviceParams(s.track, s.device,
                                   {{QStringLiteral("high_on"), 1.0},
@@ -641,8 +846,39 @@ private Q_SLOTS:
         ticks(300);  // (the meters let go of what played before)
         engine()->renderOffline(0.0, kSampleRate / 2);
         ticks(10);
+        for (int i = 0; i < 50 && s.graph->inLevel(kLow) < -20.0; ++i) {  // (until the key's clip has come)
+            QTest::qWait(20);
+            engine()->renderOffline(0.0, kSampleRate / 2);
+            ticks(10);
+        }
+        QVERIFY2(s.graph->inLevel(kLow) > -20.0,  // keyed by the kick
+                 qPrintable(QStringLiteral("low %1 mid %2 high %3 gain %4 sidechained %5")
+                                .arg(s.graph->inLevel(kLow))
+                                .arg(s.graph->inLevel(kMid))
+                                .arg(s.graph->inLevel(kHigh))
+                                .arg(s.graph->gainTarget(kLow))
+                                .arg(s.graph->sidechained())));
         QTest::qWait(30);
         save(grab(), QStringLiteral("multiband-time.png"));
+
+        // Automated boxes (the dot at their left) still read whole: "-12.0 dB", "1:0.500", "0.15 ms".
+        editor()->setDeviceParams(s.track, s.device,
+                                  {{QStringLiteral("mid_in"), -12.0},
+                                   {QStringLiteral("mid_out"), -24.0},
+                                   {QStringLiteral("high_in"), -24.0},
+                                   {QStringLiteral("mid_attack"), 0.15},
+                                   {QStringLiteral("low_release"), 999.0}});
+        for (const char* name : {"highIn", "midIn", "lowIn", "highOut", "midOut", "lowOut", "highAttack",
+                                 "midAttack", "lowAttack", "highRelease", "midRelease", "lowRelease", "xoverHigh"})
+            box(s.view, name)->setProperty("automation", QStringLiteral("on"));
+        QTest::qWait(30);
+        save(grab(), QStringLiteral("multiband-automation-time.png"));
+        click(find(s.view, QStringLiteral("pageAbove")));
+        for (const char* name :
+             {"highAbove", "midAbove", "lowAbove", "highAboveRatio", "midAboveRatio", "lowAboveRatio"})
+            box(s.view, name)->setProperty("automation", QStringLiteral("on"));
+        QTest::qWait(200);  // (the page's fade)
+        save(grab(), QStringLiteral("multiband-automation.png"));
     }
 };
 

@@ -2,6 +2,7 @@
 
 #include "audio/MultibandResponse.h"
 #include "input/GestureKey.h"
+#include "input/Modifiers.h"
 #include "model/Device.h"
 #include "model/ParamSpec.h"
 #include "sg/SgPainter.h"
@@ -156,6 +157,23 @@ double MultibandGraph::staticOutDb(int band, double inDb) const {
     return inDb + sub::app::multibandGainDb(inDb, s.above, s.aboveRatio, s.below, s.belowRatio, softKnee_, amount_);
 }
 
+std::pair<double, double> MultibandGraph::changeSpan(int band) const {
+    const BandView& view = bands_[index(band)];
+    const double out = view.out.level, in = view.in.level, gain = view.gain.value;
+    return {gain < 0.0 ? std::clamp(in, out, out - gain) : std::clamp(in, out - gain, out), out};
+}
+
+std::optional<double> MultibandGraph::targetMarkerDb(int band) const {
+    const BandView& view = bands_[index(band)];
+    if (view.inRead <= kFloorDb)
+        return std::nullopt;
+    // (By the readings, not the meters: they fall on after the audio stops.)
+    const double target = staticOutDb(band, view.inRead);
+    if (std::abs(std::max(target, kFloorDb) - std::max(view.outRead, kFloorDb)) <= 0.5)
+        return std::nullopt;
+    return target;
+}
+
 double MultibandGraph::sideGainDb(int band, int side, double levelDb) const {
     const Settings& s = bands_[index(band)].settings;
     return side == Above
@@ -166,6 +184,11 @@ double MultibandGraph::sideGainDb(int band, int side, double levelDb) const {
 QString MultibandGraph::ratioText(double ratio) const { return sub::app::formatValue(ratio, QStringLiteral("ratio")); }
 
 double MultibandGraph::parseRatio(const QString& text) const { return sub::app::multibandParseRatio(text); }
+
+QVariant MultibandGraph::parseTime(const QString& text) const {
+    const std::optional<double> ms = sub::app::multibandParseMs(text);
+    return ms ? QVariant(*ms) : QVariant::fromValue(nullptr);
+}
 
 void MultibandGraph::sync() {
     for (int b = 0; b < kBands; ++b) {
@@ -209,9 +232,11 @@ void MultibandGraph::setTargets() {
         BandView& view = bands_[std::size_t(b)];
         const bool solo = b == Mid || !view.on ? mid.settings.solo : view.settings.solo;
         view.opacity.target = !view.on ? kOffOpacity : (!anySolo || solo ? 1.0 : kMutedOpacity);
-        const bool sounding = view.on && view.in.level > kFloorDb + 0.5;
+        // Working by the level the display last reported (held a while, then the floor), not by the falling
+        // meter: once the audio stops, a meter passing through a Below region isn't the band being lifted.
+        const bool sounding = view.on && view.inRead > kFloorDb + 0.5;
         for (int side : {Below, Above}) {
-            const bool working = sounding && std::abs(sideGainDb(b, side, view.in.level)) >= 0.1;
+            const bool working = sounding && std::abs(sideGainDb(b, side, view.inRead)) >= 0.1;
             view.glow[side].target = working ? 1.0 : 0.0;
             auto held = [&](bool handle) {
                 if (drag_) {
@@ -240,8 +265,8 @@ void MultibandGraph::refreshDisplays() {
         }
     }
     quietTicks_ = any ? 0 : quietTicks_ + 1;
-    // Only a tick's worth of the latest: after a stall the backlog is old audio, not now.
-    const auto latest = std::size_t(std::max(1.0, std::ceil(kTickSpan * sampleRate() / kMeterSamples)));
+    // Only the recent values: a buffer's worth arrives at once, but after a stall the backlog is old audio.
+    const auto latest = std::size_t(std::max(1.0, std::ceil(kRecentSpan * sampleRate() / kMeterSamples)));
     bool moved = false;
     for (int b = 0; b < kBands; ++b) {
         BandView& view = bands_[std::size_t(b)];
@@ -342,13 +367,17 @@ void MultibandGraph::hoverLeaveEvent(QHoverEvent*) {
 
 void MultibandGraph::mousePressEvent(QMouseEvent* event) {
     const bool second = secondPressOfDoubleClick(event);
-    const std::optional<Target> target = event->button() == Qt::LeftButton ? targetAt(event->position()) : std::nullopt;
+    // Ctrl+Alt-drag scrolls the device chain (its area takes the press before the graph sees it).
+    const std::optional<Target> target = event->button() == Qt::LeftButton && !isPanModifier(event->modifiers())
+                                             ? targetAt(event->position())
+                                             : std::nullopt;
     if (!target) {  // between the thresholds, the header: the frame's (selecting the device)
         event->ignore();
         return;
     }
     if (second)
         return;  // (the double-click follows)
+    wheel_.reset();  // (a wheel run after this starts from what the drag leaves)
     Drag drag;
     drag.target = *target;
     drag.gesture = newGestureKey();
@@ -466,13 +495,15 @@ void MultibandGraph::writeRatios(const Drag& drag, double factor, const QString&
 }
 
 void MultibandGraph::mouseDoubleClickEvent(QMouseEvent* event) {
-    const std::optional<Target> target =
-        event->button() == Qt::LeftButton ? targetAt(event->position()) : std::nullopt;
+    const std::optional<Target> target = event->button() == Qt::LeftButton && !isPanModifier(event->modifiers())
+                                             ? targetAt(event->position())
+                                             : std::nullopt;
     if (!target) {
         event->ignore();
         return;
     }
     drag_.reset();
+    wheel_.reset();
     Drag reset;
     reset.target = *target;
     for (int b = 0; b < kBands; ++b)
@@ -492,24 +523,30 @@ void MultibandGraph::mouseDoubleClickEvent(QMouseEvent* event) {
 void MultibandGraph::wheelEvent(QWheelEvent* event) {
     const int delta = event->angleDelta().y() ? event->angleDelta().y() : event->angleDelta().x();  // (Alt: sideways)
     const std::optional<Target> target = targetAt(event->position());
-    if (!target || delta == 0 || drag_) {
+    // (Shift+wheel scrolls the device chain, as everywhere over it.)
+    if (!target || delta == 0 || drag_ || (event->modifiers() & Qt::ShiftModifier)) {
         event->ignore();
         return;
     }
     event->accept();
-    if (wheelGesture_.isEmpty() || !wheelClock_.isValid() || wheelClock_.elapsed() > kWheelGesture * 1000.0)
-        wheelGesture_ = newGestureKey();
+    // A run of notches on one target is one gesture (one undo step), worked out from where it began.
+    if (!wheel_ || wheel_->target != *target || !wheelClock_.isValid() ||
+        wheelClock_.elapsed() > kWheelGesture * 1000.0) {
+        Drag run;
+        run.target = *target;
+        run.gesture = newGestureKey();
+        for (int b = 0; b < kBands; ++b)
+            run.start[std::size_t(b)] = bands_[std::size_t(b)].settings;
+        wheel_ = run;
+        wheelNotches_ = 0.0;
+    }
     wheelClock_.start();
-    Drag step;
-    step.target = *target;
-    for (int b = 0; b < kBands; ++b)
-        step.start[std::size_t(b)] = bands_[std::size_t(b)].settings;
-    const double notches = delta / 120.0;
-    if (target->handle) {
-        writeThresholds(step, notches * (event->modifiers() & Qt::ShiftModifier ? 0.1 : 0.5), wheelGesture_);
-    } else {  // up: louder in that region (a lower ratio above, a higher one below)
+    wheelNotches_ += delta / 120.0;
+    if (target->handle) {  // half a dB a notch
+        writeThresholds(*wheel_, wheelNotches_ * 0.5, wheel_->gesture);
+    } else {  // 2^(1/8) a notch, up: louder in that region (a lower ratio above, a higher one below)
         const double sign = target->side == Above ? -1.0 : 1.0;
-        writeRatios(step, std::pow(2.0, sign * notches / 8.0), wheelGesture_);
+        writeRatios(*wheel_, std::pow(2.0, sign * wheelNotches_ / 8.0), wheel_->gesture);
     }
 }
 
@@ -587,7 +624,7 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
     const double left = l.left() + 1.0;
     if (outDb > kFloorDb || inDb > kFloorDb) {
         const double outX = xOfDb(outDb);
-        const double fromX = xOfDb(outDb - gain);  // where it would be without the change
+        const double fromX = xOfDb(changeSpan(band).first);  // where it would be without the change
         const double barTop = ym - 6.0, barHeight = 12.0;
         const double meterEnd = std::min(outX, fromX);
         const double yellow = xOfDb(-12.0), red = xOfDb(-3.0);
@@ -613,9 +650,8 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         if (inDb > kFloorDb)
             p.fillRect(QRectF(left, ym + 8.0, xOfDb(inDb) - left, 2.0), withAlpha(Theme::kText, 150));
         // Where the static curve is taking it (leading while attack or release catch up).
-        const double target = staticOutDb(band, inDb);
-        if (inDb > kFloorDb && std::abs(target - outDb) > 0.5) {
-            const double tx = xOfDb(target);
+        if (const std::optional<double> target = targetMarkerDb(band)) {
+            const double tx = xOfDb(*target);
             const QPointF tip[3] = {{tx - 2.5, ym - 11.0}, {tx + 2.5, ym - 11.0}, {tx, ym - 7.0}};
             p.drawPolygon(tip, 3, withAlpha(Theme::kText, 200), 1.0);
         }

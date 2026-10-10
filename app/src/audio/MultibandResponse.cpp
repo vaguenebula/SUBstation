@@ -25,11 +25,11 @@ double multibandGainDb(double levelDb, double above, double aboveRatio, double b
 
 namespace {
 
-// A positive, finite number (0 for anything else).
+// A positive number, or infinity ("inf": Live's brick wall, "1:inf"); 0 for anything else.
 double positive(const QString& text) {
     bool ok = false;
     const double value = QLocale::c().toDouble(text.trimmed(), &ok);
-    return ok && std::isfinite(value) && value > 0.0 ? value : 0.0;
+    return ok && value > 0.0 ? value : 0.0;  // (NaN isn't over 0)
 }
 
 }  // namespace
@@ -41,9 +41,26 @@ double multibandParseRatio(const QString& text) {
         ratio = positive(parts[0]);
     } else if (parts.size() == 2) {
         const double a = positive(parts[0]), b = positive(parts[1]);
-        ratio = a > 0.0 && b > 0.0 ? a / b : 0.0;
+        if (a > 0.0 && b > 0.0)
+            ratio = a == 1.0 ? b : a / b;  // Live's "1:R"; otherwise in to out, as "4:1"
     }
     return ratio > 0.0 ? std::clamp(ratio, kMultibandMinRatio, kMultibandMaxRatio) : 0.0;
+}
+
+std::optional<double> multibandParseMs(const QString& text) {
+    QString cleaned = text.trimmed().toLower();
+    double scale = 1.0;
+    if (cleaned.endsWith(QLatin1String("ms"))) {
+        cleaned.chop(2);
+    } else if (cleaned.endsWith(QLatin1Char('s'))) {
+        cleaned.chop(1);
+        scale = 1000.0;
+    }
+    bool ok = false;
+    const double value = QLocale::c().toDouble(cleaned.trimmed(), &ok);
+    if (!ok || !std::isfinite(value) || value < 0.0)
+        return std::nullopt;
+    return value * scale;
 }
 
 }  // namespace sub::app

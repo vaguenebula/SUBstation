@@ -12,6 +12,8 @@ import SUBstation
 // its two regions: drag a region's edge for its threshold, inside it up or
 // down for its ratio. A band switched off dims its controls (they stay
 // editable, as Live keeps them: the Mid band then shapes its frequencies).
+// Every box is at least as wide as its widest text and the automation dot
+// beside it, so the dot never covers a minus sign.
 // Every control shows its parameter as it is now (its automation's value while
 // that plays), sets it undoably, touches it when pressed, and right-click
 // gives its menu.
@@ -29,7 +31,7 @@ Item {
 
     signal sidechainMenuRequested()
 
-    implicitWidth: 780
+    implicitWidth: 800
     // At the least: the header and three rows of 38 px, or the device's controls 2 px apart.
     implicitHeight: Math.max(142, 6 + knobRow.implicitHeight + buttonRow.implicitHeight + sidechainRow.implicitHeight
                                       + 2 * 2 + 6)
@@ -53,7 +55,19 @@ Item {
         }
     }
 
-    // A box's formatter: its parameter's text for a value ("-20.0 dB", "4.00:1", "1:2.00", "10 ms"). Bound
+    // The columns (x): the band's switch, solo and crossover; Input; the display; the two fields; Output; the
+    // device's own controls. Boxes are a little wider than their sample text needs (its width + 16, room for
+    // the automation dot at the left), so the dot stays clear of a minus sign.
+    readonly property int inX: 82
+    readonly property int graphX: 151
+    readonly property int fieldX: 425
+    readonly property int field2X: 492
+    readonly property int outX: 557
+    readonly property int globalX: 632
+    readonly property int levelBoxWidth: 63  // "-80.0 dB" (61)
+    readonly property int field2Width: 59    // "1:0.250", "999 ms" (55)
+
+    // A box's formatter: its parameter's text for a value ("-20.0 dB", "1:4.00", "1:0.500", "10 ms"). Bound
     // to the parameter, so a box whose value never changes still gets its text once the parameter comes.
     function formatOf(param) {
         return param ? (v => param.format(v)) : null
@@ -62,19 +76,28 @@ Item {
     function parserOf(param) {
         return param ? (t => param.parse(t)) : null
     }
+    // A ratio box's: "1:4" (Live's way), "4", "4:1" (a compressor's), "1:inf".
+    function parseRatio(text) {
+        const r = graph.parseRatio(text)
+        return r > 0 ? r : null
+    }
+    // A time box's, in ms: "250", "250 ms", "1.5 s".
+    function parseTime(text) {
+        return graph.parseTime(text)
+    }
 
     // --- The header ---------------------------------------------------------------------------
 
     EditorCaption {
-        x: 80
+        x: editor.inX
         y: 6
-        width: 50
+        width: editor.levelBoxWidth
         height: 16
         verticalAlignment: Text.AlignVCenter
         text: qsTr("Input")
     }
     Row {
-        x: 442
+        x: editor.fieldX
         y: 6
         spacing: 2
 
@@ -102,17 +125,17 @@ Item {
     }
     EditorCaption {
         objectName: "pageCaption"
-        x: 502
+        x: editor.field2X
         y: 6
-        width: 42
+        width: editor.field2Width
         height: 16
         verticalAlignment: Text.AlignVCenter
         text: editor.fieldsPage === "T" ? qsTr("Time") : editor.fieldsPage === "B" ? qsTr("Below") : qsTr("Above")
     }
     EditorCaption {
-        x: 550
+        x: editor.outX
         y: 6
-        width: 50
+        width: editor.levelBoxWidth
         height: 16
         verticalAlignment: Text.AlignVCenter
         text: qsTr("Output")
@@ -136,7 +159,7 @@ Item {
         objectName: "xoverHigh"
         x: 8
         y: editor.rowY(0) + 19
-        width: 66
+        width: 68
         param: p.get("xover_high")
         logScale: true
         decimals: 0
@@ -194,7 +217,7 @@ Item {
         objectName: "xoverLow"
         x: 8
         y: editor.rowY(2) + 19
-        width: 66
+        width: 68
         param: p.get("xover_low")
         logScale: true
         decimals: 0
@@ -260,7 +283,7 @@ Item {
 
         ParamButton {
             objectName: row.name("Solo")
-            x: 56
+            x: 58
             y: 1
             width: 18
             height: 16
@@ -273,9 +296,9 @@ Item {
         DimBox {
             bandOn: row.on
             objectName: row.name("In")
-            x: 80
+            x: editor.inX
             y: row.boxY
-            width: 50
+            width: editor.levelBoxWidth
             param: row.param("in")
             step: 0.1
             decimals: 1
@@ -289,34 +312,31 @@ Item {
             DimBox {
                 bandOn: row.on
                 objectName: row.name("Above")
-                x: 442
+                x: editor.fieldX
                 y: row.boxY
-                width: 56
+                width: editor.levelBoxWidth
                 param: row.param("above")
                 step: 0.1
                 decimals: 1
                 defaultValue: -20
                 formatter: editor.formatOf(row.param("above"))
                 sampleText: "-80.0 dB"
-                tooltip: qsTr("Above: what happens to the band above this level. Over 1:1 it is compressed (down), under 1:1 expanded (up)")
+                tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at 1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
             DimBox {
                 bandOn: row.on
                 objectName: row.name("AboveRatio")
-                x: 502
+                x: editor.field2X
                 y: row.boxY
-                width: 42
+                width: editor.field2Width
                 param: row.param("above_ratio")
                 logScale: true
                 decimals: 3
                 defaultValue: 1
                 formatter: editor.formatOf(row.param("above_ratio"))
-                parser: t => {
-                    const r = graph.parseRatio(t)
-                    return r > 0 ? r : null
-                }
-                sampleText: "1:4.00"
-                tooltip: qsTr("Above: what happens to the band above this level. Over 1:1 it is compressed (down), under 1:1 expanded (up)")
+                parser: t => editor.parseRatio(t)
+                sampleText: "1:0.250"
+                tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at 1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
         }
         Page {
@@ -324,34 +344,31 @@ Item {
             DimBox {
                 bandOn: row.on
                 objectName: row.name("Below")
-                x: 442
+                x: editor.fieldX
                 y: row.boxY
-                width: 56
+                width: editor.levelBoxWidth
                 param: row.param("below")
                 step: 0.1
                 decimals: 1
                 defaultValue: -40
                 formatter: editor.formatOf(row.param("below"))
                 sampleText: "-80.0 dB"
-                tooltip: qsTr("Below: what happens to the band below this level. Over 1:1 it is pulled up (upward compression), under 1:1 pushed down (downward expansion)")
+                tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up (upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 (1:0.500) pushed down (downward expansion)")
             }
             DimBox {
                 bandOn: row.on
                 objectName: row.name("BelowRatio")
-                x: 502
+                x: editor.field2X
                 y: row.boxY
-                width: 42
+                width: editor.field2Width
                 param: row.param("below_ratio")
                 logScale: true
                 decimals: 3
                 defaultValue: 1
                 formatter: editor.formatOf(row.param("below_ratio"))
-                parser: t => {
-                    const r = graph.parseRatio(t)
-                    return r > 0 ? r : null
-                }
-                sampleText: "1:4.00"
-                tooltip: qsTr("Below: what happens to the band below this level. Over 1:1 it is pulled up (upward compression), under 1:1 pushed down (downward expansion)")
+                parser: t => editor.parseRatio(t)
+                sampleText: "1:0.250"
+                tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up (upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 (1:0.500) pushed down (downward expansion)")
             }
         }
         Page {
@@ -359,28 +376,30 @@ Item {
             DimBox {
                 bandOn: row.on
                 objectName: row.name("Attack")
-                x: 442
+                x: editor.fieldX
                 y: row.boxY
-                width: 56
+                width: editor.levelBoxWidth
                 param: row.param("attack")
                 logScale: true
                 decimals: 2
                 defaultValue: 10
                 formatter: editor.formatOf(row.param("attack"))
-                sampleText: "999 ms"
+                parser: t => editor.parseTime(t)
+                sampleText: "0.88 ms"
                 tooltip: qsTr("Attack: how fast the band's compression or expansion comes when its level crosses a threshold into a region")
             }
             DimBox {
                 bandOn: row.on
                 objectName: row.name("Release")
-                x: 502
+                x: editor.field2X
                 y: row.boxY
-                width: 42
+                width: editor.field2Width
                 param: row.param("release")
                 logScale: true
                 decimals: 1
                 defaultValue: 100
                 formatter: editor.formatOf(row.param("release"))
+                parser: t => editor.parseTime(t)
                 sampleText: "999 ms"
                 tooltip: qsTr("Release: how fast it lets go when the level comes back")
             }
@@ -388,9 +407,9 @@ Item {
         DimBox {
             bandOn: row.on
             objectName: row.name("Out")
-            x: 550
+            x: editor.outX
             y: row.boxY
-            width: 50
+            width: editor.levelBoxWidth
             param: row.param("out")
             step: 0.1
             decimals: 1
@@ -422,9 +441,9 @@ Item {
         session: Session
         trackId: editor.trackId
         deviceId: editor.deviceId
-        x: 136
+        x: editor.graphX
         y: 6
-        width: 300
+        width: implicitWidth  // (MultibandGraph::kWidth)
         height: Math.max(implicitHeight, editor.height - 12)
 
         HoverHandler {
@@ -440,7 +459,7 @@ Item {
     Column {
         id: globals
         objectName: "globals"
-        x: 612
+        x: editor.globalX
         y: 6
         width: 160
         // Spread over the body's height (2 px apart at the least), as the band rows are.

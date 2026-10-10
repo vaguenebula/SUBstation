@@ -17,9 +17,10 @@
 //   where its own level is.
 // - Detectors, linked stereo (the louder channel), per band: Peak, the largest
 //   value over a window of the band's lowest period (1..25 ms: a steady tone
-//   holds its peak, so it isn't distorted); RMS, the mean square through a
-//   one-pole of that window or 10 ms, whichever is longer. Peak/RMS crossfades
-//   their levels in dB. Input gain drives the detector as it drives the audio.
+//   holds its peak, so it isn't distorted); RMS, each channel's mean square
+//   through a one-pole of that window or 10 ms, whichever is longer, the larger
+//   of the two taken. Peak/RMS crossfades their levels in dB. Input gain drives
+//   the detector as it drives the audio.
 // - Attack and release as Ableton defines them, for each side on its own: each
 //   side's gain change (dB) moves at the attack while it grows and at the
 //   release while it shrinks. Time scales both. Amount scales the band's change.
@@ -28,15 +29,17 @@
 //   coefficients interpolated sample by sample between the steps. The 32-sample
 //   grid runs across render() calls, so the output doesn't depend on where
 //   automation cuts a block.
-// - A sidechain keys each band by the same band of the key (its own split);
-//   Sidechain Mix blends the key with the device's own input as the trigger.
+// - A sidechain keys each band by the same band of the key (its own split, run
+//   only while some of the key is heard); Sidechain Mix blends the key with the
+//   device's own input as the trigger.
 // - States are flushed on the 32-sample grid, so silence rings out to exact
 //   zeros (and a NaN or infinity let in by a broken input is cleared, not
 //   kept). No lookahead, no latency; the tail is the crossovers' ringing.
 //
 // Displays, one value per 256 samples, per band (Low, Mid, High): `in`, the
-// detector's level (dB, after Input); `out`, that level plus the dynamics' gain
-// change (the static curve's output); `gain`, the change itself (dB, signed).
+// detector's level (dB, after Input); `out`, that level plus the gain change the
+// dynamics are applying (the static curve's output once attack and release have
+// settled); `gain`, the change itself (dB, signed).
 
 #include <algorithm>
 #include <array>
@@ -175,7 +178,7 @@ public:
         keyLive_ = false;
         for (BandState& band : bands_) {
             band.peak.reset();
-            band.meanSquare = band.aboveDb = band.belowDb = 0.f;
+            band.meanSquare[0] = band.meanSquare[1] = band.aboveDb = band.belowDb = 0.f;
             band.clearMeters();
         }
         readParams(true);
@@ -202,6 +205,7 @@ protected:
         if (n != channels_) {  // a channel that wasn't processed has no history to go on from
             main_[1].reset();
             key_[1].reset();
+            for (BandState& band : bands_) band.meanSquare[1] = 0.f;
             channels_ = n;
         }
         readParams(false);
@@ -227,7 +231,7 @@ protected:
 private:
     struct BandState {
         dsp::SlidingMax peak;                // the Peak detector
-        float meanSquare = 0.f;              // the RMS detector
+        float meanSquare[2] = {};            // the RMS detector, per channel (the louder is taken)
         float aboveDb = 0.f, belowDb = 0.f;  // each side's gain change, after attack and release
         Glide above, below, aboveSlope, belowSlope, inDb, outDb, audible;
         float attack = 0.f, release = 0.f;  // one-pole coefficients, Time applied
@@ -344,7 +348,7 @@ private:
             for (Split& s : key_) s.flush();
         }
         for (BandState& band : bands_) {
-            band.meanSquare = flushed(band.meanSquare, kTinyMeanSquare);
+            for (float& meanSquare : band.meanSquare) meanSquare = flushed(meanSquare, kTinyMeanSquare);
             band.aboveDb = flushed(band.aboveDb, kTinyGainDb);
             band.belowDb = flushed(band.belowDb, kTinyGainDb);
         }
@@ -416,9 +420,10 @@ private:
                     bandsGliding_ = bandsGliding_ || band.gliding;
                 }
             }
-            const float keyed = keyOn_.b;
-            if (keyed > 0.f) {
-                const float share = keyed * scMix_.b;
+            // How much of the key the detectors hear. Its split runs only while that is more than none (a
+            // sidechain connected and Sidechain Mix over 0 %): at 0 % it would be worked out to be thrown away.
+            const float share = keyOn_.b * scMix_.b;
+            if (share > 0.f) {
                 float keys[N];
                 if constexpr (N == 2) {
                     for (int k = 0; k < 2; ++k) keys[k] = key[k] ? keyGain_ * key[k][i] : 0.f;
@@ -431,14 +436,14 @@ private:
                     for (int b = 0; b < mb::kBands; ++b) heard[k][b] += share * (keyBands[b] - heard[k][b]);
                 }
                 keyLive_ = true;
-            } else if (keyLive_) {  // let go: a key connected again starts from silence
+            } else if (keyLive_) {  // let go: a key heard again starts from silence
                 for (Split& s : key_) s.reset();
                 keyLive_ = false;
             }
 
             // A band switched off is heard by the mid band's detector (its signal is the mid band's).
             const float lowOn = lowOn_.b, highOn = highOn_.b;
-            float peak[mb::kBands] = {}, square[mb::kBands] = {};
+            float peak[mb::kBands] = {}, square[N][mb::kBands];
             for (int k = 0; k < N; ++k) {
                 const float d[mb::kBands] = {
                     heard[k][mb::Low],
@@ -446,7 +451,7 @@ private:
                     heard[k][mb::High]};
                 for (int b = 0; b < mb::kBands; ++b) {
                     peak[b] = std::max(peak[b], std::abs(d[b]));
-                    square[b] = std::max(square[b], d[b] * d[b]);
+                    square[k][b] = d[b] * d[b];
                 }
             }
 
@@ -454,16 +459,23 @@ private:
             float total[mb::kBands], audible[mb::kBands];
             for (int b = 0; b < mb::kBands; ++b) {
                 BandState& band = bands_[static_cast<size_t>(b)];
+                // Peak: the louder channel's (the largest of either). RMS: each channel's mean square, the
+                // louder taken (the mean of the larger square each sample would read hot on wide stereo).
                 const float held = band.peak.push(peak[b], band.window);
-                band.meanSquare = square[b] + band.rms * (band.meanSquare - square[b]);
+                float meanSquare = 0.f;
+                for (int k = 0; k < N; ++k) {
+                    float& state = band.meanSquare[k];
+                    state = square[k][b] + band.rms * (state - square[k][b]);
+                    meanSquare = k == 0 ? state : std::max(meanSquare, state);
+                }
                 float level;
                 if (rmsShare == 0.f) {
                     level = kDbPerLog2 * std::log2(held + 1e-9f);
                 } else if (rmsShare == 1.f) {
-                    level = 0.5f * kDbPerLog2 * std::log2(band.meanSquare + 1e-18f);
+                    level = 0.5f * kDbPerLog2 * std::log2(meanSquare + 1e-18f);
                 } else {  // switching Peak/RMS: a crossfade of the two levels
                     const float peakDb = kDbPerLog2 * std::log2(held + 1e-9f);
-                    const float rmsDb = 0.5f * kDbPerLog2 * std::log2(band.meanSquare + 1e-18f);
+                    const float rmsDb = 0.5f * kDbPerLog2 * std::log2(meanSquare + 1e-18f);
                     level = peakDb + rmsShare * (rmsDb - peakDb);
                 }
                 const float inDb = band.inDb.b;
