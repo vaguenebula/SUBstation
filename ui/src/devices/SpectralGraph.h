@@ -9,7 +9,8 @@
 // threshold (orange, from the engine's own maths: sub::app::spectralThresholdDb)
 // with its pivot at 1 kHz and tilt handles at 100 Hz and 10 kHz, the Below
 // threshold (green, while Upward is on) with its handle at 300 Hz, the Focus
-// band's edges (outside them dimmed), and In/Out meters at the right edge.
+// band's edges (outside them dimmed by the engine's own Focus weights:
+// sub::app::spectralFocusWeights), and In/Out meters at the right edge.
 //
 // Drag the threshold (its pivot or anywhere on it) up and down, its end handles
 // to tilt both thresholds about 1 kHz, the green line for Below, the Focus edges
@@ -20,19 +21,20 @@
 // The engine publishes a frame of 128 values per hop for each spectral display,
 // in step with what is heard; frames are reassembled by the values' absolute
 // index (FrameAssembler). Everything moves in refreshDisplays() (eased or with
-// meter ballistics, by the time since the last tick) and paint() only reads
+// meter ballistics, by DeviceCanvas::tickSeconds()) and paint() only reads
 // members; nothing repaints while nothing moves and no data comes.
 
+#include "audio/SpectralResponse.h"
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
-#include <QElapsedTimer>
 #include <QLineF>
 #include <QList>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
+#include <limits>
 #include <vector>
 
 class QHoverEvent;
@@ -54,7 +56,7 @@ public:
     enum Handle { None = 0, ThresholdHandle, TiltLow, TiltHigh, BelowHandle, FocusLowEdge, FocusHighEdge };
     Q_ENUM(Handle)
 
-    static constexpr int kPoints = 128;  // per display frame (the engine's display points)
+    static constexpr int kPoints = sub::app::kSpectralDisplayPoints;  // per display frame (the engine's)
     static constexpr int kWidth = 376;
     static constexpr int kMinimumHeight = 100;
     static constexpr double kLow = 20.0;  // Hz across the plot
@@ -73,6 +75,7 @@ public:
     static constexpr double kFineDrag = 0.1;               // Shift
     static constexpr double kHeaderLeft = 64.0;            // the QML Sidechain badge's room in the header
     static constexpr double kMeterFloorDb = -60.0;
+    static constexpr int kFocusStops = 256;  // the Focus dim's weights, across the plot
     static constexpr std::array<double, 4> kLevelFigures{0.0, -24.0, -48.0, -72.0};  // dB, figured on the grid
 
     explicit SpectralGraph(QQuickItem* parent = nullptr);
@@ -173,9 +176,18 @@ private:
     void dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers);
     QString paramOf(int which) const;
 
+    // A parameter's range (the engine's, read once the device is there; none until then).
+    struct Span {
+        double low = -std::numeric_limits<double>::infinity(), high = std::numeric_limits<double>::infinity();
+        double clamp(double value) const { return value < low ? low : (value > high ? high : value); }
+    };
+    void readSpans();
+
     // The parameters (as they are now).
     double threshold_ = -18.0, ratio_ = 2.0, below_ = -48.0, upward_ = 1.0, tilt_ = 0.0;
     double range_ = 24.0, focusLow_ = 20.0, focusHigh_ = 20000.0, mix_ = 100.0;
+    Span thresholdSpan_, belowSpan_, tiltSpan_, rangeSpan_;
+    bool spansRead_ = false;
     bool delta_ = false;
     bool keyed_ = false;
     bool active_ = true;  // anything is processed (else the threshold is drawn dim)
@@ -190,6 +202,9 @@ private:
     QString readoutText_;
     std::vector<double> thresholdCurve_;  // dB at each display point, as drawn
     QList<double> frequencies_;           // the display points (Hz)
+    QList<double> focusFrequencies_;      // kFocusStops, evenly across the plot (Hz)
+    QList<double> focusWeights_;          // the Focus band's weight there, from the edges as drawn
+    bool focusDimmed_ = false;            // any weight there is under 1
 
     // The displays.
     FrameAssembler input_, key_, output_, gain_;
@@ -202,7 +217,6 @@ private:
     double meterDt_ = 0.0;     // seconds since the meters last had values
     double sinceFrame_ = 1.0;  // seconds since a whole frame came
     double sinceLevel_ = 1.0;
-    QElapsedTimer clock_;
 
     // The mouse.
     int hovered_ = None;

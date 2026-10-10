@@ -8,23 +8,27 @@ import SUBstation
 // and between them SpectralGraph: the spectrum in and out, the thresholds (drag them; tilt them by the
 // orange line's end handles), the Focus band's edges (dragged too), and what each frequency is turned down
 // (from the top) or brought up (from the bottom), as it plays. The Sidechain badge over the display is lit
-// while another track keys it; a click asks the frame for the sidechain menu. Every control shows its
-// parameter as it is now, sets it undoably, touches it when pressed, and right-click gives its menu.
+// while another track keys it; a click asks the frame for the sidechain menu, under the badge. Below is
+// dimmed (still settable) while Upward is 1:1, when it does nothing. Every control shows its parameter as it
+// is now, sets it undoably, touches it when pressed, and right-click gives its menu.
 Item {
     id: editor
 
     required property string trackId
     required property string deviceId
     readonly property alias graph: graph
-    // The badge was clicked: the device's frame shows its sidechain menu.
-    signal sidechainMenuRequested()
+    // The badge was clicked: the device's frame shows its sidechain menu under it (`from`).
+    signal sidechainMenuRequested(var from)
 
     // A knob's cell: wide enough for "Stereo Link" and "-1.5 dB/oct" at 8 pt.
     readonly property int cellWidth: 64
+    // The Focus column: its value boxes wide enough for the widest value (the maximum's, "20.00 kHz"), centred
+    // with 11 px either side, clear of the automation dot (drawn at x 3.5..8.5 in the box).
+    readonly property int focusWidth: Math.max(cellWidth, Math.ceil(widestFocus.advanceWidth) + 2 * 11)
     readonly property int leftWidth: 4 * cellWidth
-    readonly property int rightWidth: 4 * cellWidth  // the Focus column and three knobs
+    readonly property int rightWidth: focusWidth + 3 * cellWidth  // the Focus column and three knobs
     readonly property int gap: 10
-    readonly property int graphWidth: 376  // SpectralGraph::kWidth
+    readonly property int graphWidth: graph.implicitWidth
 
     // The device's body: the knobs either side of the display, 10 px from it, and the margins.
     implicitWidth: 8 + leftWidth + gap + graphWidth + gap + rightWidth + 8
@@ -38,6 +42,18 @@ Item {
               "attack", "release", "link", "mix", "output", "delta"]
     }
 
+    // A parameter's default, as its value reads ("-18.0 dB"), for the tooltips.
+    function defaultText(id) {
+        const param = p.get(id)
+        return param ? param.format(param.defaultValue) : ""
+    }
+
+    TextMetrics {
+        id: widestFocus
+        font: Theme.uiFont(8)
+        text: p.get("focus_hi") ? p.get("focus_hi").format(p.get("focus_hi").maximum) : ""
+    }
+
     // A Focus edge's cell: its name over a value box, level with the knobs beside it.
     component FocusCell: Item {
         id: cell
@@ -45,9 +61,8 @@ Item {
         property string paramId: ""
         property string title: ""
         property string tooltip: ""
-        property real defaultValue: 0
 
-        width: editor.cellWidth
+        width: editor.focusWidth
         height: attackKnob.height
 
         EditorCaption {
@@ -58,16 +73,15 @@ Item {
         }
         ParamBox {
             objectName: cell.paramId
-            x: 4
             y: caption.height + attackKnob.spacing + (attackKnob.knob.height - height) / 2
-            width: parent.width - 8
+            width: parent.width
             param: p.get(cell.paramId)
             logScale: true
             decimals: 0
-            defaultValue: cell.defaultValue
+            defaultValue: param ? param.defaultValue : 0
             formatter: v => param ? param.format(v) : ""
             parser: text => param ? param.parse(text) : null
-            sampleText: "20.0 kHz"
+            sampleText: widestFocus.text
             tooltip: cell.tooltip
         }
     }
@@ -86,7 +100,8 @@ Item {
             width: editor.cellWidth
             param: p.get("threshold")
             title: qsTr("Threshold")
-            tooltip: qsTr("Threshold: each frequency louder than this is turned down by Ratio. Pink noise reads its own level at every frequency")
+            tooltip: qsTr("Threshold: each frequency louder than this is turned down by Ratio. Pink noise reads "
+                          + "its own level at every frequency")
         }
         EditorKnob {
             objectName: "ratio"
@@ -100,7 +115,10 @@ Item {
             width: editor.cellWidth
             param: p.get("below")
             title: qsTr("Below")
-            tooltip: qsTr("Below: each frequency quieter than this is brought up by Upward (never above Threshold)")
+            // (Settable, dimmed while Upward is 1:1: it does nothing then.)
+            opacity: p.get("upward") && p.get("upward").value > 1.001 ? 1 : 0.55
+            tooltip: qsTr("Below: each frequency quieter than this is brought up by Upward (never above "
+                          + "Threshold; nothing while Upward is 1:1)")
         }
         EditorKnob {
             objectName: "upward"
@@ -115,7 +133,8 @@ Item {
             param: p.get("tilt")
             title: qsTr("Tilt")
             knob.bipolar: true
-            tooltip: qsTr("Tilt: turns both thresholds about 1 kHz, in dB per octave, against a pink spectrum (0: they follow pink noise; up: the highs are let louder)")
+            tooltip: qsTr("Tilt: turns both thresholds about 1 kHz, in dB per octave, against a pink spectrum "
+                          + "(0: they follow pink noise; up: the highs are let louder)")
         }
         EditorKnob {
             objectName: "knee"
@@ -136,17 +155,13 @@ Item {
             width: editor.cellWidth
             param: p.get("smooth")
             title: qsTr("Smoothing")
-            tooltip: qsTr("Smoothing: how wide a band each frequency's level is measured over: 0 each bin alone (most selective), 100 two octaves (gentlest)")
+            tooltip: qsTr("Smoothing: how wide a band each frequency's level is measured over: 0 each bin "
+                          + "alone (most selective), 100 two octaves (gentlest)")
         }
     }
 
-    Rectangle {
+    EditorDivider {
         x: left.x + editor.leftWidth + editor.gap / 2
-        y: 10
-        width: 1
-        height: editor.height - 20
-        color: Theme.border
-        opacity: 0.7
     }
 
     SpectralGraph {
@@ -166,11 +181,15 @@ Item {
         ToolTip.visible: graphHover.hovered && !graphHover.point.pressedButtons
         ToolTip.delay: 700
         ToolTip.text: [
-            qsTr("Spectrum in (filled) and out (line). The orange line is the threshold: drag it, or its end handles to tilt it. Orange from the top: how far each frequency is turned down; green from the bottom: how far it is brought up"),
-            qsTr("Threshold: drag up or down (Shift: finely; double-click: back to -18 dB)"),
+            qsTr("Spectrum in (filled) and out (line). The orange line is the threshold: drag it, or its end "
+                 + "handles to tilt it. Orange from the top: how far each frequency is turned down; green from "
+                 + "the bottom: how far it is brought up"),
+            qsTr("Threshold: drag up or down (Shift: finely; double-click: back to %1)")
+                .arg(editor.defaultText("threshold")),
             qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
             qsTr("Tilt: drag to turn both thresholds about 1 kHz (double-click: level with pink)"),
-            qsTr("Below: drag up or down; frequencies under the green line are brought up (double-click: back to -48 dB)"),
+            qsTr("Below: drag up or down; frequencies under the green line are brought up (double-click: back "
+                 + "to %1)").arg(editor.defaultText("below")),
             qsTr("Focus Low: drag sideways; nothing below it is changed (double-click: all the way down)"),
             qsTr("Focus High: drag sideways; nothing above it is changed (double-click: all the way up)")
         ][graph.hoveredHandle] || ""
@@ -209,20 +228,16 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: editor.sidechainMenuRequested()
+            onClicked: editor.sidechainMenuRequested(badge)
         }
         ToolTip.visible: badgeArea.containsMouse
         ToolTip.delay: 700
-        ToolTip.text: qsTr("Sidechain: lit while another track's spectrum keys the gains. Click for the sidechain menu")
+        ToolTip.text: qsTr("Sidechain: lit while another track's spectrum keys the gains. Click for the "
+                           + "sidechain menu")
     }
 
-    Rectangle {
+    EditorDivider {
         x: graph.x + graph.width + editor.gap / 2
-        y: 10
-        width: 1
-        height: editor.height - 20
-        color: Theme.border
-        opacity: 0.7
     }
 
     // Where it acts (the Focus band's edges, as values: typed, scrolled, automated and mapped as any control),
@@ -238,8 +253,8 @@ Item {
         FocusCell {
             paramId: "focus_lo"
             title: qsTr("Focus Low")
-            defaultValue: 20
-            tooltip: qsTr("Focus Low: nothing below this is changed (it fades out over a third of an octave under it). Its edge in the display drags it too")
+            tooltip: qsTr("Focus Low: nothing below this is changed (it fades out over a third of an octave "
+                          + "under it). Its edge in the display drags it too")
         }
         EditorKnob {
             id: attackKnob
@@ -261,13 +276,14 @@ Item {
             width: editor.cellWidth
             param: p.get("link")
             title: qsTr("Stereo Link")
-            tooltip: qsTr("Stereo Link: 100 both channels get the same gains (the louder one's); 0 each channel its own")
+            tooltip: qsTr("Stereo Link: 100 both channels get the same gains (the louder one's); 0 each "
+                          + "channel its own")
         }
         FocusCell {
             paramId: "focus_hi"
             title: qsTr("Focus High")
-            defaultValue: 20000
-            tooltip: qsTr("Focus High: nothing above this is changed (it fades out over a third of an octave over it). Its edge in the display drags it too")
+            tooltip: qsTr("Focus High: nothing above this is changed (it fades out over a third of an octave "
+                          + "over it). Its edge in the display drags it too")
         }
         EditorKnob {
             id: mixKnob
@@ -295,7 +311,8 @@ Item {
                 width: editor.cellWidth - 6
                 param: p.get("delta")
                 text: qsTr("Delta")
-                tooltip: qsTr("Delta: hear only what the device changes (what it takes away; what it adds comes out inverted), to set it by ear")
+                tooltip: qsTr("Delta: hear only what the device changes (what it takes away; what it adds comes "
+                              + "out inverted), to set it by ear")
             }
         }
     }

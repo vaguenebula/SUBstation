@@ -4,6 +4,9 @@
 
 namespace sub::app {
 
+static_assert(kSpectralDisplayPoints == sub::spectral::kDisplayPoints);
+static_assert(kSpectralPivotHz == sub::spectral::kPivotHz);
+
 QList<double> spectralThresholdDb(double threshold, double tilt, const QList<double>& frequencies) {
     QList<double> levels;
     levels.reserve(frequencies.size());

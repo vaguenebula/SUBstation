@@ -479,7 +479,9 @@ nearly alone (at −14 dBFS about 2.5 dB).
 - **Below** (−72 to +12 dB) and **Upward** (1:1 to 10:1): with Upward past 1:1, the
   green line appears at Below; frequencies under it are brought up towards it, for
   density and detail. Below is never above the threshold (dragged over it, it stays on
-  the orange line). Silence and hiss far down (under −90 dB) are left alone.
+  the orange line). Silence and hiss far down (under −90 dB) are left alone. While
+  Upward is at 1:1 the Below knob is dimmed: it does nothing then, but you can still
+  set it ready.
 - **Smoothing** (0 to 100 %): how wide a band each frequency's level is measured over.
   Low, each narrow band is judged alone: the most selective, for single resonances
   (whistles, ringing, a harsh "s"). High (up to two octaves), broad and gentle: for tone

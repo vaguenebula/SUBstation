@@ -1,13 +1,16 @@
 // The Spectral Compressor's editor (ui/qml/devices/editors/SpectralEditor.qml, ui/src/devices/SpectralGraph):
 // loaded as the device view loads it, its knobs, value boxes and button bound to their parameters (undoably),
 // the display's lines the engine's own (sub::app::spectralThresholdDb; drawn where they are when steep enough to
-// leave the plot, their handles on them) and the level figures they cross fading, its handles and edges dragged
+// leave the plot, their handles on them) and the level figures they cross fading, the Focus band's dim the engine's
+// weights (sub::app::spectralFocusWeights) with the figures over it, its handles and edges dragged
 // with the mouse (one undo step a drag, Shift finely from where it is pressed), the engine's displays reaching it
-// as it renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge. With
+// as it renders offline (cuts, lifts, the held cut, the glow, Delta's tint), and the Sidechain badge (its menu
+// under it). With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there idle, at its widest values, with a steep threshold,
 // with a signal flowing, lifting, keyed by a sidechain, and with Delta on.
 
 #include <QByteArray>
+#include <QFontMetricsF>
 #include <QImage>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -28,6 +31,7 @@
 #include "devices/DeviceParam.h"
 #include "devices/SpectralGraph.h"
 #include "model/ParamSpec.h"
+#include "theme/Theme.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -166,7 +170,7 @@ class TestUiDeviceEditorsSpectral : public QObject, public sub::app::test::Edito
         return paramKnob ? qvariant_cast<KnobItem*>(paramKnob->property("knob")) : nullptr;
     }
 
-    // The display's clock ticked `count` times (the easing settles in about 120).
+    // The display's clock ticked `count` times, a display tick each (the easing settles in about 120).
     void tick(int count = 120) {
         for (int i = 0; i < count; ++i) refreshDisplays();
     }
@@ -243,7 +247,6 @@ private Q_SLOTS:
         QVERIFY(showDevice());
         QVERIFY2(view_->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(view_->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(view_->implicitWidth(), 924.0);
 
         // Thirteen knobs, each reading its parameter's default, bound to it.
         const std::vector<std::pair<const char*, double>> defaults{
@@ -282,6 +285,13 @@ private Q_SLOTS:
             const QRectF rect = box->mapRectToScene(QRectF(0, 0, box->width(), box->height()));
             QVERIFY2(!rect.intersects(graphRect) && rect.left() > graphRect.right() && rect.left() < centerOf(dial).x(),
                      id);
+            QVERIFY2(rect.right() <= 1 + view_->width() - 8 + 0.5, id);
+            // Wide enough for the widest value ("20.00 kHz", centred) clear of the automation dot (x 3.5..8.5).
+            const double widest =
+                QFontMetricsF(uiFont(8)).horizontalAdvance(formatValue(20000.0, QStringLiteral("Hz")));
+            QVERIFY2((box->width() - widest) / 2 >= 8.5 + 2.0,
+                     qPrintable(QStringLiteral("%1: %2 px for %3").arg(id).arg(box->width()).arg(widest)));
+            QVERIFY2(box->width() <= widest + 2 * 11 + 1, id);  // (and no wider)
         }
 
         // Delta: a switch, off, level with the knobs beside it.
@@ -298,6 +308,15 @@ private Q_SLOTS:
                  qPrintable(QStringLiteral("%1 x %2").arg(plot.width()).arg(plot.height())));
         QVERIFY(graph_->x() >= 0 && graph_->x() + graph_->width() <= view_->width());
         QVERIFY(graph_->y() >= 6 && graph_->y() + graph_->height() <= view_->height() - 6 + 0.5);
+        // Below: dimmed while Upward is 1:1 (it does nothing then), still settable.
+        QQuickItem* below = find(view_, QStringLiteral("below"));
+        QCOMPARE(below->opacity(), 0.55);
+        QVERIFY(below->isEnabled());
+        set("upward", 2.0);
+        QTRY_COMPARE(below->opacity(), 1.0);
+        undo()->undo();
+        QTRY_COMPARE(below->opacity(), 0.55);
+
         QQuickItem* badge = find(view_, QStringLiteral("sidechainBadge"));
         QVERIFY(badge);
         const QRectF badgeRect = badge->mapRectToScene(QRectF(0, 0, badge->width(), badge->height()));
@@ -326,10 +345,12 @@ private Q_SLOTS:
             QCOMPARE(texts, 2);  // its name and its value
         }
         tick();  // (the lines glided there)
+        QTRY_COMPARE(below->opacity(), 1.0);  // (Upward 10:1: Below no longer dimmed)
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-widest.png"));
         while (undo()->index() > before) undo()->undo();
         tick();
+        QTRY_COMPARE(below->opacity(), 0.55);
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-idle.png"));
     }
@@ -668,6 +689,50 @@ private Q_SLOTS:
         QVERIFY(graph_->figureShown(-48.0) < 0.01);
     }
 
+    // The Focus band's dim is the engine's weights for the edges drawn: the 0 dB grid line reads full where a
+    // frequency gets all of its gain, darkest where it gets none, and between where it gets half. The level figures,
+    // at the plot's left, are drawn over the dim: as bright with the band raised as without.
+    void focusDimFollowsTheWeights() {
+        QVERIFY(showDevice());
+        tick();
+        QTest::qWait(50);
+        // The brightest pixel of a box of the display (graph coordinates).
+        const auto brightest = [&](const QImage& image, const QRectF& box) {
+            const qreal scale = image.devicePixelRatio();
+            const QRect pixels = QRectF(graph_->mapToScene(box.topLeft()) * scale, box.size() * scale).toAlignedRect();
+            int most = 0;
+            for (int y = pixels.top(); y <= pixels.bottom(); ++y)
+                for (int x = pixels.left(); x <= pixels.right(); ++x) most = std::max(most, qGray(image.pixel(x, y)));
+            return most;
+        };
+        const auto figure = [&](double db) {
+            return QRectF(graph_->plot().left() + 9, graph_->yOfLevel(db) - 11, 20, 10);
+        };
+        QImage image = grab();
+        const int open72 = brightest(image, figure(-72.0)), open48 = brightest(image, figure(-48.0));
+
+        set("focus_lo", 1200.0);
+        tick();
+        const double half = 1200.0 / std::exp2(1.0 / 6.0);  // half its gain: half a fade (a third of an octave) out
+        const QList<double> weights = spectralFocusWeights(1200.0, 20000.0, {650.0, half, 1500.0});
+        QCOMPARE(weights[0], 0.0);
+        QVERIFY(std::abs(weights[1] - 0.5) < 1e-9);
+        QCOMPARE(weights[2], 1.0);
+        QTest::qWait(50);
+        image = grab();
+        // (Each frequency well clear of the grid's upright lines, a column of the 0 dB line's rows.)
+        const auto line = [&](double hz) {
+            return brightest(image, QRectF(graph_->xOf(hz), graph_->yOfLevel(0.0) - 2, 0.5, 4));
+        };
+        const int none = line(650.0), between = line(half), full = line(1500.0);
+        QVERIFY2(none + 2 < between && between + 2 < full,
+                 qPrintable(QStringLiteral("%1 %2 %3").arg(none).arg(between).arg(full)));
+        QVERIFY2(brightest(image, figure(-72.0)) >= open72 - 4 && brightest(image, figure(-48.0)) >= open48 - 4,
+                 qPrintable(QStringLiteral("%1 (%2), %3 (%4)").arg(brightest(image, figure(-72.0))).arg(open72)
+                                .arg(brightest(image, figure(-48.0))).arg(open48)));
+        QVERIFY(open72 > 110 && open48 > 110);
+    }
+
     void dragBelow() {
         QVERIFY(showDevice());
         tick();
@@ -867,7 +932,7 @@ private Q_SLOTS:
         QCOMPARE(orangeInTheTop(0.4), 0);
 
         // Once everything has settled, nothing is drawn again however often the display ticks.
-        for (int i = 0; i < 600; ++i) refreshDisplays();  // (5 s: the meters' peaks have fallen)
+        for (int i = 0; i < 600; ++i) refreshDisplays();  // (10 s: the meters' peaks have fallen)
         QTest::qWait(50);
         const int settled = graph_->lastStats().frames;
         for (int i = 0; i < 30; ++i) refreshDisplays();
@@ -885,7 +950,7 @@ private Q_SLOTS:
         tick(3);
         QVERIFY(graph_->deltaShare() > 0.0 && graph_->deltaShare() < 1.0);  // (eased: it tints over 80 ms)
         engine()->renderOffline(0.0, kSampleRate / 2);
-        tick(30);
+        tick(15);  // (0.24 s: before the displays, given no more frames, sink back after 0.3 s)
         QVERIFY(graph_->deltaShare() > 0.95);
         // With Delta on, the output display is what is taken away: under the input everywhere.
         const auto& input = graph_->latestInput();
@@ -964,11 +1029,12 @@ private Q_SLOTS:
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-keyed.png"));
 
-        // A click on it asks the frame for the sidechain menu, and changes nothing.
-        QSignalSpy asked(view_, SIGNAL(sidechainMenuRequested()));
+        // A click on it asks the frame for the sidechain menu, under the badge, and changes nothing.
+        QSignalSpy asked(view_, SIGNAL(sidechainMenuRequested(QVariant)));
         const int steps = undo()->index();
         QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier, centerOf(badge));
         QCOMPARE(asked.count(), 1);
+        QCOMPARE(qvariant_cast<QQuickItem*>(asked.at(0).at(0)), badge);
         QCOMPARE(undo()->index(), steps);
 
         // Undone: unlit.
@@ -987,8 +1053,9 @@ private Q_SLOTS:
         set("below", -30.0);
         set("threshold", -18.0);
         tick();
+        QTRY_COMPARE(find(view_, QStringLiteral("below"))->opacity(), 1.0);  // (for the screenshot)
         engine()->renderOffline(0.0, kSampleRate / 2);
-        tick(30);
+        tick(15);  // (0.24 s: before the displays, given no more frames, sink back after 0.3 s)
         const auto& gain = graph_->latestGain();
         int lifted = 0;
         for (int j = pointNear(100.0); j <= pointNear(10000.0); ++j) lifted += gain[size_t(j)] > 3.0f ? 1 : 0;
@@ -1015,6 +1082,7 @@ private Q_SLOTS:
         set("smooth", 25.0);
         QCOMPARE(engineValue("focus_hi"), 12000.f);
         tick();  // (the lines settled)
+        QTRY_COMPARE(find(view_, QStringLiteral("below"))->opacity(), 1.0);  // (Upward on: Below no longer dimmed)
         engine()->renderOffline(0.0, kSampleRate);
         tick(12);
         // The value under the mouse reads in the header.

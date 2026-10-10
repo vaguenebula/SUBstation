@@ -1,5 +1,7 @@
 #include "devices/SpectralGraph.h"
 
+#include "audio/BridgeTypes.h"
+#include "audio/EngineBridge.h"
 #include "audio/SpectralResponse.h"
 #include "input/GestureKey.h"
 #include "model/Device.h"
@@ -21,15 +23,15 @@ namespace sub::ui {
 
 namespace {
 
-constexpr double kPivotHz = 1000.0;          // the threshold's pivot (the engine's: the tilt turns about it)
+// The threshold's pivot (the engine's: the tilt turns about it).
+constexpr double kPivotHz = sub::app::kSpectralPivotHz;
 constexpr double kSpectrumMarginDb = 6.0;    // spectra are held this far beyond the axis (no time spent off it)
-constexpr double kGainLimitDb = 48.0;        // the most Range lets a gain be
 constexpr double kStaleSeconds = 0.3;        // no frame for this long: the displays sink back
 constexpr double kHoldSeconds = 0.8;         // the deepest cut's line holds, then falls
 constexpr double kHoldFallDbPerSecond = 18.0;
 constexpr double kHeldDrawnDb = 0.01;        // a held cut is drawn from this deep
 constexpr double kDeltaFade = 0.7;           // with Delta on, what the output line now shows fades this far
-const double kThirdOctave = std::exp2(1.0 / 3.0);  // a Focus edge fades out over this beyond it (the engine's)
+constexpr int kFocusDimAlpha = 170;          // outside the Focus band (a weight of 0), dimmed this much
 
 QString id(const char* text) { return QString::fromLatin1(text); }
 
@@ -40,14 +42,6 @@ double highest(const std::vector<float>& values, double otherwise) {
         if (std::isfinite(value))
             most = std::max(most, double(value));
     return std::isfinite(most) ? most : otherwise;
-}
-
-// `a` blended towards `b` by t (0..1).
-QColor blend(const QColor& a, const QColor& b, double t) {
-    t = std::clamp(t, 0.0, 1.0);
-    return QColor::fromRgbF(
-        float(a.redF() + (b.redF() - a.redF()) * t), float(a.greenF() + (b.greenF() - a.greenF()) * t),
-        float(a.blueF() + (b.blueF() - a.blueF()) * t), float(a.alphaF() + (b.alphaF() - a.alphaF()) * t));
 }
 
 // Moves each shown value `up` or `down` of the way to its target (a one-pole each way), snapping within `epsilon`,
@@ -76,8 +70,7 @@ double clearOf(const QLineF& line, const QRectF& box) {
     const auto yAt = [&](double x) { return line.y1() + line.dy() * (x - line.x1()) / line.dx(); };
     const double a = yAt(box.left()), b = yAt(box.right());
     const double gap = std::max({0.0, std::min(a, b) - box.bottom(), box.top() - std::max(a, b)});
-    const double t = std::clamp((gap - 0.75) / 2.75, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
+    return smoothstep((gap - 0.75) / 2.75);
 }
 
 // Calls `draw` with each run of `points` where `present(j)` (taking in its neighbours either side): a line lying
@@ -114,7 +107,7 @@ void SpectralGraph::FrameAssembler::add(qint64 first, const std::vector<float>& 
             continue;
         float value = values[i];
         if (!std::isfinite(value))
-            value = merge == Merge::Gain ? 0.f : -150.f;
+            value = merge == Merge::Gain ? 0.f : float(kFloorDb - kSpectrumMarginDb);  // (none: under the axis)
         building[std::size_t(band)] = value;
         if (++filled < kPoints)
             continue;
@@ -143,6 +136,8 @@ SpectralGraph::SpectralGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setAcceptHoverEvents(true);
     gain_.merge = FrameAssembler::Merge::Gain;
     frequencies_ = sub::app::spectralDisplayFrequencies();
+    for (int i = 0; i < kFocusStops; ++i)
+        focusFrequencies_.append(kLow * std::pow(kHigh / kLow, i / (kFocusStops - 1.0)));
     const double floor = kFloorDb - kSpectrumMarginDb;
     for (std::vector<double>* spectrum : {&targetInput_, &targetKey_, &targetOutput_, &shownInput_, &shownKey_,
                                           &shownOutput_})
@@ -293,6 +288,8 @@ void SpectralGraph::sync() {
     mix_ = value(id("mix"));
     delta_ = value(id("delta")) >= 0.5;
     const sub::app::Device* found = device();
+    if (found && !spansRead_)
+        readSpans();
     const bool keyed = found && found->sidechain.has_value();
     if (keyed != keyed_) {
         keyed_ = keyed;
@@ -341,9 +338,28 @@ void SpectralGraph::sync() {
     update();
 }
 
+void SpectralGraph::readSpans() {
+    for (const sub::app::ProcessorParam& param : session()->bridge()->deviceParams(trackId(), deviceId())) {
+        const Span span{param.minValue, param.maxValue};
+        if (param.id == u"threshold")
+            thresholdSpan_ = span;
+        else if (param.id == u"below")
+            belowSpan_ = span;
+        else if (param.id == u"tilt")
+            tiltSpan_ = span;
+        else if (param.id == u"range")
+            rangeSpan_ = span;
+        else
+            continue;
+        spansRead_ = true;
+    }
+}
+
 void SpectralGraph::updateLines() {
     const QList<double> curve = sub::app::spectralThresholdDb(thresholdShown_.value, tiltShown_.value, frequencies_);
     thresholdCurve_.assign(curve.begin(), curve.end());
+    focusWeights_ = sub::app::spectralFocusWeights(focusLowShown(), focusHighShown(), focusFrequencies_);
+    focusDimmed_ = std::any_of(focusWeights_.begin(), focusWeights_.end(), [](double w) { return w < 1.0; });
 }
 
 void SpectralGraph::updateReadout() {
@@ -378,10 +394,7 @@ void SpectralGraph::updateReadout() {
 // --- Displays ---------------------------------------------------------------------------------------
 
 void SpectralGraph::refreshDisplays() {
-    const double dt = clock_.isValid() ? std::clamp(double(clock_.restart()) / 1000.0, 1.0 / 120.0, 1.0 / 20.0)
-                                       : 1.0 / 60.0;
-    if (!clock_.isValid())
-        clock_.start();
+    const double dt = tickSeconds();
 
     for (const auto& [assembler, display] : {std::pair{&input_, "input"}, std::pair{&key_, "key"},
                                              std::pair{&output_, "output"}, std::pair{&gain_, "gain"}}) {
@@ -404,7 +417,7 @@ void SpectralGraph::refreshDisplays() {
     take(input_, targetInput_, floor, ceiling);
     take(key_, targetKey_, floor, ceiling);
     take(output_, targetOutput_, floor, ceiling);
-    take(gain_, targetGain_, -kGainLimitDb, kGainLimitDb);
+    take(gain_, targetGain_, -rangeSpan_.high, rangeSpan_.high);  // (the engine's are within Range: held there)
     if (sinceFrame_ > kStaleSeconds) {
         for (std::vector<double>* spectrum : {&targetInput_, &targetKey_, &targetOutput_})
             std::fill(spectrum->begin(), spectrum->end(), floor);
@@ -617,7 +630,7 @@ void SpectralGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers) 
     switch (dragged_) {
     case ThresholdHandle:
     case BelowHandle:
-        dragValue_ = std::clamp(dragValue_ + up, -72.0, 12.0);
+        dragValue_ = (dragged_ == ThresholdHandle ? thresholdSpan_ : belowSpan_).clamp(dragValue_ + up);
         value = std::round(dragValue_ * 10.0) / 10.0;
         break;
     case TiltLow:
@@ -625,7 +638,7 @@ void SpectralGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers) 
         // That end of the line follows the mouse: the tilt changes by the move over its octaves from 1 kHz.
         const double octaves =
             sub::app::spectralThresholdDb(0.0, 1.0, {dragged_ == TiltLow ? kLowHandleHz : kHighHandleHz}).value(0);
-        dragValue_ = std::clamp(dragValue_ + up / octaves, -6.0, 6.0);
+        dragValue_ = tiltSpan_.clamp(dragValue_ + up / octaves);
         value = std::round(dragValue_ * 100.0) / 100.0;
         break;
     }
@@ -714,17 +727,12 @@ void SpectralGraph::paint(SgPainter& p) {
     const QLineF thresholdLine = this->thresholdLine(), belowLine = this->belowLine();
     const double belowOpacity = belowOpacity_.value;
 
-    // The grid: decades across, every 12 dB up (0 dB brighter), figures inside at the left and under the plot.
+    // The grid: decades across, every 12 dB up (0 dB brighter), figures under the plot (those inside it at the left
+    // come after the Focus dim, over it).
     drawDecadeGrid(p, r, frequencyAxis());
     for (double db = -72.0; db <= 12.0; db += 12.0) {
         const double y = yOfLevel(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, db == 0.0 ? 170 : 110));
-    }
-    for (const double db : kLevelFigures) {
-        const double shown = figureShown(db);
-        if (shown > 0.01)
-            p.drawText(QRectF(r.left() + 9, yOfLevel(db) - 11, 40, 10), Qt::AlignLeft | Qt::AlignBottom,
-                       levelFigure(db), withAlpha(Theme::kTextDim, int(std::lround(255 * shown))), font7);
     }
     for (const auto& [hz, label] : {std::pair{50.0, "50"}, std::pair{100.0, "100"}, std::pair{500.0, "500"},
                                     std::pair{1000.0, "1k"}, std::pair{5000.0, "5k"}, std::pair{10000.0, "10k"}}) {
@@ -806,26 +814,26 @@ void SpectralGraph::paint(SgPainter& p) {
         }
     }
 
-    // Outside the Focus band, dimmed, fading over the third of an octave its edge fades over in the sound.
-    const double low = focusLowShown(), high = focusHighShown();
-    const QColor dim = withAlpha(Theme::kMeterBg, 170), clear = withAlpha(Theme::kMeterBg, 0);
-    if (low > kLow * 1.001) {
-        const double from = xOf(low / kThirdOctave), to = xOf(low);
-        if (from > r.left())
-            p.fillRect(QRectF(r.left(), r.top(), from - r.left(), r.height()), dim);
-        QLinearGradient edge(QPointF(from, 0), QPointF(to, 0));
-        edge.setColorAt(0, dim);
-        edge.setColorAt(1, clear);
-        p.fillRect(QRectF(from, r.top(), to - from, r.height()), edge);
+    // Outside the Focus band, dimmed by the share of its gain each frequency doesn't get (the engine's Focus weights
+    // for the edges as drawn): fully where it gets none, fading across each edge as the sound does.
+    if (focusDimmed_) {
+        QGradientStops stops;
+        const double last = double(focusWeights_.size() - 1);
+        for (int i = 0; i < focusWeights_.size(); ++i) {
+            const int alpha = int(std::lround(kFocusDimAlpha * (1.0 - focusWeights_[i])));
+            stops.append({i / last, withAlpha(Theme::kMeterBg, alpha)});
+        }
+        QLinearGradient dim(QPointF(r.left(), 0), QPointF(r.right(), 0));
+        dim.setStops(stops);
+        p.fillRect(r, dim);
     }
-    if (high < kHigh * 0.999) {
-        const double from = xOf(high), to = xOf(high * kThirdOctave);
-        if (to < r.right())
-            p.fillRect(QRectF(to, r.top(), r.right() - to, r.height()), dim);
-        QLinearGradient edge(QPointF(from, 0), QPointF(to, 0));
-        edge.setColorAt(0, clear);
-        edge.setColorAt(1, dim);
-        p.fillRect(QRectF(from, r.top(), to - from, r.height()), edge);
+
+    // The level figures, inside at the left: over the dim (read wherever the Focus band starts), under the lines.
+    for (const double db : kLevelFigures) {
+        const double clear = figureShown(db);
+        if (clear > 0.01)
+            p.drawText(QRectF(r.left() + 9, yOfLevel(db) - 11, 40, 10), Qt::AlignLeft | Qt::AlignBottom,
+                       levelFigure(db), withAlpha(Theme::kTextDim, int(std::lround(255 * clear))), font7);
     }
 
     // The sidechain's levels (what is compared), dashed, while keyed; the output. (Each only where there is any:
@@ -837,7 +845,7 @@ void SpectralGraph::paint(SgPainter& p) {
     }
     // With Delta on it is what is taken away, in a red of its own (the threshold and the curtain are orange).
     spectrum(shownOutput_);
-    const QColor outputColor = blend(Theme::kFrozen, Theme::kMeterHigh, deltaShown_.value);
+    const QColor outputColor = mixColor(Theme::kFrozen, Theme::kMeterHigh, deltaShown_.value);
     eachRun(points, [&](std::size_t j) { return shownOutput_[j] > kFloorDb; },
             [&](const std::vector<QPointF>& run) { drawGlowPolyline(p, run, outputColor, 1.25); });
 
@@ -853,6 +861,7 @@ void SpectralGraph::paint(SgPainter& p) {
     p.restore();
 
     // The Focus edges: a line each, and a grip at the bottom (an open edge, only its grip).
+    const double low = focusLowShown(), high = focusHighShown();
     for (const int which : {int(FocusLowEdge), int(FocusHighEdge)}) {
         const double grow = handleGrow_[std::size_t(which)].value;
         const QColor color = withAlpha(Theme::kText, int(50 + 110 * grow));
