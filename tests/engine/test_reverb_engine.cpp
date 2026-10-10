@@ -68,13 +68,17 @@ int64_t frames(double seconds, double rate = kSampleRate) { return static_cast<i
 // rate, and its displays read.
 class Reverb : public Standalone {
 public:
-    explicit Reverb(const Values& values = {}, double rate = kSampleRate) : Standalone("reverb", rate, values) {}
+    explicit Reverb(const Values& values = {}, double rate = kSampleRate)
+        : Standalone("reverb", rate, values), rate_(rate) {}
 
-    // Made ready for another sample rate (as the engine does when the audio device changes).
+    // Made ready for another sample rate (as the engine does when the audio device changes): it plays at it.
     void prepare(double rate) {
         processor().prepare(rate, kMaxBlock);
         context().sampleRate = rate;
+        rate_ = rate;
     }
+    // The rate it plays at (Standalone's rate() stays the one it was made at: this hides it).
+    double rate() const { return rate_; }
 
     void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
         const sub::ScopedNoDenormals noDenormals;
@@ -106,6 +110,7 @@ public:
     }
 
 private:
+    double rate_;
     std::map<size_t, uint64_t> positions_;
 };
 
@@ -1148,26 +1153,12 @@ TEST_CASE("the reverb's reset and a new sample rate start it from silence") {
     r.processor().reset();
     CHECK_ARRAY_EQUAL(r.play(impulse(kSampleRate)), want);
 
-    // A new rate: tuned to it, from silence.
+    // A new rate: tuned to it, from silence, as a device made at it.
     r.play(noise(kSampleRate, 10));
-    r.processor().prepare(96000.0, Standalone::kMaxBlock);
+    r.prepare(96000.0);
+    CHECK_EQ(r.rate(), 96000.0);
     Reverb at96(values, 96000.0);
-    // (the helper's rate is the one it was made at: render the new rate by hand)
-    Samples h(96000, 0.f), h96(96000, 0.f);
-    h[0] = h96[0] = 1.f;
-    {
-        const sub::ScopedNoDenormals noDenormals;
-        sub::ProcessContext ctx;
-        ctx.sampleRate = 96000.0;
-        for (Samples* x : {&h, &h96}) {
-            sub::Processor& p = x == &h ? r.processor() : at96.processor();
-            for (size_t start = 0; start < x->size(); start += 256) {
-                float* channels[1] = {x->data() + start};
-                p.process(ctx, channels, 1, static_cast<int>(std::min<size_t>(256, x->size() - start)));
-            }
-        }
-    }
-    CHECK_ARRAY_EQUAL(h, h96);
+    CHECK_ARRAY_EQUAL(r.play(impulse(96000)), at96.play(impulse(96000)));
     // And Size glides at Smooth's pace at the new rate, as on a device made at it.
     Reverb moved(values), made(values, 96000.0);
     moved.play(noise(kSampleRate / 2, 21));
