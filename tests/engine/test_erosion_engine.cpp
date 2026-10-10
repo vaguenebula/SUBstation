@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -119,33 +118,6 @@ private:
     std::vector<uint64_t> positions_;
     std::vector<Samples> displays_;
 };
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine from phase 0, `amplitude` peak.
-Samples tone(double freq, size_t length, double amplitude = 0.5, double rate = kSampleRate) {
-    Samples x(length);
-    for (size_t i = 0; i < length; ++i)
-        x[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
-    return x;
-}
-
-// A sine that fades in over 100 ms (no click of its own where it starts).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
 
 // The DFT of x[from, from + n) at `freq` (one bin: n should hold whole cycles of it).
 std::complex<double> binAt(const Samples& x, double freq, int64_t from, int64_t n, double rate = kSampleRate) {
@@ -329,7 +301,8 @@ TEST_CASE("erosion's latency is 2 ms at any rate") {
 }
 
 TEST_CASE("at Amount 0 erosion is a clean delay of its latency") {
-    const Samples left = noise(kSampleRate / 2, 1), right = noise(kSampleRate / 2, 2);
+    const Samples left = Rng(1).uniformSamples(kSampleRate / 2, -0.5, 0.5);
+    const Samples right = Rng(2).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     for (const Values& values : {Values{{"blend", 100.f}, {"stereo", 0.f}, {"freq", 1000.f}, {"width", 2.5f}},
                                  Values{{"blend", 0.f}, {"stereo", 100.f}, {"freq", 18000.f}, {"width", 0.1f}},
                                  Values{{"blend", 50.f}, {"stereo", 50.f}, {"freq", 20.f}, {"width", 10.f}}}) {
@@ -382,7 +355,7 @@ TEST_CASE("erosion's sine modulates the phase as theory says") {
     CHECK_APPROX_TOL(e, 5.9821, 0.0, 1e-4);
     const double beta = 2.0 * kPi * 1000.0 * e / kSampleRate;
     CHECK_APPROX_TOL(beta, 0.78306, 0.0, 1e-5);
-    const Samples in = tone(1000.0, static_cast<size_t>(1.5 * kSampleRate));
+    const Samples in = sine(1000.0, 1.5);
     Erosion device(kSampleRate, {{"blend", 0.f}, {"stereo", 0.f}, {"freq", 3000.f}, {"amount", 30.f}});
     const auto [l, r] = device.playStereo(in, in);
     CHECK_ARRAY_EQUAL(l, r);
@@ -398,7 +371,7 @@ TEST_CASE("erosion's sine modulates the phase as theory says") {
 }
 
 TEST_CASE("erosion's Frequency moves the sidebands") {
-    const Samples in = tone(1000.0, static_cast<size_t>(1.5 * kSampleRate));
+    const Samples in = sine(1000.0, 1.5);
     const int64_t from = kSampleRate / 2, n = 4800;
     const auto run = [&](float freq, float width = 2.5f) {
         Erosion device(kSampleRate, {{"blend", 0.f}, {"amount", 20.f}, {"freq", freq}, {"width", width}});
@@ -414,7 +387,7 @@ TEST_CASE("erosion's Frequency moves the sidebands") {
 }
 
 TEST_CASE("erosion's Stereo puts the sine's sides a quarter cycle apart") {
-    const Samples in = tone(1000.0, static_cast<size_t>(1.5 * kSampleRate));
+    const Samples in = sine(1000.0, 1.5);
     const int64_t from = kSampleRate / 2, n = 4800;
     const auto degrees = [](std::complex<double> a, std::complex<double> b) {
         double d = (std::arg(a) - std::arg(b)) * 180.0 / kPi;
@@ -533,7 +506,7 @@ TEST_CASE("two erosions set alike don't share their noise") {
     // Each instance salts its noises' seeds with a number of its own: two on double-tracked parts don't
     // wobble in lockstep, nor after a reset made together (an export's). Each repeats itself after one.
     const Values values = {{"blend", 100.f}, {"freq", 2000.f}, {"width", 5.f}, {"amount", 50.f}};
-    const Samples in = tone(440.0, kSampleRate / 2);
+    const Samples in = sine(440.0, 0.5);
     Erosion one(kSampleRate, values), two(kSampleRate, values, false);
     const Samples first = one.play(in), second = two.play(in);
     const int64_t from = 4800, n = kSampleRate / 2 - 4800;
@@ -553,7 +526,7 @@ TEST_CASE("two erosions set alike don't share their noise") {
 
 TEST_CASE("erosion's wide noise is independent per side") {
     const int64_t from = kSampleRate / 4, n = 2 * kSampleRate;
-    const Samples in = tone(1000.0, static_cast<size_t>(from + n));
+    const Samples in = sine(1000.0, 2.25);  // (from + n)
     const auto run = [&](float stereo) {
         Erosion device(kSampleRate, {{"blend", 100.f}, {"freq", 2000.f}, {"width", 5.f}, {"stereo", stereo}});
         const auto [l, r] = device.playStereo(in, in);
@@ -587,7 +560,7 @@ TEST_CASE("erosion takes high frequencies first") {
     // is 0.2 rad on 200 Hz, 4.9 rad on 5 kHz.
     const int64_t length = 2 * kSampleRate;
     Samples in(static_cast<size_t>(length));
-    const Samples a = tone(200.0, in.size(), 0.25), b = tone(5000.0, in.size(), 0.25);
+    const Samples a = sine(200.0, 2.0, 0.25), b = sine(5000.0, 2.0, 0.25);
     for (size_t i = 0; i < in.size(); ++i) in[i] = a[i] + b[i];
     Erosion device(kSampleRate, {{"blend", 100.f}, {"freq", 1000.f}, {"width", 2.5f}, {"amount", 40.f}});
     const Samples out = device.play(in);
@@ -601,7 +574,7 @@ TEST_CASE("erosion takes high frequencies first") {
 }
 
 TEST_CASE("erosion's Width spreads the noise's sidebands") {
-    const Samples in = tone(1000.0, static_cast<size_t>(1.5 * kSampleRate));
+    const Samples in = sine(1000.0, 1.5);
     const int64_t from = kSampleRate / 2, n = kSampleRate;
     const auto share = [&](float width) {
         Erosion device(kSampleRate, {{"blend", 100.f}, {"freq", 6000.f}, {"amount", 20.f}, {"width", width}});
@@ -616,7 +589,8 @@ TEST_CASE("erosion's Width spreads the noise's sidebands") {
 }
 
 TEST_CASE("erosion renders the same however the block is split") {
-    const Samples left = noise(kSampleRate / 2, 3), right = noise(kSampleRate / 2, 4);
+    const Samples left = Rng(3).uniformSamples(kSampleRate / 2, -0.5, 0.5);
+    const Samples right = Rng(4).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     // Every parameter, at odd frames (several within one 16-sample chunk) and on chunk starts (multiples of 16).
     const std::vector<Change> changes = {
         {1001, "freq", 3000.f},  {1003, "amount", 70.f},  {1009, "width", 0.5f},  {1024, "blend", 20.f},
@@ -645,7 +619,7 @@ TEST_CASE("changing any of erosion's controls is click-free") {
     // A 220 Hz tone through a 40 Hz sine at Amount 60, each control jumping at 1 s,
     // as automation's steps make them; against the same jump made by splicing a
     // device at the old value to one at the new (what an unsmoothed change would be).
-    const Samples in = smoothSine(220.0, 2.0);
+    const Samples in = sine(220.0, 2.0);
     constexpr int64_t kAt = kSampleRate;
     const int64_t from = kAt - 480, to = kAt + 4800;
     const Values base = {{"blend", 0.f}, {"freq", 40.f}, {"width", 0.2f}, {"stereo", 0.f}, {"amount", 60.f}};
@@ -705,7 +679,7 @@ TEST_CASE("changing any of erosion's controls is click-free") {
 
 TEST_CASE("erosion's automation plays through the engine") {
     // (221.25 Hz: at its peak where the automation steps, so the first sample changed shows.)
-    const Samples clipTone = smoothSine(221.25, 3.0);
+    const Samples clipTone = sine(221.25, 3.0);
     const std::string path = makeWav(stereo(clipTone), 2);
     const auto render = [&](bool device, bool automate) {
         sub::Engine engine;
@@ -745,7 +719,8 @@ TEST_CASE("erosion's automation plays through the engine") {
 
 TEST_CASE("reset and a new sample rate start erosion afresh") {
     const Values values = {{"blend", 60.f}, {"stereo", 70.f}, {"amount", 50.f}, {"freq", 15000.f}};
-    const Samples a = noise(kSampleRate / 2, 5), b = noise(kSampleRate / 2, 6);
+    const Samples a = Rng(5).uniformSamples(kSampleRate / 2, -0.5, 0.5);
+    const Samples b = Rng(6).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     Erosion fresh(kSampleRate, values);
     const auto want = fresh.playStereo(a, b);
     Erosion device(kSampleRate, values);
@@ -762,14 +737,15 @@ TEST_CASE("reset and a new sample rate start erosion afresh") {
         device.processor().prepare(rate, Erosion::kMaxBlock);
         CHECK_EQ(device.processor().latencySamples(), latency);
         Erosion there(rate, values);
-        const Samples c = noise(48000, 7);
+        const Samples c = Rng(7).uniformSamples(48000, -0.5, 0.5);
         CHECK_ARRAY_EQUAL(device.play(c), there.play(c));
     }
 }
 
 TEST_CASE("erosion stays stable at the extremes") {
     for (const double rate : {44100.0, 48000.0, 96000.0, 192000.0}) {
-        const Samples left = noise(static_cast<size_t>(rate), 8, 1.f), right = noise(static_cast<size_t>(rate), 9, 1.f);
+        const Samples left = Rng(8).uniformSamples(static_cast<size_t>(rate), -1.0, 1.0);
+        const Samples right = Rng(9).uniformSamples(static_cast<size_t>(rate), -1.0, 1.0);
         for (const float freq : {20.f, 18000.f}) {
             for (const float width : {0.1f, 10.f}) {
                 for (const float blend : {0.f, 50.f, 100.f}) {
@@ -789,19 +765,20 @@ TEST_CASE("erosion stays stable at the extremes") {
         }
     }
     // Every control swept across its range at once, every few milliseconds.
-    std::mt19937 random(11);
-    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    Rng random(23);
     std::vector<Change> changes;
     for (int64_t at = 0; at < 3 * kSampleRate;) {
-        at += static_cast<int64_t>(kSampleRate * (0.002 + 0.05 * unit(random)));
-        changes.push_back({at, "freq", static_cast<float>(20.0 * std::pow(900.0, unit(random)))});
-        changes.push_back({at, "width", static_cast<float>(0.1 * std::pow(100.0, unit(random)))});
-        changes.push_back({at, "amount", static_cast<float>(100.0 * unit(random))});
-        changes.push_back({at, "blend", static_cast<float>(100.0 * unit(random))});
-        changes.push_back({at, "stereo", static_cast<float>(100.0 * unit(random))});
+        at += static_cast<int64_t>(kSampleRate * (0.002 + 0.05 * random.random()));
+        changes.push_back({at, "freq", static_cast<float>(20.0 * std::pow(900.0, random.random()))});
+        changes.push_back({at, "width", static_cast<float>(0.1 * std::pow(100.0, random.random()))});
+        changes.push_back({at, "amount", static_cast<float>(100.0 * random.random())});
+        changes.push_back({at, "blend", static_cast<float>(100.0 * random.random())});
+        changes.push_back({at, "stereo", static_cast<float>(100.0 * random.random())});
     }
     Erosion device(kSampleRate, {{"amount", 100.f}});
-    const auto [l, r] = device.playStereo(noise(3 * kSampleRate, 10, 1.f), noise(3 * kSampleRate, 11, 1.f), changes);
+    const Samples left = Rng(10).uniformSamples(3 * kSampleRate, -1.0, 1.0);
+    const Samples right = Rng(11).uniformSamples(3 * kSampleRate, -1.0, 1.0);
+    const auto [l, r] = device.playStereo(left, right, changes);
     CHECK(allFinite(l) && allFinite(r));
     CHECK(maxAbs(l) <= 1.3);
     CHECK(allFinite(device.display("mod_l")));
@@ -810,7 +787,7 @@ TEST_CASE("erosion stays stable at the extremes") {
 
 TEST_CASE("silence comes out of erosion as exact zeros") {
     Erosion device(kSampleRate, {{"amount", 100.f}, {"blend", 50.f}, {"stereo", 100.f}});
-    Samples x = noise(kSampleRate / 2, 12);
+    Samples x = Rng(12).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     x.resize(static_cast<size_t>(1.5 * kSampleRate), 0.f);
     const auto [l, r] = device.playStereo(x, x);
     for (const Samples* out : {&l, &r}) {
@@ -833,7 +810,8 @@ TEST_CASE("erosion takes NaN and infinity in its input as silence") {
     const float bad[] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
                          -std::numeric_limits<float>::infinity(), 3e38f};
     const Values values = {{"amount", 60.f}, {"blend", 50.f}, {"stereo", 100.f}};
-    const Samples left = noise(kSampleRate / 2, 21), right = noise(kSampleRate / 2, 22);
+    const Samples left = Rng(21).uniformSamples(kSampleRate / 2, -0.5, 0.5);
+    const Samples right = Rng(22).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     Samples zeroedLeft = left, zeroedRight = right;
     zeroedLeft[1000] = 0.f;
     zeroedRight[3001] = 0.f;
@@ -858,7 +836,7 @@ TEST_CASE("erosion takes NaN and infinity in its input as silence") {
 }
 
 TEST_CASE("erosion on one channel is the left of two") {
-    const Samples x = noise(kSampleRate / 2, 13);
+    const Samples x = Rng(13).uniformSamples(kSampleRate / 2, -0.5, 0.5);
     for (const float stereo : {0.f, 100.f}) {
         INFO(std::to_string(stereo));
         const Values values = {{"blend", 50.f}, {"stereo", stereo}, {"amount", 60.f}};
@@ -874,18 +852,18 @@ TEST_CASE("erosion on one channel is the left of two") {
     // one-channel stretch is stale), as it does from one channel to two.
     Erosion device(kSampleRate, {{"amount", 0.f}});
     {
-        Samples a = noise(4800, 19), b = noise(4800, 20);
+        Samples a = Rng(19).uniformSamples(4800, -0.5, 0.5), b = Rng(20).uniformSamples(4800, -0.5, 0.5);
         device.run({&a, &b});
     }
-    device.play(noise(4800, 14));
-    Samples l = noise(4800, 15), r = noise(4800, 16);
+    device.play(Rng(14).uniformSamples(4800, -0.5, 0.5));
+    Samples l = Rng(15).uniformSamples(4800, -0.5, 0.5), r = Rng(16).uniformSamples(4800, -0.5, 0.5);
     const Samples rightIn = r;
     device.run({&l, &r});
     CHECK_ARRAY_EQUAL(r, delayed(rightIn, kD));
 }
 
 TEST_CASE("erosion's displays") {
-    const Samples left = noise(9600, 17), right = noise(9600, 18);
+    const Samples left = Rng(17).uniformSamples(9600, -0.5, 0.5), right = Rng(18).uniformSamples(9600, -0.5, 0.5);
     Erosion device(kSampleRate, {{"amount", 50.f}, {"blend", 50.f}, {"stereo", 50.f}});
     const auto [l, r] = device.playStereo(left, right, {}, 960);
     Samples inSum(left.size()), outSum(left.size());
@@ -906,14 +884,14 @@ TEST_CASE("erosion's displays") {
     CHECK_ARRAY_EQUAL(mono.display("output"), out);
 
     // The sine's modulator reaches its peak (every sample is published).
-    Erosion sine(kSampleRate, {{"blend", 0.f}, {"freq", 1000.f}, {"stereo", 0.f}});
-    sine.playStereo(left, right, {}, 960);
-    const double peak = maxAbs(sine.display("mod_l"));
+    Erosion sineOnly(kSampleRate, {{"blend", 0.f}, {"freq", 1000.f}, {"stereo", 0.f}});
+    sineOnly.playStereo(left, right, {}, 960);
+    const double peak = maxAbs(sineOnly.display("mod_l"));
     CHECK(peak >= 0.9999);
     CHECK(peak <= 1.0001);
 
     // The `erosion` meter: what changed, in dB (exactly the floor at Amount 0).
-    const Samples high = tone(3000.0, 9600);
+    const Samples high = sine(3000.0, 0.2);
     Erosion eroding(kSampleRate, {{"amount", 50.f}});
     eroding.play(high);
     const Samples meter = slice(eroding.display("erosion"), 2);
