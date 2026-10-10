@@ -46,6 +46,16 @@ bool isSilent(const float* samples, int count) {
     return true;
 }
 
+// Whether the note started by events[at] has a bend of its own at its start (it
+// follows its note-on at the same offset: the renderer sorts a note's bends after it).
+bool bentFromStart(const EventList& events, size_t at) noexcept {
+    const ProcessEvent& on = events.events[at];
+    for (size_t e = at + 1; e < events.count && events.events[e].sampleOffset == on.sampleOffset; ++e) {
+        if (events.events[e].type == ProcessEvent::Type::NoteBend && events.events[e].noteId == on.noteId) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -481,7 +491,16 @@ void Vst3Processor::buildEvents(const ProcessContext& ctx) {
                 if (in.velocity() > 0) {
                     event.type = Event::kNoteOnEvent;
                     event.noteOn = {channel, key, 0.f, in.velocity() / 127.f, 0, in.noteId};
-                    if (events_.add(event) && held_[channel][key] < 255) ++held_[channel][key];
+                    if (!events_.add(event)) break;
+                    if (held_[channel][key] < 255) ++held_[channel][key];
+                    // Its tuning from the start, unbent unless its own bend follows: a
+                    // synth that gives it a voice another note left (as Serum 2 appears to) may
+                    // otherwise play it with that note's last tuning.
+                    if (in.noteId >= 0 && !bentFromStart(ctx.inEvents, e)) {
+                        event.type = Event::kNoteExpressionValueEvent;
+                        event.noteExpressionValue = {kTuningTypeID, in.noteId, 0.5};
+                        events_.add(event);
+                    }
                     break;
                 }
                 [[fallthrough]];  // velocity 0 releases

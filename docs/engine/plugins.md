@@ -172,6 +172,11 @@ MIDI clips, and the piano roll's notes, sample-accurately):
   `kTuningTypeID` for the note it names: VST3's per-note pitch, normalized as 0.5 + semitones / 240 (0.5 is none,
   ±120 semitones across). A bend without a note id is dropped (note expressions address notes by id). A plug-in
   that doesn't support tuning expressions ignores them.
+- Every note-on with an id is followed by its tuning, 0.5 (none), unless a bend of its own follows at the same
+  offset (`bentFromStart`: the renderer sorts a note's bends after its note-on). A synth that gives a new note a
+  voice another note left can keep that note's last tuning on it: Serum 2 played the note after a slide as far off
+  as the slide had bent (G# after B bent down to G# came out as F). Stating every note's tuning from its start
+  rules that out.
 - `reset()` sets `releaseAll_`; the next block starts with a note-off for every held note. (Real-time resets come on
   stop, locate, loop wrap and around offline renders; see [midi.md](midi.md).)
 - Raw MIDI: control change, channel pressure and pitch bend are mapped to parameters through the controller's
@@ -365,7 +370,8 @@ sidechain only.
 
 The tests use four VST3 plug-ins built with the engine ([tests/vst3_plugins/](../../tests/vst3_plugins)): *SUB Test
 Synth*, an instrument with a separate controller (it reports the transport it gets back as parameters, and a note's
-tuning expression bends that note's sine); *SUB Test Effect*, a single-component effect with adjustable latency and,
+tuning expression bends that note's sine; as a synth reusing voices can, a new note keeps the tuning of the last
+note to end until it gets its own); *SUB Test Effect*, a single-component effect with adjustable latency and,
 on Windows, a Win32 editor; *SUB Test Mono*, a mono effect without a controller; and *SUB Test Note Effect*, an
 effect with an event input whose output is its input plus each held note's velocity / 127 (DC); plus *SUB Test Sidechain* ([test_sidechain.cpp](../../tests/vst3_plugins/test_sidechain.cpp)),
 whose output is its input plus its sidechain. The tests see only these, never the installed ones: the engine's tests
@@ -380,7 +386,8 @@ and the application's tests point `SUBSTATION_VST3_PATH` at folders of their own
   elsewhere), plug-ins without an editor.
 - [tests/engine/test_note_bends_engine.cpp](../../tests/engine/test_note_bends_engine.cpp) and
   [test_midi_routing_engine.cpp](../../tests/engine/test_midi_routing_engine.cpp): a note's bend reaching a plug-in
-  as its tuning expression; an effect with an event input playing along with another track's notes.
+  as its tuning expression, and a note after a bent one played at its own pitch by a plug-in that would keep the
+  bent note's tuning; an effect with an event input playing along with another track's notes.
 - [tests/engine/test_sidechain_engine.cpp](../../tests/engine/test_sidechain_engine.cpp): sidechains into plug-ins, and
   a missing sidechain reaching the plug-in flagged as silence.
 - [tests/app/test_plugin_index.cpp](../../tests/app/test_plugin_index.cpp): scanning with `substation-scan`, including

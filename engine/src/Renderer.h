@@ -271,6 +271,11 @@ private:
         uint8_t key;
         int32_t noteId;
     };
+    struct HeldPreview {  // a note played by hand (the piano roll's), not released yet
+        uint32_t trackId;
+        uint8_t key;
+        int32_t noteId;
+    };
     static constexpr int kMaxSegments = 16;
     static constexpr int kMaxTicks = 64;
     static constexpr int kMaxPendingTicks = 256;
@@ -468,6 +473,8 @@ private:
     int numActiveNotes_ = 0;
     std::vector<PreviewNote> previewNotes_;
     int numPreviewNotes_ = 0;
+    std::vector<HeldPreview> heldPreviews_;  // their ids, for their note-offs (the oldest go when full)
+    int numHeldPreviews_ = 0;
 
     // MIDI input (live renders only).
     std::vector<MidiInputEvent> pendingInput_;  // arrived, not due yet; in arrival order

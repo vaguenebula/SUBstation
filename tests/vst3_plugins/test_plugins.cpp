@@ -4,7 +4,9 @@
 //
 //  * SUB Test Synth (instrument): a processor with a separate edit controller.
 //    Each held note adds velocity/127 (DC) or a sine at the note's pitch, times
-//    Gain; a note expression "tuning" for a note (by its id) bends its sine. It
+//    Gain; a note expression "tuning" for a note (by its id) bends its sine.
+//    As a synth that reuses its voices can (Serum 2 appears to), a new note keeps
+//    the tuning of the last note to end until a tuning of its own comes. It
 //    reports the transport it was given in read-only parameters, and has ten
 //    Macro parameters that only its controller keeps (in its own state).
 //  * SUB Test Effect: a single-component effect (processor and controller in one
@@ -94,6 +96,7 @@ public:
 
     tresult PLUGIN_API setActive(TBool state) override {
         notes_.clear();
+        lastTuning_ = 0.0;
         return AudioEffect::setActive(state);
     }
 
@@ -130,14 +133,17 @@ public:
             position = until;
             if (e == numEvents) break;
             if (event.type == Event::kNoteOnEvent && event.noteOn.velocity > 0.f) {
-                notes_.push_back({event.noteOn.pitch, event.noteOn.velocity, 0.0, event.noteOn.noteId, 0.0});
+                notes_.push_back({event.noteOn.pitch, event.noteOn.velocity, 0.0, event.noteOn.noteId, lastTuning_});
             } else if (event.type == Event::kNoteOnEvent || event.type == Event::kNoteOffEvent) {
                 const int16 pitch = event.type == Event::kNoteOnEvent ? event.noteOn.pitch : event.noteOff.pitch;
                 const int32 id = event.type == Event::kNoteOffEvent ? event.noteOff.noteId : -1;
                 auto it = std::find_if(notes_.begin(), notes_.end(), [&](const Note& n) {
                     return id >= 0 ? n.noteId == id : n.pitch == pitch;
                 });
-                if (it != notes_.end()) notes_.erase(it);
+                if (it != notes_.end()) {
+                    lastTuning_ = it->tuning;  // (what its voice is left with)
+                    notes_.erase(it);
+                }
             } else if (event.type == Event::kNoteExpressionValueEvent &&
                        event.noteExpressionValue.typeId == kTuningTypeID) {
                 for (Note& note : notes_) {
@@ -194,6 +200,7 @@ private:
     }
 
     std::vector<Note> notes_;
+    double lastTuning_ = 0.0;  // the tuning of the last note to end, which the next one starts with
     double sampleRate_ = 48000.0;
     double gain_ = 1.0;
     bool sine_ = true;

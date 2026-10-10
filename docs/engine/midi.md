@@ -28,7 +28,7 @@ the tests).
   snapshot converts them to samples at the current tempo.
 - Every note-on carries an id of its own; the note's note-off and bends carry it too (MIDI 2.0's per-note
   addressing; VST3's note ids). While a note sounds the renderer sends its bend along its curve: where it
-  starts, then every 32 samples where it moved (`NoteBend` events).
+  starts, then every 32 samples where it moved, and on its last sample (`NoteBend` events).
 - Each block, the renderer turns notes starting in it into note-on events for the track's devices, and
   remembers when each ends. Note-offs come from that record, not from the snapshot, so a note edited or
   deleted while it sounds still ends.
@@ -138,7 +138,9 @@ while anything is sounding, queued or arriving, the renderer builds the track's 
 
 1. **Preview notes** for this track, all at offset 0 and in the order they were played (dragging a note
    across keys releases one key and plays the next several times within a block; reordering those would
-   leave notes playing whose note-off came first). They have no id and no bend.
+   leave notes playing whose note-off came first). Each note-on gets an id, and its note-off the same
+   (`heldPreviews_`: the oldest held of that key on the track; 256 at most, the oldest forgotten). They
+   have no bend.
 2. **MIDI input** (`routeMidiInput`, below).
 3. If stopped, or the clips' notes don't play (monitoring `In` with MIDI input), every active note of
    the track is released at offset 0 (`releaseNotes`).
@@ -184,15 +186,19 @@ note's `NoteRender` again (`findNote`: at its hinted index, else by start and ke
 snapshot's notes, to within two samples, as a tempo change may round its start), then for each point of
 the note's own grid (every `kBendStep` = 32 samples from its start, after it, before its end) in the
 segment, a `NoteBend` event where the value moved by `kBendEpsilon` (0.001 semitones) or more since the
-last one sent. The grid is the note's, so the values don't depend on where blocks start; a flat stretch
-sends nothing. Because the note is looked up again in every snapshot, a bend drawn (or changed) while a
+last one sent, and where the note ends in the segment, one more on its last sample (if it moved), so its
+release holds the value the curve ends on: a slide whose last point is on the note's end lands on it rather
+than up to 32 samples short. The grid is the note's, so the values don't depend on where blocks start; a
+flat stretch sends nothing. Because the note is looked up again in every snapshot, a bend drawn (or changed) while a
 note sounds is heard at once; a note moved or deleted while it sounds keeps the bend it reached. Bends
 stop while fewer than `kBendHeadroom` (64) of the track's events are free, so note-offs always fit.
 
 Devices follow bends as they come: the Synth and the Sampler glide each voice to its note's bend over
 about a millisecond (`dsp::kBendGlideSeconds`, so the 32-sample steps don't zipper); a VST3 plug-in gets
-them as note expression "tuning" for the note's id ([plugins.md](plugins.md#events-notes-and-midi)). A
-voice keeps its bend through its release.
+them as note expression "tuning" for the note's id ([plugins.md](plugins.md#events-notes-and-midi)), and
+every note's tuning from its start, unbent unless its own bend follows (a synth that reuses a voice, as
+Serum 2 can, may otherwise play the next note with the last note's tuning). A voice keeps its bend through
+its release.
 
 ### Tempo changes (`Renderer::syncTempo`)
 
@@ -437,10 +443,12 @@ hangs.
 
 - [tests/engine/test_note_bends_engine.cpp](../../tests/engine/test_note_bends_engine.cpp): a bend's curve and
   vibratos (NoteBend.h), MIDI 2.0's packets decoded, the renderer's note ids and bends (sent along a note's
-  own grid where it moves, from its note-on, chased, edited while it sounds, a vibrato as it swings) with a
-  device of the test's own logging what it gets in snapshots made by hand, MIDI 2.0 per-note bends live
-  (`Renderer::processLive` on a hand-made snapshot), recorded bends, and the Synth, the Sampler and SUB Test
-  Synth (note expression) playing bent notes at their pitch.
+  own grid where it moves, from its note-on, chased, edited while it sounds, a vibrato as it swings, a slide
+  landing on its last value) with a device of the test's own logging what it gets in snapshots made by hand,
+  notes played by hand having ids, MIDI 2.0 per-note bends live (`Renderer::processLive` on a hand-made
+  snapshot), recorded bends, and the Synth, the Sampler and SUB Test Synth (note expression) playing bent notes
+  at their pitch, and the note after a bent one at its own (SUB Test Synth keeps a voice's last tuning, as
+  Serum 2 can).
 - [tests/engine/test_midi_routing_engine.cpp](../../tests/engine/test_midi_routing_engine.cpp): devices taking
   another track's notes: an instrument, an effect with a MIDI input (SUB Test Note Effect, to the sample),
   in racks and after moves, from frozen tracks, the source going, what is refused, bit-identical on any

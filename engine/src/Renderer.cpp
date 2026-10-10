@@ -43,6 +43,8 @@ void Renderer::prepare(double sampleRate) {
     numActiveNotes_ = 0;
     previewNotes_.assign(kMaxPreviewNotes, {});
     numPreviewNotes_ = 0;
+    heldPreviews_.assign(kMaxPreviewNotes, {});
+    numHeldPreviews_ = 0;
     pendingInput_.assign(kMaxPendingInput, {});
     numPendingInput_ = 0;
     inputEvents_.assign(kMaxInputEvents, {});
@@ -1524,14 +1526,22 @@ void Renderer::bendNotes(const TrackRender& track, const Segment& segment, Track
         // start), after its start (its note-on sent that), until it ends.
         const int64_t until = std::min(segEnd, note.end);
         const int64_t first = std::max<int64_t>(segment.position - note.start, 1);
-        for (int64_t t = (first + kBendStep - 1) / kBendStep * kBendStep; note.start + t < until; t += kBendStep) {
+        const auto send = [&](int64_t t) {
             const auto value = static_cast<float>(bend.at(static_cast<double>(t)));
-            if (std::abs(value - note.bend) < kBendEpsilon) continue;
-            if (out.numEvents >= TrackBuffers::kMaxEvents - kBendHeadroom) return;
+            if (std::abs(value - note.bend) < kBendEpsilon) return true;
+            if (out.numEvents >= TrackBuffers::kMaxEvents - kBendHeadroom) return false;
             const auto offset = static_cast<int32_t>(segment.offset + (note.start + t - segment.position));
             out.pushEvent(ProcessEvent::noteBend(offset, note.key, note.noteId, value));
             note.bend = value;
+            return true;
+        };
+        for (int64_t t = (first + kBendStep - 1) / kBendStep * kBendStep; note.start + t < until; t += kBendStep) {
+            if (!send(t)) return;
         }
+        // Ending here: its last sample too, so its release holds where the curve
+        // ends (a slide into the next note lands on it, not a step short).
+        const int64_t last = note.end - 1 - note.start;
+        if (note.end <= segEnd && last >= first && !send(last)) return;
     }
 }
 
@@ -1541,12 +1551,33 @@ void Renderer::buildNoteEvents(const TrackRender& track, TrackBuffers& out, bool
     // they were played: dragging a note across keys releases one key and plays
     // the next several times within a block, and reordering those would leave
     // notes playing whose note-off came first.
+    // Each has an id, as the arrangement's notes do (a plug-in then knows it
+    // isn't bent: Vst3Processor tells it so).
     out.numEvents = 0;
     for (int i = 0; i < numPreviewNotes_; ++i) {
         const PreviewNote& note = previewNotes_[i];
         if (note.trackId != track.id) continue;
-        out.pushEvent(note.velocity > 0 ? ProcessEvent::noteOn(0, note.key, note.velocity)
-                                        : ProcessEvent::noteOff(0, note.key));
+        if (note.velocity > 0) {
+            ProcessEvent on = ProcessEvent::noteOn(0, note.key, note.velocity);
+            on.noteId = newNoteId();
+            if (!out.pushEvent(on)) continue;
+            if (numHeldPreviews_ == static_cast<int>(heldPreviews_.size())) {  // (one never let go: forgotten)
+                std::copy(heldPreviews_.begin() + 1, heldPreviews_.end(), heldPreviews_.begin());
+                --numHeldPreviews_;
+            }
+            heldPreviews_[static_cast<size_t>(numHeldPreviews_++)] = {track.id, note.key, on.noteId};
+        } else {
+            ProcessEvent off = ProcessEvent::noteOff(0, note.key);
+            for (int h = 0; h < numHeldPreviews_; ++h) {  // the oldest of that key, as a synth releases it
+                const HeldPreview& held = heldPreviews_[static_cast<size_t>(h)];
+                if (held.trackId != track.id || held.key != note.key) continue;
+                off.noteId = held.noteId;
+                std::copy(heldPreviews_.begin() + h + 1, heldPreviews_.begin() + numHeldPreviews_, heldPreviews_.begin() + h);
+                --numHeldPreviews_;
+                break;
+            }
+            out.pushEvent(off);
+        }
     }
     const int previewEvents = out.numEvents;
     routeMidiInput(track, hearsInput, take, out);

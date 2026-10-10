@@ -249,6 +249,25 @@ TEST_CASE("a note's events carry its id and its bends follow its curve") {
     for (size_t i = 1; i < log->seen.size(); ++i) CHECK(log->seen[i - 1].time <= log->seen[i].time);
 }
 
+TEST_CASE("a bend that ends on the note's end lands on its last value before the note-off") {
+    auto log = std::make_shared<EventLog>();
+    const auto beat = static_cast<int64_t>(kSpb);
+    // A slide down three semitones into the next note: its last point on its end, the drop curved.
+    auto snap = snapshotOf(log, {noteOf(0, 2 * beat + 7, 71, {{1.5 * kSpb, 0.0, 0.6}, {2.0 * kSpb + 7, -3.0, 0.0}}),
+                                 noteOf(2 * beat + 7, 4 * beat, 68, {})});
+    sub::Renderer renderer;
+    playFrom(renderer, 0);
+    render(renderer, *snap, 4 * beat);
+    const auto bends = log->of(sub::ProcessEvent::Type::NoteBend);
+    const auto offs = log->of(sub::ProcessEvent::Type::NoteOff);
+    REQUIRE(!bends.empty());
+    REQUIRE(!offs.empty());
+    CHECK_EQ(bends.back().time, 2 * beat + 7 - 1);  // its last sample: the release holds what it reached
+    CHECK_NEAR(bends.back().event.bend, -3.0, 1e-3);
+    CHECK(bends.back().time < offs.front().time);
+    for (const auto& bend : bends) CHECK_EQ(bend.event.key(), 71);  // (none for the next note)
+}
+
 TEST_CASE("a note that starts bent is bent from its note-on") {
     auto log = std::make_shared<EventLog>();
     auto snap = snapshotOf(log, {noteOf(500, 2000, 60, {{0.0, -3.0, 0.0}})});
@@ -367,6 +386,34 @@ TEST_CASE("a MIDI 2.0 per-note bend bends the live note it names") {
     CHECK_EQ(offs[0].event.noteId, ons[1].event.noteId);
 }
 
+TEST_CASE("notes played by hand have ids, and their note-offs the same") {
+    auto log = std::make_shared<EventLog>();
+    auto snap = snapshotOf(log, {});
+    sub::SharedState shared;
+    sub::Renderer renderer;
+    renderer.prepare(kSampleRate);
+    // C3 auditioned, then D3 while it still sounds, then both let go (C3 first).
+    for (const auto& [key, velocity] : std::vector<std::pair<int, int>>{{60, 100}, {62, 100}, {60, 0}, {62, 0}}) {
+        shared.previewNotes.push({1, static_cast<uint8_t>(key), static_cast<uint8_t>(velocity)});
+    }
+    std::vector<float> left(512), right(512);
+    float* outputs[2] = {left.data(), right.data()};
+    sub::AudioIO io;
+    io.outputs = outputs;
+    io.numOutputs = 2;
+    io.frames = 512;
+    renderer.processLive(*snap, shared, io);
+    const auto ons = log->of(sub::ProcessEvent::Type::NoteOn);
+    const auto offs = log->of(sub::ProcessEvent::Type::NoteOff);
+    REQUIRE(ons.size() == 2);
+    REQUIRE(offs.size() == 2);
+    CHECK(ons[0].event.noteId >= 0);
+    CHECK(ons[1].event.noteId >= 0);
+    CHECK(ons[0].event.noteId != ons[1].event.noteId);
+    CHECK_EQ(offs[0].event.noteId, ons[0].event.noteId);
+    CHECK_EQ(offs[1].event.noteId, ons[1].event.noteId);
+}
+
 TEST_CASE("a recorded note keeps the per-note bends played on it") {
     sub::MidiRecordingTake take(1);
     take.push({1000, 0, 60, 100, false, 0.f});
@@ -437,6 +484,20 @@ TEST_CASE("a plug-in hears a note's bend as its note expression") {
     CHECK_APPROX_REL(dominantFreq(slice(out, 4800, 4800 + 16384)), 880.0, 2e-3);
 }
 
+TEST_CASE("a note after a bent one plays at its own pitch on a plug-in that reuses voices") {
+    requireTestPlugins();
+    sub::Engine engine;
+    const uint32_t track = engine.addTrack();
+    // SUB Test Synth starts a note with the tuning the last note to end left
+    // (as a synth reusing that note's voice can): A3 bent up an octave, then
+    // E3 straight after it, unbent, must still be E3.
+    addTestPlugin(engine, engine.trackChain(track), "SUB Test Synth");
+    engine.setTrackNotes(track, {bentNote(0.0, 1.0, 69, {{0.0, 12.0, 0.0}}), bentNote(1.0, 2.0, 64, {})});
+    const Samples out = channel(engine.renderOffline(0.0, 3 * kBeat), 0);
+    CHECK_APPROX_REL(dominantFreq(slice(out, 2400, 2400 + 8192)), 880.0, 3e-3);
+    CHECK_APPROX_REL(dominantFreq(slice(out, kBeat + 4800, kBeat + 4800 + 16384)), 440.0 * std::pow(2.0, -5.0 / 12.0), 2e-3);
+}
+
 TEST_CASE("devices that play notes say so") {
     sub::Engine engine;
     const uint32_t track = engine.addTrack();
@@ -448,3 +509,4 @@ TEST_CASE("devices that play notes say so") {
     CHECK(engine.processorInfo(addTestPlugin(engine, chain, "SUB Test Note Effect")).acceptsMidi);
     CHECK(!engine.processorInfo(addTestPlugin(engine, chain, "SUB Test Effect")).acceptsMidi);
 }
+
