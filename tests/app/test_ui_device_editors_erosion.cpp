@@ -6,6 +6,7 @@
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScopeGuard>
@@ -554,7 +555,7 @@ private Q_SLOTS:
         set("amount", 60.0);
         engine()->renderOffline(0.0, 3 * kSampleRate);  // eroded, then two seconds of silence: not read yet
         refreshDisplays();
-        QCOMPARE(graph->erosionDb(), -90.0);
+        QCOMPARE(graph->erosionDb(), kErosionFloorDb);
         QCOMPARE(graph->activity(), 0.0);
         QCOMPARE(scope->activity(), 0.0);
 
@@ -564,7 +565,7 @@ private Q_SLOTS:
         refreshDisplays();  // (not read: hidden)
         view->setVisible(true);
         refreshDisplays();
-        QCOMPARE(graph->erosionDb(), -90.0);
+        QCOMPARE(graph->erosionDb(), kErosionFloorDb);
         QCOMPARE(graph->activity(), 0.0);
         QCOMPARE(scope->activity(), 0.0);
 
@@ -587,6 +588,8 @@ private Q_SLOTS:
         // The tone eroded: its spectrum, how much is eroded, the modulation, all reach the editor.
         set("amount", 50.0);
         engine()->renderOffline(0.0, kSampleRate / 2);
+        QElapsedTimer sinceRisen;  // (from before the refresh that raises it: the fall counts from its tick)
+        sinceRisen.start();
         refreshDisplays();
         QVERIFY(graph->spectrumLive());
         QVERIFY2(graph->erosionDb() > -40.0, qPrintable(QString::number(graph->erosionDb())));
@@ -595,15 +598,19 @@ private Q_SLOTS:
         QCOMPARE(scope->pointCount(), ErosionScope::kRing);
         QVERIFY2(scope->spread() < 1e-6, qPrintable(QString::number(scope->spread())));  // mono: both sides alike
         QVERIFY(scope->activity() > 0.1);
-        // Nothing more coming, it falls back slowly: by the time each refresh says (DeviceCanvas::tickSeconds),
-        // never less than a tick's worth.
+        // Nothing more coming, it falls back slowly, by the time each refresh says (DeviceCanvas::tickSeconds:
+        // the time since the refresh before, but at least a tick): never less than a tick's worth a refresh, and
+        // never more than the time they took plus a tick each (a one-pole's fall over several steps is its fall
+        // over their sum), however long a busy machine makes them.
         const double risen = graph->activity();
         for (int i = 0; i < 10; ++i)
             refreshDisplays();
         const double tick = kDisplayRefreshMs / 1000.0;
+        const double took = double(sinceRisen.nsecsElapsed()) / 1e9;
         const double fallen = risen * std::pow(1.0 - easeFraction(tick, ErosionGraph::kActivityFallSeconds), 10);
-        QVERIFY2(graph->activity() <= fallen + 1e-9 && graph->activity() > 0.3 * risen,
-                 qPrintable(QStringLiteral("%1 from %2").arg(graph->activity()).arg(risen)));
+        const double least = risen * (1.0 - easeFraction(took + 10 * tick, ErosionGraph::kActivityFallSeconds));
+        QVERIFY2(graph->activity() <= fallen + 1e-9 && graph->activity() >= least,
+                 qPrintable(QStringLiteral("%1 from %2 in %3 s").arg(graph->activity()).arg(risen).arg(took)));
         QVERIFY(graph->animating());
 
         // Stereo opens the modulation out: a round cloud at 100 %, about half as wide at 50 %.
@@ -627,7 +634,7 @@ private Q_SLOTS:
         set("amount", 0.0);
         engine()->renderOffline(0.0, kSampleRate / 2);
         refreshDisplays();
-        QCOMPARE(graph->erosionDb(), -90.0);
+        QCOMPARE(graph->erosionDb(), kErosionFloorDb);
         for (int i = 0; i < 300; ++i)
             refreshDisplays();
         QCOMPARE(graph->activity(), 0.0);

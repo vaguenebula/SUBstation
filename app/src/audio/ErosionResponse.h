@@ -44,12 +44,16 @@ QString erosionExcursionText(double ms);
 // 0 at the ends, as the engine's.
 QPair<double, double> erosionBlendWeights(double blend);
 
+// The `erosion` display's floor (dB): what it reads with nothing changed (the
+// engine's erosion::kFloorDb, checked in ErosionResponse.cpp).
+inline constexpr double kErosionFloorDb = -90.0;
+
 // How much the device is eroding now, from what a refresh read of its `erosion`
 // display (dB, one value per erosion::kMeterSamples frames): the most of the
 // newest values, those covering the last kErosionRecentSeconds (about two
-// refreshes), -90 without any. A read can hold a long backlog (an editor shown,
-// or shown again, after the sound stopped reads up to 44 s of it at 48 kHz):
-// only its end is now.
+// refreshes), kErosionFloorDb without any. A read can hold a long backlog (an
+// editor shown, or shown again, after the sound stopped reads up to 44 s of it
+// at 48 kHz): only its end is now.
 inline constexpr double kErosionRecentSeconds = 0.035;
 double erosionRecentDb(const std::vector<float>& values, double sampleRate);
 

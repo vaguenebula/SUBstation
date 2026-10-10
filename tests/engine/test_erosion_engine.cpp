@@ -342,8 +342,8 @@ TEST_CASE("at Amount 0 erosion is a clean delay of its latency") {
         CHECK_ARRAY_EQUAL(r, delayed(right, kD));
         CHECK(allEqual(slice(l, 0, kD), 0.0));
         const Samples& meter = device.display("erosion");
-        CHECK_EQ(meter.size(), size_t{kSampleRate / 2 / 256});
-        CHECK(allEqual(meter, -90.0));
+        CHECK_EQ(meter.size(), size_t{kSampleRate / 2 / erosion::kMeterSamples});
+        CHECK(allEqual(meter, erosion::kFloorDb));
         // The modulators run on all the same (the scope traces them, and when Amount rises the device goes
         // on as if it had eroded all along): they are what they are at any Amount.
         Values eroding = values;
@@ -921,7 +921,7 @@ TEST_CASE("erosion's displays") {
     CHECK(*std::min_element(meter.begin(), meter.end()) > -30.f);
     Erosion clean(kSampleRate, {{"amount", 0.f}});
     clean.play(high);
-    CHECK(allEqual(clean.display("erosion"), -90.0));
+    CHECK(allEqual(clean.display("erosion"), erosion::kFloorDb));
 }
 
 TEST_CASE("the erosion band the editor draws is the filter that plays") {

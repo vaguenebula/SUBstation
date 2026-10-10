@@ -180,4 +180,8 @@ inline uint32_t saltedSeed(uint32_t seed, uint32_t salt) noexcept { return (seed
 // in dB): the editor reads that many frames into each value.
 constexpr int kMeterSamples = 256;
 
+// That display's floor (dB): what it reads with nothing changed (Amount 0, or
+// silence), and what the editor takes for no value.
+constexpr float kFloorDb = -90.f;
+
 }  // namespace sub::erosion

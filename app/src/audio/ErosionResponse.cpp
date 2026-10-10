@@ -13,6 +13,7 @@ static_assert(kErosionMinFrequency == sub::erosion::kMinFrequency &&
               "the editor's Frequency range is the device's");
 static_assert(kErosionMinWidth == sub::erosion::kMinWidth && kErosionMaxWidth == sub::erosion::kMaxWidth,
               "the editor's Filter Width range is the device's");
+static_assert(kErosionFloorDb == sub::erosion::kFloorDb, "the editor's floor is the `erosion` display's");
 
 QList<double> erosionBandMagnitude(double freq, double width, double sampleRate, const QList<double>& frequencies) {
     QList<double> magnitudes;
@@ -49,7 +50,7 @@ QPair<double, double> erosionBlendWeights(double blend) {
 double erosionRecentDb(const std::vector<float>& values, double sampleRate) {
     const auto recent = static_cast<size_t>(
         std::max(1.0, std::ceil(kErosionRecentSeconds * sampleRate / sub::erosion::kMeterSamples)));
-    double db = -90.0;
+    double db = kErosionFloorDb;
     for (size_t i = values.size() - std::min(values.size(), recent); i < values.size(); ++i) {
         if (std::isfinite(values[i]))
             db = std::max(db, double(values[i]));

@@ -20,6 +20,7 @@
 // burst of wheel notches.
 
 #include "analysis/Spectrum.h"
+#include "audio/ErosionResponse.h"
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
@@ -94,8 +95,8 @@ public:
     double noiseWeight() const { return noiseWeight_; }
     // How much the sound is being eroded (0..1, eased): what the shimmer, the halo and the spike's trembling follow.
     double activity() const { return activity_.value; }
-    // How much the last refresh says the device erodes now (dB; -90 without any): the newest `erosion`
-    // values it read (sub::app::erosionRecentDb), not a backlog's.
+    // How much the last refresh says the device erodes now (dB; sub::app::kErosionFloorDb without any): the
+    // newest `erosion` values it read (sub::app::erosionRecentDb), not a backlog's.
     double erosionDb() const { return erosionDb_; }
     // Whether the input's spectrum shows anything above its floor.
     bool spectrumLive() const { return !inColumns_.empty(); }
@@ -139,7 +140,7 @@ private:
     std::vector<float> shimmerL_, shimmerR_;      // per column, between the knots: what is drawn
     std::minstd_rand random_{1};                  // (seeded: screenshots repeat)
     Eased activity_;
-    double erosionDb_ = -90.0;
+    double erosionDb_ = sub::app::kErosionFloorDb;
     double sinePhase_ = 0.0;  // the sine spike's wave (radians)
     double freq_ = 1000.0, width_ = 2.5, amount_ = 25.0, blend_ = 100.0, stereo_ = 0.0;
     double tuned_ = 1000.0, excursionMs_ = 0.0, sineWeight_ = 0.0, noiseWeight_ = 1.0;

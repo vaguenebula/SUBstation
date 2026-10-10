@@ -60,7 +60,7 @@ constexpr int kMeterSamples = erosion::kMeterSamples;  // audio per `erosion` va
 static_assert(kMeterSamples % kChunk == 0, "a meter's frames end with a chunk");
 constexpr double kGlideSeconds = 0.01;  // each of a control's two one-poles
 constexpr double kLanded = 1e-6;        // a glide this near its target lands on it
-constexpr float kFloorDb = -90.f;       // the `erosion` display's floor
+constexpr float kFloorDb = erosion::kFloorDb;  // the `erosion` display's floor
 constexpr int kChannels = 2;
 
 // A value moving in a straight line over a chunk, sample by sample, from where
@@ -197,7 +197,7 @@ private:
     }
 
     // A control's glide a chunk on towards its target; false if it was there already (nothing moved).
-    bool step(dsp::Glide& glide, double target) const noexcept {
+    bool step(dsp::Glide& glide, double target) noexcept {
         if (glide.settled(target)) return false;
         glide.next(target, glide_, kLanded);
         return true;
