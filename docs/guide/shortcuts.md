@@ -79,7 +79,8 @@ the focus. Most are also in the menus, which show their keys.
 | End a hot swap, keeping the sample swapped in (the browser's list having the keyboard); keep the sample selected and end it | Esc; Enter (or double-click it) |
 | Show / hide the track headers' In/Out column | Ctrl+Alt+I |
 | Show / hide the piano roll's chords and the key (notes out of it in red) | C |
-| Piano roll: bend mode (the notes' pitch bends) / the vibrato tool | B / V |
+| Piano roll: bend mode (the notes' pitch bends, with the Draw tool) / the vibrato tool / the glide tool (slides) | B / V / G |
+| Piano roll, in bend mode: the notes, to edit as out of it (not with the vibrato tool) | hold Shift |
 | Search everything in the browser ("All"); Enter selects the first result, Enter again adds it | Ctrl+F |
 
 ## Devices
@@ -105,10 +106,12 @@ pastes at the paste marker: click the grid to place it), Ctrl+U quantizes them, 
 arrow keys move them (Up/Down a semitone, Shift an octave; Left/Right a grid step, Shift
 a bar). 0 deactivates the selected notes (or activates them, if they all are), not the
 clip. C shows or hides the song's chords and key over the notes. B turns bend mode on
-and off (the notes' pitch curves, edited as automation is), V picks the vibrato tool
-(while drawing a vibrato, Shift-drag sideways sets its speed, Alt-drag its ramp, and
-Ctrl draws it off the grid); in bend mode Delete deletes the selected bend points and
-Ctrl+A selects them all. See
+and off (the notes' pitch curves, edited as automation is; it starts with the Draw
+tool), V picks the vibrato tool (while drawing a vibrato, Shift-drag sideways sets its
+speed, Alt-drag its ramp, and Ctrl draws it off the grid), G the glide tool (a slide
+into the next note; Alt-drag sideways curves it); in bend mode Delete deletes the
+selected bend points, Ctrl+A selects them all, and holding Shift shows the notes to
+edit as out of it. See
 [midi.md](midi.md#the-piano-roll).
 
 ## Plug-in editors

@@ -144,11 +144,15 @@ class PianoRoll : public QObject {
     Q_PROPERTY(QRectF toolsArea READ toolsArea NOTIFY toolsChanged)
     Q_PROPERTY(int toolsCount READ toolsCount NOTIFY toolsChanged)
     Q_PROPERTY(bool hasCopiedNotes READ hasCopiedNotes NOTIFY copiedChanged)
-    // Bend mode (B): notes' bend curves shown to edit; the tool, "draw" (points)
-    // or "vibrato" (V); a new vibrato's rate (Hz), depth (semitones) and ramp
-    // (percent of its length); how many bend points are selected.
+    // Bend mode (B): notes' bend curves shown to edit; the tool, "draw" (points:
+    // what B starts with), "vibrato" (V) or "glide" (G: slides); whether the
+    // curves show now (bend mode, but for while Shift is held with the Draw or
+    // Glide tool: the notes then, to edit as out of it); a new vibrato's rate
+    // (Hz), depth (semitones) and ramp (percent of its length); how many bend
+    // points are selected.
     Q_PROPERTY(bool bendMode READ bendMode WRITE setBendMode NOTIFY bendModeChanged)
     Q_PROPERTY(QString bendTool READ bendTool WRITE setBendTool NOTIFY bendModeChanged)
+    Q_PROPERTY(bool bendView READ bendView NOTIFY bendModeChanged)
     Q_PROPERTY(double vibratoRate READ vibratoRate WRITE setVibratoRate NOTIFY toolSettingsChanged)
     Q_PROPERTY(double vibratoDepth READ vibratoDepth WRITE setVibratoDepth NOTIFY toolSettingsChanged)
     Q_PROPERTY(double vibratoFade READ vibratoFade WRITE setVibratoFade NOTIFY toolSettingsChanged)
@@ -169,6 +173,7 @@ public:
     static constexpr double kDefaultHumanizeTiming = 25.0;     // %
     static constexpr const char* kDrawTool = "draw";
     static constexpr const char* kVibratoTool = "vibrato";
+    static constexpr const char* kGlideTool = "glide";
 
     // A stretch of roll beats.
     using Span = std::pair<double, double>;
@@ -320,10 +325,16 @@ public:
     // --- Bends (MIDI 2.0's per-note pitch bend) ------------------------------------
 
     bool bendMode() const { return bendMode_; }
-    void setBendMode(bool on);
+    void setBendMode(bool on);  // (on: with the Draw tool)
     Q_INVOKABLE void toggleBendMode() { setBendMode(!bendMode_); }
     QString bendTool() const { return bendTool_; }
-    void setBendTool(const QString& tool);  // kDrawTool or kVibratoTool
+    void setBendTool(const QString& tool);  // kDrawTool, kVibratoTool or kGlideTool
+    // Shift held in bend mode (the note grid says): the notes show to edit as
+    // out of it, but with the vibrato tool (whose Shift sets its speed).
+    void setPeeking(bool held);
+    bool peeking() const { return peeking_ && bendMode_ && bendTool_ != QLatin1String(kVibratoTool); }
+    // The bend curves are what the grid shows and edits.
+    bool bendView() const { return bendMode_ && !peeking(); }
     double vibratoRate() const { return vibratoRate_; }
     void setVibratoRate(double hz);
     double vibratoDepth() const { return vibratoDepth_; }
@@ -557,6 +568,7 @@ private:
     std::optional<app::Key> scaleKey_;
     bool bendMode_ = false;
     QString bendTool_ = QString::fromLatin1(kDrawTool);
+    bool peeking_ = false;  // Shift held (bend mode or not)
     double vibratoRate_ = app::notes::kDefaultVibratoRate;
     double vibratoDepth_ = app::notes::kDefaultVibratoDepth;
     double vibratoFade_ = app::notes::kDefaultVibratoFade * 100.0;

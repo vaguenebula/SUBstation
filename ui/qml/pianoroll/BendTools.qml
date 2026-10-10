@@ -4,8 +4,9 @@ import SUBstation
 
 // The bend bar: while the piano roll is in bend mode (B), a small rounded bar at
 // the top right of the note grid with the bend tools: Draw (points on the
-// notes' bend curves, as automation's) and Vibrato (V: drag across a note to
-// draw vibrato on it), the rate, depth and ramp a new vibrato takes, and Clear
+// notes' bend curves, as automation's; what B starts with), Vibrato (V: drag
+// across a note to draw vibrato on it) and Glide (G: a slide into the next
+// note), the rate, depth and ramp a new vibrato takes, and Clear
 // (the selected notes' bends, every note's with none selected). Its buttons and
 // boxes never take the focus, so the notes keep the keyboard; it keeps its
 // clicks to itself (the grid is underneath).
@@ -18,6 +19,7 @@ Rectangle {
 
     readonly property int margin: 6
     readonly property bool vibrato: roll.bendTool === "vibrato"
+    readonly property bool glide: roll.bendTool === "glide"
 
     x: parent ? parent.width - width - margin : 0
     y: margin + (Session.harmony.shown ? 18 : 0)  // (below the chords)
@@ -27,7 +29,7 @@ Rectangle {
     color: Theme.panelAlt
     border.color: Theme.border
     antialiasing: true
-    visible: roll.bendMode
+    visible: roll.bendView  // (not while Shift shows the notes)
 
     MouseArea {
         anchors.fill: parent
@@ -74,11 +76,11 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             role: "tool"
             iconName: "bend"
-            checked: !bar.vibrato
-            tooltip: qsTr("Draw bends: click a note's curve to add a point, drag points,\nclick one to delete it, Alt-drag a segment to curve it")
+            checked: !bar.vibrato && !bar.glide
+            tooltip: qsTr("Draw bends: click a note's curve to add a point, drag points,\nclick one to delete it (Ctrl-click: select it), Alt-drag a segment to curve it")
             onToggled: {
                 bar.roll.bendTool = "draw"
-                checked = Qt.binding(() => !bar.vibrato)
+                checked = Qt.binding(() => !bar.vibrato && !bar.glide)
             }
         }
         ToggleButton {
@@ -91,6 +93,18 @@ Rectangle {
             onToggled: {
                 bar.roll.bendTool = "vibrato"
                 checked = Qt.binding(() => bar.vibrato)
+            }
+        }
+        ToggleButton {
+            objectName: "bendGlide"
+            anchors.verticalCenter: parent.verticalCenter
+            role: "tool"
+            iconName: "glide"
+            checked: bar.glide
+            tooltip: qsTr("Draw a slide into the next note (G): press where it starts and drag to where it\nends (a click: to the note's end); hold Alt and drag sideways to curve it")
+            onToggled: {
+                bar.roll.bendTool = "glide"
+                checked = Qt.binding(() => bar.glide)
             }
         }
         Separator {}

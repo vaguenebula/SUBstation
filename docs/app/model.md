@@ -621,8 +621,10 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   says where it went), `withBendPointsMoved` (points moved together stay in order between those not moved, and
   within the note), `withoutBendPoints`, `withBendCurve`, `withVibrato` (a new vibrato takes the stretch it covers
   from those already there: they are shortened, split, or go; held to the note, at least `kMinVibratoBeats`),
-  `withoutVibrato`, and `simplifiedBend` (Ramer-Douglas-Peucker: a recorded bend's many points drawn with few,
-  within 0.05 semitones). Note edits carry bends: `withStart` (a trimmed start keeps the bend where it was in time:
+  `withoutVibrato`, `nextNote` (the note a slide goes to: the next to start after it, of a chord the nearest in
+  pitch), `withSlide` (a slide over a stretch as two points, from the curve's value at its start to an interval at
+  its end, replacing the points it covers), and `simplifiedBend` (Ramer-Douglas-Peucker: a recorded bend's many
+  points drawn with few, within 0.05 semitones). Note edits carry bends: `withStart` (a trimmed start keeps the bend where it was in time:
   `resized` and `resolveOverlaps` use it), `timeScaled` scales them, and `lessFull` orders notes alike but for
   their bends (the piano roll's note sets are keyed by it).
 
@@ -708,7 +710,8 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   and groups (delete, move, copy, duplicate, cut, paste) with their frozen audio, in one undo step; what is refused;
   unfreezing and flattening afterwards.
 - [test_note_bends.cpp](../../tests/app/test_note_bends.cpp): bends and vibratos, the pure functions (order, moves,
-  vibratos taking their stretch, note edits carrying bends), the model bending as the engine does, recorded bends
+  vibratos taking their stretch, slides into the next note, note edits carrying bends), the model bending as the
+  engine does, recorded bends
   drawn with few points and becoming the notes' bends, project files (and damaged bends refused), and bent notes
   playing at their bent pitch.
 - [test_file_manager.cpp](../../tests/app/test_file_manager.cpp): files replaced and relinked (the pure functions,

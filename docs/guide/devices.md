@@ -96,7 +96,7 @@ another track's part.
 A polyphonic subtractive synth (16 voices) with sine, triangle, saw and square
 oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass
 filter and volume. Velocity sets the level; each voice follows its note's bend
-([midi.md](midi.md#pitch-bends-and-vibrato)). New MIDI tracks come with it.
+([midi.md](midi.md#pitch-bends-vibrato-and-slides)). New MIDI tracks come with it.
 
 | Parameter | Range |
 |---|---|
@@ -112,7 +112,7 @@ filter and volume. Velocity sets the level; each voice follows its note's bend
 
 An instrument that plays one audio file, as Ableton's Simpler does, in one of three
 modes (the tabs at its left). Each note follows its bend
-([midi.md](midi.md#pitch-bends-and-vibrato)), in every mode:
+([midi.md](midi.md#pitch-bends-vibrato-and-slides)), in every mode:
 
 - **Classic**: played across the keyboard, pitched from its root key (up to 32 notes at
   once, *Voices*), with an ADSR envelope; it plays from Start to End, or with **Loop**

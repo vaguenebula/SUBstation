@@ -395,6 +395,31 @@ Note withoutVibrato(Note note, int index) {
     return note;
 }
 
+std::optional<Note> nextNote(const std::vector<Note>& notes, const Note& note) {
+    std::optional<Note> next;
+    for (const Note& other : notes) {
+        if (other.muted || other.start <= note.start + kEps) continue;
+        if (!next || other.start < next->start - kEps) {
+            next = other;
+            continue;
+        }
+        if (other.start > next->start + kEps) continue;
+        const int distance = std::abs(other.pitch - note.pitch), best = std::abs(next->pitch - note.pitch);
+        if (distance < best || (distance == best && other.pitch < next->pitch)) next = other;
+    }
+    return next;
+}
+
+Note withSlide(Note note, double start, double end, double semitones, double curve) {
+    const double length = std::max(0.0, note.length);
+    start = std::clamp(start, 0.0, length);
+    end = std::clamp(end, start, length);
+    const double from = note.curveAt(start);  // (no step where it begins)
+    std::erase_if(note.bend, [&](const BendPoint& p) { return p.time >= start - kEps && p.time <= end + kEps; });
+    note = withBendPoint(note, {start, from, curve});
+    return withBendPoint(note, {end, semitones, 0.0});
+}
+
 namespace {
 
 void simplify(const std::vector<BendPoint>& points, size_t first, size_t last, double tolerance, std::vector<char>& keep) {

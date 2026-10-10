@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <array>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -118,6 +119,15 @@ Note withBendCurve(Note note, int index, double curve);
 // already there (they are shortened, split, or go), held to the note.
 Note withVibrato(Note note, Vibrato vibrato);
 Note withoutVibrato(Note note, int index);
+// The note a slide from `note` goes to: the next of `notes` to start after it
+// (later, not with it; of several starting together, the nearest in pitch,
+// then the lower), deactivated ones left out. None if nothing follows it.
+std::optional<Note> nextNote(const std::vector<Note>& notes, const Note& note);
+// The note with a slide (a glissando) over `start`..`end` (beats from its
+// start, held to it): from where its curve is at `start` to `semitones` at
+// `end`, bent by `curve` (-1..1, as a segment's), points it covers replaced and
+// those after it kept. A point at each end, so the slide is ordinary bend.
+Note withSlide(Note note, double start, double end, double semitones, double curve);
 // Few of a bend's many points (a recorded one's) that draw it as closely as
 // `tolerance` semitones: the first and last stay, and so does every point a
 // straight line between those kept around it would miss by more

@@ -56,7 +56,7 @@ QString semitoneText(double semitones) {
 // Drags a note's selected bend points (and those of other notes selected with
 // them) in time and pitch: the grabbed one onto the grid and a whole semitone
 // (Alt: anywhere), the others by as much. A click without a drag on a point
-// deletes it (unless it was Shift- or Ctrl-clicked, or was just added).
+// deletes it (unless it was Ctrl-clicked, or was just added).
 class MoveBendPointsGesture : public NoteGrid::Gesture {
 public:
     MoveBendPointsGesture(NoteGrid* grid, const QPointF& press, const PianoRoll::BendRef& grabbed, bool removeOnClick,
@@ -102,7 +102,7 @@ public:
     }
 
     void clicked(Qt::KeyboardModifiers modifiers) override {
-        if (!removeOnClick_ || (modifiers & (Qt::ShiftModifier | Qt::ControlModifier))) return;
+        if (!removeOnClick_ || (modifiers & Qt::ControlModifier)) return;
         const Group& mine = groups_[static_cast<size_t>(grabbed_)];
         roll->commitBend(mine.current, notes::withoutBendPoints(mine.current.note, {point_}),
                          QStringLiteral("Delete Bend Point"), {}, std::vector<int>());
@@ -147,8 +147,8 @@ private:
     int point_;
 };
 
-// A rubber band selecting bend points (added to those selected with Shift or
-// Ctrl); a click in empty space lets them go.
+// A rubber band selecting bend points (added to those selected with Ctrl); a
+// click in empty space lets them go.
 class SelectBendsGesture : public NoteGrid::Gesture {
 public:
     SelectBendsGesture(NoteGrid* grid, const QPointF& press, bool additive)
@@ -220,6 +220,7 @@ public:
         depth_ = std::clamp(roll->vibratoDepth() + (press.y() - at.y()) / roll->rowHeight(), 0.05, 12.0);
         const double a = std::min(from_, to), b = std::max(from_, to);
         if (b - a < notes::kMinVibratoBeats) return;
+        drawn_ = {a, b};
         draw(a - start, b - a);
     }
 
@@ -244,6 +245,13 @@ public:
                                   QStringLiteral(" Hz · ramp ") + app::formatFixed(fade() * 100.0, 0) + QStringLiteral(" %"));
     }
 
+    std::optional<QRectF> area() const override {
+        if (!active || drawn_.second <= drawn_.first) return std::nullopt;
+        const double top = roll->pitchTop(base_.note.pitch) - depth_ * roll->rowHeight();
+        return QRectF(QPointF(roll->view().beatToX(drawn_.first), top),
+                      QPointF(roll->view().beatToX(drawn_.second), top + roll->rowHeight() * (1.0 + 2.0 * depth_)));
+    }
+
 private:
     // What it is drawn with: the rate to a tenth of a hertz, the ramp to a percent.
     double rate() const { return std::round(rate_ * 10.0) / 10.0; }
@@ -262,6 +270,86 @@ private:
     double rate_;        // as dragged, before rounding
     double fade_;
     double depth_;
+    std::pair<double, double> drawn_;  // the stretch drawn over (roll beats)
+};
+
+// The glide tool on a note: a slide (a glissando) into the note after it
+// (notes::nextNote), from where the press is (on the grid; Ctrl: anywhere) over
+// the stretch dragged across, or with a click to the note's end. While Alt is
+// held, dragging sideways bends it instead (right: it arrives later, easing
+// in; left: sooner, easing out), the stretch staying where it is meanwhile.
+// It is made of two bend points (notes::withSlide), to edit as any others.
+class GlideGesture : public NoteGrid::Gesture {
+public:
+    GlideGesture(NoteGrid* grid, const QPointF& press, const ClipNote& note, int target, bool free)
+        : Gesture(grid, press), base_(note), current_(note), last_(press), target_(target),
+          semitones_(std::clamp(static_cast<double>(target - note.note.pitch), -notes::kMaxBendSemitones,
+                                notes::kMaxBendSemitones)) {
+        const double start = roll->rollStart(note);
+        from_ = std::clamp(roll->view().snapBeat(roll->view().xToBeat(press.x()), free), start, start + note.note.length);
+    }
+
+    void move(const QPointF& pos, Qt::KeyboardModifiers modifiers) override {
+        if (!started(pos)) return;
+        const bool bending = modifiers & Qt::AltModifier;
+        const QPointF step = pos - last_;
+        last_ = pos;
+        if (bending) {
+            held_ += step;  // (taken from the stretch)
+            amount_ = std::clamp(amount_ + step.x() / NoteGrid::kGlideCurvePixels, -1.0, 1.0);
+        }
+        grid->setCursor(QCursor(bending ? Qt::SizeHorCursor : Qt::CrossCursor));
+        const double start = roll->rollStart(base_);
+        const double to = std::clamp(
+            roll->view().snapBeat(roll->view().xToBeat((pos - held_).x()), modifiers & Qt::ControlModifier), start,
+            start + base_.note.length);
+        if (to - from_ < notes::kMinNoteBeats) return;  // (it goes on from where it starts)
+        to_ = to;
+        draw();
+    }
+
+    void clicked(Qt::KeyboardModifiers) override {
+        to_ = roll->rollStart(base_) + base_.note.length;
+        if (to_ - from_ >= notes::kMinNoteBeats) draw();
+    }
+
+    std::optional<std::pair<QPointF, QString>> label() const override {
+        if (!active) return std::nullopt;
+        return std::make_pair(QPointF(press.x(), press.y() - 14),
+                              QStringLiteral("→ ") + notes::noteName(target_) + QStringLiteral(" · ") +
+                                  semitoneText(semitones_) + QStringLiteral(" · curve ") +
+                                  (amount_ > 0.0 ? QStringLiteral("+") : QString()) +
+                                  app::formatFixed(amount_ * 100.0, 0) + QStringLiteral(" %"));
+    }
+
+    std::optional<QRectF> area() const override {
+        if (!active || to_ <= from_) return std::nullopt;
+        const double from = roll->bendY(base_, base_.note.curveAt(from_ - roll->rollStart(base_)));
+        const double to = roll->bendY(base_, semitones_);
+        const double half = roll->rowHeight() / 2.0;
+        return QRectF(QPointF(roll->view().beatToX(from_), std::min(from, to) - half),
+                      QPointF(roll->view().beatToX(to_), std::max(from, to) + half));
+    }
+
+private:
+    void draw() {
+        const double start = roll->rollStart(base_);
+        // Right (positive) arrives later: the curve bulges away from where it goes.
+        const double from = base_.note.curveAt(from_ - start);
+        const double curve = semitones_ >= from ? -amount_ : amount_;
+        const Note slid = notes::withSlide(base_.note, from_ - start, to_ - start, semitones_, curve);
+        current_ = roll->commitBend(current_, slid, QStringLiteral("Add Slide"), key);
+    }
+
+    ClipNote base_;
+    ClipNote current_;
+    QPointF last_;
+    QPointF held_;     // how far it moved while Alt was held
+    int target_;       // the pitch it slides to
+    double semitones_;
+    double from_ = 0.0;  // roll beats
+    double to_ = 0.0;
+    double amount_ = 0.0;  // its curve as dragged: -1..1, positive arriving later
 };
 
 }  // namespace
@@ -285,6 +373,17 @@ std::optional<ClipNote> NoteGrid::curveNear(const QPointF& pos, double grab) con
         }
     });
     return nearest;
+}
+
+std::optional<ClipNote> NoteGrid::toolNote(const QPointF& pos) const {
+    if (auto note = curveNear(pos, kLineGrab * 2)) return note;
+    if (const auto hit = noteAt(pos)) return hit->note;
+    return std::nullopt;
+}
+
+std::optional<app::Note> NoteGrid::slideTarget(const ClipNote& note) const {
+    const app::Clip* clip = roll()->clipAt(note.clip);
+    return clip ? notes::nextNote(clip->notes, note.note) : std::nullopt;
 }
 
 std::optional<NoteGrid::BendHit> NoteGrid::bendHitAt(const QPointF& pos, Qt::KeyboardModifiers modifiers) const {
@@ -332,7 +431,7 @@ std::optional<NoteGrid::BendHit> NoteGrid::bendHitAt(const QPointF& pos, Qt::Key
 void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
     PianoRoll* roll = this->roll();
     if (!roll || !roll->hasClip()) return;
-    const bool editing = roll->bendMode();
+    const bool editing = roll->bendView();
     const timeline::Timeline& view = roll->view();
     const double tempo = tempoOf(roll);
     p.save();
@@ -393,6 +492,14 @@ void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
         p.fillEllipse(at, radius, radius, QColor(255, 255, 255, 60));
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), kGhost, 1.4);
     }
+    // The stretch a vibrato or a slide is being drawn over.
+    if (gesture_) {
+        if (const auto area = gesture_->area()) {
+            QColor tint = Theme::kAccent;
+            tint.setAlpha(40);
+            p.fillRect(*area, tint);
+        }
+    }
     // A dragged point's value (or a vibrato's depth), by it.
     if (gesture_) {
         if (const auto label = gesture_->label()) {
@@ -409,21 +516,24 @@ void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
 
 std::unique_ptr<NoteGrid::Gesture> NoteGrid::bendPress(const QPointF& pos, Qt::KeyboardModifiers modifiers) {
     PianoRoll* roll = this->roll();
-    const bool additive = modifiers & (Qt::ShiftModifier | Qt::ControlModifier);
+    const bool additive = modifiers & Qt::ControlModifier;
     if (roll->bendTool() == QLatin1String(PianoRoll::kVibratoTool)) {
-        std::optional<ClipNote> note = curveNear(pos, kLineGrab * 2);
-        if (!note) {
-            if (const auto hit = noteAt(pos)) note = hit->note;
-        }
+        const auto note = toolNote(pos);
         if (!note) return nullptr;
         return std::make_unique<VibratoGesture>(this, pos, *note, modifiers & Qt::ControlModifier);
+    }
+    if (roll->bendTool() == QLatin1String(PianoRoll::kGlideTool)) {
+        const auto note = toolNote(pos);
+        const auto next = note ? slideTarget(*note) : std::nullopt;
+        if (!next) return nullptr;  // (nothing after it to slide to)
+        return std::make_unique<GlideGesture>(this, pos, *note, next->pitch, modifiers & Qt::ControlModifier);
     }
     const auto hit = bendHitAt(pos, modifiers);
     if (!hit) return std::make_unique<SelectBendsGesture>(this, pos, additive);
     switch (hit->kind) {
         case BendHit::Kind::Point: {
             const PianoRoll::BendRef ref{hit->note, hit->point};
-            if (additive) {  // Shift- or Ctrl-click: in or out of the selection
+            if (additive) {  // Ctrl-click: in or out of the selection
                 std::vector<PianoRoll::BendRef> chosen = roll->selectedBends();
                 const auto found = std::find(chosen.begin(), chosen.end(), ref);
                 if (found != chosen.end()) {
@@ -486,7 +596,13 @@ Qt::CursorShape NoteGrid::bendCursor(const QPointF& pos, Qt::KeyboardModifiers m
     PianoRoll* roll = this->roll();
     if (roll->bendTool() == QLatin1String(PianoRoll::kVibratoTool)) {
         bendHover_.reset();
-        return curveNear(pos, kLineGrab * 2) || noteAt(pos) ? Qt::CrossCursor : Qt::ArrowCursor;
+        return toolNote(pos) ? Qt::CrossCursor : Qt::ArrowCursor;
+    }
+    if (roll->bendTool() == QLatin1String(PianoRoll::kGlideTool)) {
+        bendHover_.reset();
+        const auto note = toolNote(pos);
+        if (!note) return Qt::ArrowCursor;
+        return slideTarget(*note) ? Qt::CrossCursor : Qt::ForbiddenCursor;  // (nothing after it)
     }
     bendHover_ = bendHitAt(pos, modifiers);
     if (!bendHover_) return Qt::ArrowCursor;
@@ -508,13 +624,15 @@ bool NoteGrid::bendKey(QKeyEvent* event) {
         roll->toggleBendMode();
         return true;
     }
-    if (plain && key == Qt::Key_V) {  // the vibrato tool (into bend mode, if out of it)
-        const bool vibrato = roll->bendMode() && roll->bendTool() == QLatin1String(PianoRoll::kVibratoTool);
-        roll->setBendTool(QString::fromLatin1(vibrato ? PianoRoll::kDrawTool : PianoRoll::kVibratoTool));
+    // The vibrato and glide tools (into bend mode, if out of it); again, back to Draw.
+    if (plain && (key == Qt::Key_V || key == Qt::Key_G)) {
+        const QString tool = QString::fromLatin1(key == Qt::Key_V ? PianoRoll::kVibratoTool : PianoRoll::kGlideTool);
+        const bool again = roll->bendMode() && roll->bendTool() == tool;
         roll->setBendMode(true);
+        roll->setBendTool(again ? QString::fromLatin1(PianoRoll::kDrawTool) : tool);
         return true;
     }
-    if (!roll->bendMode()) return false;
+    if (!roll->bendView()) return false;  // (Shift held: the notes' keys)
     if (key == Qt::Key_Delete || key == Qt::Key_Backspace) {
         roll->deleteSelectedBends();  // (in bend mode Delete takes points, never notes)
         return true;

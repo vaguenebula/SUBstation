@@ -32,6 +32,8 @@ public:
     virtual std::optional<QRectF> rubberBand() const { return std::nullopt; }
     // What it shows by the mouse while it drags (a bend point's value), and where.
     virtual std::optional<std::pair<QPointF, QString>> label() const { return std::nullopt; }
+    // The stretch of a note it is drawing over (a vibrato's, a slide's), tinted.
+    virtual std::optional<QRectF> area() const { return std::nullopt; }
     virtual void finish() {}
     // The mouse came up without dragging.
     virtual void clicked(Qt::KeyboardModifiers) {}

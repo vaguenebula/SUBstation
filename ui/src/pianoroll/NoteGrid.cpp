@@ -313,7 +313,7 @@ void NoteGrid::paint(SgPainter& p) {
             played.emplace_back(clip ? clip->offsetBeats : 0.0, clip ? clip->windowEnd() : 0.0);
         }
         const QFont font = uiFont(7);
-        const bool bending = roll->bendMode();  // (the notes stand back for their curves)
+        const bool bending = roll->bendView();  // (the notes stand back for their curves)
         roll->forEachNote([&](int clip, const Note& n) {
             const ClipNote note{clip, n};
             const QRectF rect = roll->noteRect(note);
@@ -370,17 +370,20 @@ void NoteGrid::mousePressEvent(QMouseEvent* event) {
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const QPointF pos = event->position();
-    const Qt::KeyboardModifiers mods = event->modifiers();
-    if (isPanModifier(mods)) {
+    peekGesture_ = false;
+    if (isPanModifier(event->modifiers())) {
         gesture_ = std::make_unique<PanGesture>(this, pos);
         setCursor(Qt::ClosedHandCursor);
         return;
     }
-    if (roll->bendMode()) {  // bends, not notes (NoteGridBends.cpp)
-        gesture_ = bendPress(pos, mods);
+    syncPeek(event->modifiers());
+    if (roll->bendView()) {  // bends, not notes (NoteGridBends.cpp)
+        gesture_ = bendPress(pos, event->modifiers());
         update();
         return;
     }
+    peekGesture_ = roll->bendMode();  // (Shift held in bend mode: the notes, as out of it)
+    const Qt::KeyboardModifiers mods = gestureModifiers(event->modifiers());
     const bool additive = mods & (Qt::ControlModifier | Qt::ShiftModifier);
     const auto hit = noteAt(pos);
     if (!hit) {
@@ -416,7 +419,7 @@ void NoteGrid::mousePressEvent(QMouseEvent* event) {
 
 void NoteGrid::mouseMoveEvent(QMouseEvent* event) {
     if (gesture_) {
-        gesture_->move(event->position(), event->modifiers());
+        gesture_->move(event->position(), gestureModifiers(event->modifiers()));
         update();
         return;
     }
@@ -433,8 +436,10 @@ void NoteGrid::mouseReleaseEvent(QMouseEvent* event) {
         if (gesture->active)
             gesture->finish();
         else
-            gesture->clicked(event->modifiers());
+            gesture->clicked(gestureModifiers(event->modifiers()));
     }
+    peekGesture_ = false;
+    syncPeek(event->modifiers());  // (Shift taken up or let go while it dragged)
     roll->releaseAudition();
     updateCursor(event->position(), event->modifiers());
     roll->placeTools();
@@ -445,6 +450,7 @@ void NoteGrid::mouseUngrabEvent() {
     // The mouse was taken away mid-gesture (a popup): it ends where it is.
     if (!gesture_ && !selectOnClick_) return;
     gesture_.reset();
+    peekGesture_ = false;
     selectOnClick_.reset();
     if (PianoRoll* roll = this->roll()) {
         roll->releaseAudition();
@@ -460,7 +466,7 @@ void NoteGrid::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || !roll || !roll->hasClip() || isPanModifier(event->modifiers())) return;
     forceActiveFocus(Qt::MouseFocusReason);
     const QPointF pos = event->position();
-    if (roll->bendMode()) {
+    if (roll->bendView()) {
         bendDoubleClick(pos, event->modifiers());
         return;
     }
@@ -492,12 +498,16 @@ void NoteGrid::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void NoteGrid::hoverEnterEvent(QHoverEvent* event) {
     hover_ = event->position();
-    if (!gesture_) updateCursor(event->position(), event->modifiers());
+    if (gesture_) return;
+    syncPeek(event->modifiers());
+    updateCursor(event->position(), event->modifiers());
 }
 
 void NoteGrid::hoverMoveEvent(QHoverEvent* event) {
     hover_ = event->position();
-    if (!gesture_) updateCursor(event->position(), event->modifiers());
+    if (gesture_) return;
+    syncPeek(event->modifiers());
+    updateCursor(event->position(), event->modifiers());
 }
 
 void NoteGrid::hoverLeaveEvent(QHoverEvent*) {
@@ -510,7 +520,7 @@ void NoteGrid::hoverLeaveEvent(QHoverEvent*) {
 
 void NoteGrid::updateCursor(const QPointF& pos, Qt::KeyboardModifiers mods) {
     PianoRoll* roll = this->roll();
-    if (roll && roll->bendMode() && !isPanModifier(mods)) {
+    if (roll && roll->bendView() && !isPanModifier(mods)) {
         const auto before = bendHover_;
         setCursor(bendCursor(pos, mods));
         const auto same = [](const std::optional<BendHit>& a, const std::optional<BendHit>& b) {
@@ -536,7 +546,16 @@ void NoteGrid::updateCursor(const QPointF& pos, Qt::KeyboardModifiers mods) {
 }
 
 void NoteGrid::onModifiers(Qt::KeyboardModifiers mods) {
+    syncPeek(mods);
     if (!gesture_ && hover_) updateCursor(*hover_, mods);
+}
+
+void NoteGrid::syncPeek(Qt::KeyboardModifiers mods) {
+    PianoRoll* roll = this->roll();
+    if (!roll) return;
+    // Not while the curves are dragged (Shift is theirs then, as the vibrato's speed is).
+    if (gesture_ && !peekGesture_ && roll->bendView()) return;
+    roll->setPeeking(mods & Qt::ShiftModifier);
 }
 
 void NoteGrid::wheelEvent(QWheelEvent* event) {
@@ -552,8 +571,9 @@ bool NoteGrid::handles(const QKeyEvent* event) {
         return key == Qt::Key_A || key == Qt::Key_D || key == Qt::Key_U || key == Qt::Key_C || key == Qt::Key_X ||
                key == Qt::Key_V;
     }
-    if (!(event->modifiers() & (Qt::AltModifier | Qt::MetaModifier)) && (key == Qt::Key_B || key == Qt::Key_V))
-        return true;  // bend mode, the vibrato tool
+    if (!(event->modifiers() & (Qt::AltModifier | Qt::MetaModifier)) &&
+        (key == Qt::Key_B || key == Qt::Key_V || key == Qt::Key_G))
+        return true;  // bend mode, the vibrato and glide tools
     return key == Qt::Key_Delete || key == Qt::Key_Backspace || key == Qt::Key_Up || key == Qt::Key_Down ||
            key == Qt::Key_Left || key == Qt::Key_Right || key == Qt::Key_0;
 }
@@ -574,7 +594,7 @@ void NoteGrid::keyPressEvent(QKeyEvent* event) {
         event->ignore();
         return;
     }
-    if (bendKey(event)) {  // B, V; in bend mode Delete and Ctrl+A (NoteGridBends.cpp)
+    if (bendKey(event)) {  // B, V, G; with the curves shown Delete and Ctrl+A (NoteGridBends.cpp)
         updateCursor(hover_.value_or(QPointF(-1, -1)), event->modifiers());
         event->accept();
         return;
@@ -632,6 +652,12 @@ void NoteGrid::keyPressEvent(QKeyEvent* event) {
 void NoteGrid::keyReleaseEvent(QKeyEvent* event) {
     onModifiers(heldModifiers(event));
     event->ignore();
+}
+
+void NoteGrid::focusOutEvent(QFocusEvent* event) {
+    // (Shift let go elsewhere would never be heard.)
+    if (PianoRoll* roll = this->roll()) roll->setPeeking(false);
+    RollItem::focusOutEvent(event);
 }
 
 // --- Size and visibility --------------------------------------------------------------------

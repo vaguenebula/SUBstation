@@ -1,11 +1,13 @@
 // The piano roll's bends (MIDI 2.0's per-note pitch bend), driven through the
 // clip view the way a user would: B (or the bend button) showing the notes'
-// bend curves and the bend bar; points added on a curve and dragged there,
-// clicked away, selected with Shift and a rubber band and deleted with Delete,
+// bend curves and the bend bar, always with the Draw tool; points added on a
+// curve and dragged there, clicked away, selected with Ctrl and a rubber band
+// and deleted with Delete,
 // a segment bent with Alt, a point double-clicked in at a pitch; the vibrato
 // tool (V) drawing vibrato over a stretch, adding it to a note's end and taking
 // it away, Shift and Alt changing its speed and ramp as it is drawn, Ctrl
-// drawing it off the grid; Clear; the note tools staying away in bend mode. Runs on a display
+// drawing it off the grid; the glide tool (G) sliding into the next note;
+// Shift showing the notes to edit as out of bend mode; Clear; the note tools staying away in bend mode. Runs on a display
 // (xvfb here).
 
 #include <QQuickItem>
@@ -139,11 +141,29 @@ private Q_SLOTS:
         QVERIFY(item("bendVibrato")->property("checked").toBool());
         QTest::keyClick(window_, Qt::Key_V);
         QCOMPARE(roll()->bendTool(), QStringLiteral("draw"));
-        // Out of bend mode, V goes into it with the vibrato tool.
+        // Out of bend mode, V goes into it with the vibrato tool, G with the glide tool.
         QTest::keyClick(window_, Qt::Key_B);
         QTest::keyClick(window_, Qt::Key_V);
         QVERIFY(roll()->bendMode());
         QCOMPARE(roll()->bendTool(), QStringLiteral("vibrato"));
+        // B (or the button) always comes back with Draw, whatever was used last.
+        QTest::keyClick(window_, Qt::Key_B);
+        QTest::keyClick(window_, Qt::Key_B);
+        QCOMPARE(roll()->bendTool(), QStringLiteral("draw"));
+        QTest::keyClick(window_, Qt::Key_V);
+        test::click(window_, test::centerOf(item("bendMode")));
+        test::click(window_, test::centerOf(item("bendMode")));
+        QVERIFY(roll()->bendMode());
+        QCOMPARE(roll()->bendTool(), QStringLiteral("draw"));
+        QTest::keyClick(window_, Qt::Key_G);
+        QCOMPARE(roll()->bendTool(), QStringLiteral("glide"));
+        QVERIFY(item("bendGlide")->property("checked").toBool());
+        QTest::keyClick(window_, Qt::Key_G);
+        QCOMPARE(roll()->bendTool(), QStringLiteral("draw"));
+        QTest::keyClick(window_, Qt::Key_B);
+        QTest::keyClick(window_, Qt::Key_G);
+        QVERIFY(roll()->bendMode());
+        QCOMPARE(roll()->bendTool(), QStringLiteral("glide"));
     }
 
     void aPointAddedOnACurveIsDraggedWhereTheMouseGoes() {
@@ -180,9 +200,9 @@ private Q_SLOTS:
         QCOMPARE(only().bend.size(), size_t(2));
         QCOMPARE(undo().undoText(), QStringLiteral("Delete Bend Point"));
         undo().undo();
-        // Shift-click selects (each), Delete deletes them.
-        test::click(window_, onCurve(1.0, 60), Qt::ShiftModifier);
-        test::click(window_, onCurve(3.0, 60), Qt::ShiftModifier);
+        // Ctrl-click selects (each), Delete deletes them.
+        test::click(window_, onCurve(1.0, 60), Qt::ControlModifier);
+        test::click(window_, onCurve(3.0, 60), Qt::ControlModifier);
         QCOMPARE(roll()->selectedBendCount(), 2);
         QCOMPARE(only().bend.size(), size_t(3));
         QTest::keyClick(window_, Qt::Key_Delete);
@@ -305,6 +325,103 @@ private Q_SLOTS:
         const double sixteenths = drawn().length * 16.0;
         QVERIFY2(std::abs(sixteenths - std::round(sixteenths)) > 1e-6, qPrintable(QString::number(drawn().length)));
         QVERIFY(std::abs(drawn().length - 1.3) < 0.05);
+    }
+
+    void theGlideToolSlidesIntoTheNextNote() {
+        // B, then G# and E together after it: G# is the nearer.
+        openClip({note(71, 0.0, 2.0), note(68, 2.0, 2.0), note(64, 2.0, 1.0)});
+        const auto b = [&] {
+            for (const Note& n : clipNotes())
+                if (n.pitch == 71) return n;
+            return Note{};
+        };
+        bendMode();
+        QTest::keyClick(window_, Qt::Key_G);
+        // Dragged from beat 1 to beat 2: down three semitones over that stretch.
+        test::drag(window_, onCurve(1.0, 71), onCurve(2.0, 71));
+        QCOMPARE(b().bend.size(), size_t(2));
+        QCOMPARE(b().bend[0].time, 1.0);
+        QCOMPARE(b().bend[0].semitones, 0.0);
+        QCOMPARE(b().bend[1].time, 2.0);
+        QCOMPARE(b().bend[1].semitones, -3.0);
+        QCOMPARE(undo().undoText(), QStringLiteral("Add Slide"));
+        undo().undo();
+        QVERIFY(b().bend.empty());
+        // Alt: sideways bends it (right: it arrives later), the stretch staying.
+        test::press(window_, onCurve(1.0, 71));
+        test::moveTo(window_, onCurve(1.25, 71));
+        test::moveTo(window_, onCurve(1.5, 71));
+        const int half = int(NoteGrid::kGlideCurvePixels / 2);
+        test::moveTo(window_, onCurve(1.5, 71) + QPoint(half, 0), Qt::AltModifier);
+        test::screenshot(window_, QStringLiteral("piano-roll-glide"));
+        QCOMPARE(b().bend[1].time, 1.5);
+        QVERIFY(std::abs(b().bend[0].curve - 0.5) < 0.02);  // (going down: bulging up arrives later)
+        QVERIFY(b().bendAt(1.25, project().tempo()) > -1.5);  // later than halfway, halfway along
+        test::release(window_, onCurve(1.5, 71) + QPoint(half, 0), Qt::AltModifier);
+        undo().undo();
+        QVERIFY(b().bend.empty());  // (one undo step)
+        // A click: from there to the note's end.
+        test::click(window_, onCurve(0.5, 71));
+        QCOMPARE(b().bend.size(), size_t(2));
+        QCOMPARE(b().bend[0].time, 0.5);
+        QCOMPARE(b().bend[1].time, 2.0);
+        // Ctrl: from where it is pressed, off the grid.
+        undo().undo();
+        test::drag(window_, onCurve(0.3, 71), onCurve(1.0, 71), Qt::ControlModifier);
+        QVERIFY(std::abs(b().bend[0].time - 0.3) < 0.03);
+        QVERIFY(std::abs(b().bend[0].time * 16.0 - std::round(b().bend[0].time * 16.0)) > 1e-6);
+        // Nothing after G#: no slide.
+        const auto before = clipNotes();
+        test::drag(window_, onCurve(2.5, 68), onCurve(3.5, 68));
+        QCOMPARE(clipNotes(), before);
+    }
+
+    void shiftShowsTheNotesToEditInBendMode() {
+        openClip({note(60, 0.0, 1.0), note(64, 2.0, 1.0)});
+        bendMode();
+        QTRY_VERIFY(item("bendTools")->isVisible());
+        QTest::keyPress(window_, Qt::Key_Shift, Qt::ShiftModifier);
+        QVERIFY(roll()->bendMode());
+        QVERIFY(!roll()->bendView());
+        QTRY_VERIFY(!item("bendTools")->isVisible());
+        // The notes, as out of bend mode: moved (on the grid: Shift is the view's), lengthened, added.
+        test::drag(window_, onCurve(0.5, 60), onCurve(1.5, 60), Qt::ShiftModifier);
+        QCOMPARE(clipNotes()[0].start, 1.0);
+        QVERIFY(clipNotes()[0].bend.empty());
+        const QPoint end = test::at(grid(), QPointF(roll()->view().beatToX(2.0) - 2, roll()->pitchTop(60) + 6));
+        test::drag(window_, end, end + QPoint(int(roll()->view().pxPerBeat()), 0), Qt::ShiftModifier);
+        QCOMPARE(clipNotes()[0].length, 2.0);
+        test::doubleClick(window_, onCurve(3.5, 67), Qt::ShiftModifier);
+        QCOMPARE(clipNotes().size(), size_t(3));
+        // A rubber band brings up the note tools (Legato and the rest).
+        test::drag(window_, onCurve(0.2, 70), onCurve(3.9, 58), Qt::ShiftModifier);
+        QTRY_VERIFY(roll()->toolsShown());
+        test::screenshot(window_, QStringLiteral("piano-roll-shift-view"));
+        QTest::keyRelease(window_, Qt::Key_Shift);
+        QVERIFY(roll()->bendView());
+        QVERIFY(!roll()->toolsShown());
+        QTRY_VERIFY(item("bendTools")->isVisible());
+        // Not with the vibrato tool (Shift is its speed); with the glide tool, yes.
+        QTest::keyClick(window_, Qt::Key_V);
+        QTest::keyPress(window_, Qt::Key_Shift, Qt::ShiftModifier);
+        QVERIFY(roll()->bendView());
+        QTest::keyRelease(window_, Qt::Key_Shift);
+        QTest::keyClick(window_, Qt::Key_V);
+        QTest::keyClick(window_, Qt::Key_G);
+        QTest::keyPress(window_, Qt::Key_Shift, Qt::ShiftModifier);
+        QVERIFY(!roll()->bendView());
+        QTest::keyRelease(window_, Qt::Key_Shift);
+        QTest::keyClick(window_, Qt::Key_G);
+        // Shift taken up while a curve is dragged leaves the curves (its drag goes on).
+        test::press(window_, onCurve(1.5, 60));
+        test::moveTo(window_, onCurve(1.6, 60, 1.0));
+        QTest::keyPress(window_, Qt::Key_Shift, Qt::ShiftModifier);
+        QVERIFY(roll()->bendView());
+        test::moveTo(window_, onCurve(1.6, 60, 2.0), Qt::ShiftModifier);
+        test::release(window_, onCurve(1.6, 60, 2.0), Qt::ShiftModifier);
+        QCOMPARE(clipNotes()[0].bend.size(), size_t(1));
+        QTest::keyRelease(window_, Qt::Key_Shift);
+        QVERIFY(roll()->bendView());
     }
 
     void clearTakesTheBendsAway() {

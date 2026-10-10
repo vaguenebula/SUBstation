@@ -115,6 +115,30 @@ private Q_SLOTS:
         QCOMPARE(notes::withVibrato(n, {0.0, 4.0, 0.25, 5.0, 0.3}).vibrato.size(), size_t{1});
     }
 
+    void aSlideGoesToTheNextNote() {
+        const Note b = note(71, 0.0, 2.0);
+        Note muted = note(70, 1.0, 1.0);
+        muted.muted = true;
+        // The next to start after it (not with it); of a chord, the nearest in pitch.
+        const std::vector<Note> notes{b, note(60, 0.0, 2.0), muted, note(64, 2.0, 1.0), note(68, 2.0, 2.0), note(72, 3.0, 1.0)};
+        QCOMPARE(notes::nextNote(notes, b)->pitch, 68);
+        QCOMPARE(notes::nextNote({b, note(69, 2.0, 1.0), note(73, 2.0, 1.0)}, b)->pitch, 69);  // (as near: the lower)
+        QVERIFY(!notes::nextNote({b, note(60, 0.0, 1.0)}, b));  // nothing after it
+        QVERIFY(!notes::nextNote({b, muted}, b));                // (deactivated)
+        // A slide over 1..2: from where its curve is to the interval, bent; points it covers go.
+        Note bent = note(71, 0.0, 2.0, {{0.5, 1.0, 0.0}, {1.25, 3.0, 0.0}, {1.75, 0.0, 0.0}});
+        bent = notes::withSlide(bent, 1.0, 2.0, -3.0, 0.4);
+        QCOMPARE(times(bent), (std::vector<double>{0.5, 1.0, 2.0}));
+        QCOMPARE(bent.bend[1].semitones, 1.0 + 2.0 * (0.5 / 0.75));  // (where the curve was at 1: no step)
+        QCOMPARE(bent.bend[1].curve, 0.4);
+        QCOMPARE(bent.bend[2].semitones, -3.0);
+        QCOMPARE(bent.bendAt(2.0, 120.0), -3.0);
+        // Points after it stay; held to the note.
+        const Note later = notes::withSlide(note(71, 0.0, 2.0, {{1.9, 2.0, 0.0}}), 0.5, 1.5, 5.0, 0.0);
+        QCOMPARE(times(later), (std::vector<double>{0.5, 1.5, 1.9}));
+        QCOMPARE(times(notes::withSlide(note(71, 0.0, 2.0), 1.0, 9.0, 2.0, 0.0)), (std::vector<double>{1.0, 2.0}));
+    }
+
     void noteEditsCarryTheirBends() {
         const Note bent = note(60, 1.0, 2.0, {{0.5, 2.0, 0.0}}, {{1.0, 1.0, 0.5, 5.5, 0.3}});
         // Moved: it goes along.

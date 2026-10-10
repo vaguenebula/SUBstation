@@ -329,6 +329,18 @@ const std::map<QString, Icon>& icons() {
                                             }
                                             p.drawPath(wave);
                                         }};
+        // A note sliding up into the next: drawing a slide (a glissando) onto a note.
+        t[QStringLiteral("glide")] = {text, [](QPainter& p, const QColor& c, bool) {
+                                          p.setPen(Qt::NoPen);
+                                          p.setBrush(c);
+                                          p.drawRoundedRect(QRectF(4, 41, 22, 10), 3, 3);
+                                          p.drawRoundedRect(QRectF(38, 13, 22, 10), 3, 3);
+                                          p.setPen(pen(c, 4, Qt::RoundCap, Qt::RoundJoin));
+                                          p.setBrush(Qt::NoBrush);
+                                          QPainterPath slide(QPointF(20, 46));
+                                          slide.cubicTo(QPointF(34, 46), QPointF(30, 18), QPointF(44, 18));
+                                          p.drawPath(slide);
+                                      }};
         // A device's fold button: a triangle pointing down while it is open, right while folded.
         t[QStringLiteral("fold")] = {text, [](QPainter& p, const QColor& c, bool folded) {
                                          p.fillPath(folded ? path({{22, 14}, {46, 32}, {22, 50}}, true)

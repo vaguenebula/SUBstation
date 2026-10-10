@@ -75,7 +75,7 @@ Item {
             objectName: "bendMode"
             role: "tool"
             iconName: "bend"
-            tooltip: qsTr("Edit the notes' pitch bends: curves with points, and vibrato (B)")
+            tooltip: qsTr("Edit the notes' pitch bends: curves with points, vibrato and slides (B);\nhold Shift there for the notes")
             checked: pianoRoll.bendMode
             onToggled: {
                 pianoRoll.bendMode = checked

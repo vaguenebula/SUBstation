@@ -345,7 +345,7 @@ void PianoRoll::toggleSelectedActive() {
 // --- Note tools ------------------------------------------------------------------------
 
 void PianoRoll::placeTools() {
-    const bool shown = toolsWanted_ && !bendMode_ && !(grid_ && grid_->dragging()) && !selected_.empty();
+    const bool shown = toolsWanted_ && !bendView() && !(grid_ && grid_->dragging()) && !selected_.empty();
     if (shown) {
         QRectF area;
         for (const ClipNote& note : selected_) area = area.isNull() ? noteRect(note) : area.united(noteRect(note));
@@ -497,6 +497,7 @@ void PianoRoll::setHumanizeTimingAmount(double percent) {
 void PianoRoll::setBendMode(bool on) {
     if (on == bendMode_) return;
     bendMode_ = on;
+    if (on) bendTool_ = QString::fromLatin1(kDrawTool);  // (always drawing points first)
     if (!on && !selectedBends_.empty()) {
         selectedBends_.clear();
         Q_EMIT selectionChanged();
@@ -507,9 +508,22 @@ void PianoRoll::setBendMode(bool on) {
 }
 
 void PianoRoll::setBendTool(const QString& tool) {
-    if (tool == bendTool_ || (tool != QLatin1String(kDrawTool) && tool != QLatin1String(kVibratoTool))) return;
+    if (tool == bendTool_ || (tool != QLatin1String(kDrawTool) && tool != QLatin1String(kVibratoTool) &&
+                              tool != QLatin1String(kGlideTool)))
+        return;
     bendTool_ = tool;
     Q_EMIT bendModeChanged();
+    placeTools();  // (Shift held: the notes come back with Draw or Glide)
+    repaintAll();
+}
+
+void PianoRoll::setPeeking(bool held) {
+    if (held == peeking_) return;
+    const bool before = bendView();
+    peeking_ = held;
+    if (bendView() == before) return;
+    Q_EMIT bendModeChanged();
+    placeTools();
     repaintAll();
 }
 

@@ -69,8 +69,10 @@ double-clicked, if it plays there). Generate writes into the clip you double-cli
 | 0 | Deactivate the selected notes: they show grey and aren't heard (if they all are deactivated: activate them) |
 | Up / Down | Move a semitone (Shift: an octave) |
 | Left / Right | Move a grid step (Shift: a bar) |
-| B | Bend mode: show the notes' pitch bends to edit (again: back to the notes) |
+| B | Bend mode: show the notes' pitch bends to edit, with the Draw tool (again: back to the notes) |
 | V | The vibrato tool (into bend mode, if it is off; again: back to drawing points) |
+| G | The glide tool: slides into the next note (into bend mode, if it is off; again: back to drawing points) |
+| Shift (held, in bend mode) | The notes, to edit as out of bend mode (not with the vibrato tool) |
 
 ### Velocity lane
 
@@ -103,17 +105,24 @@ on the selected notes and hides while you drag them. Each tool is one undo step.
   - **Timing** nudges starts at random, as a player would. At 100 % a note moves by up
     to a 32nd note; the default is 25 %. Lengths and velocities stay.
 
-### Pitch bends and vibrato
+### Pitch bends, vibrato and slides
 
-Every note can bend: its pitch moves along a curve you draw, and vibrato can swing
-around it. This is MIDI 2.0's *per-note pitch bend*: each note bends on its own, so a
+Every note can bend: its pitch moves along a curve you draw, vibrato can swing around
+it, and it can slide into the note after it. This is MIDI 2.0's *per-note pitch bend*: each note bends on its own, so a
 chord's notes can glide apart, and one note's scoop doesn't move the others.
 
 Press **B** (or the bend button next to the headphones, above the keys) for **bend
 mode**: the notes stand back and each shows its bend as a white line over the rows, a
 semitone a row, starting from the middle of the note's own row (a note that doesn't
-bend shows a flat line). The bend bar shows at the grid's top right. B again goes back
-to editing notes.
+bend shows a flat line). The bend bar shows at the grid's top right. Bend mode always
+starts with the **Draw** tool. B again goes back to editing notes.
+
+**Hold Shift** in bend mode to get the notes back for a moment: while it is held the
+grid is the normal piano roll, so you can add notes (double-click), move them, change
+their lengths, select them and use the note tools (Legato, Quantize, …), then let go of
+Shift to be back on the curves. (It works with the Draw and Glide tools; with the
+vibrato tool, Shift sets the speed instead.) Shift doesn't add to a selection there;
+Ctrl does.
 
 Curves are edited as automation envelopes are:
 
@@ -122,8 +131,8 @@ Curves are edited as automation envelopes are:
   freely (off the grid, between semitones).
 - **Drag a point** to move it in time and pitch; a point can't pass its neighbours, nor
   leave its note. The value shows by it as you drag ("+2.00 st").
-- **Click a point** to delete it. **Shift-click** or **Ctrl-click** points to select
-  several (they move together, even across notes), or **drag in empty space** to select
+- **Click a point** to delete it. **Ctrl-click** points to select several (they move
+  together, even across notes), or **drag in empty space** to select
   those in a rubber band; **Ctrl+A** selects every point. **Delete** deletes the
   selected points (in bend mode Delete never deletes notes).
 - **Alt-drag between two points** to bend that segment (up bulges it upward).
@@ -160,6 +169,22 @@ notes:
   two go together: draw a scoop up into a note and vibrato on what follows, or add points
   later and the vibrato follows them. In bend mode the curve it swings around shows as a
   fainter line.
+
+**The glide tool** (**G**, or the slide button in the bend bar) draws a slide (a
+glissando) from a note into the next one, the note that starts after it (of a chord
+there, the one nearest in pitch):
+
+- **Press where the slide starts and drag to where it ends**: the note bends from its
+  pitch there to the next note's pitch over that stretch, then stays there to its end,
+  so it runs into the next note (snapped to the grid; Ctrl: anywhere). A **click**
+  slides from there to the note's end. The stretch shows tinted as you draw, with the
+  note it goes to and how far.
+- Hold **Alt** and drag sideways to curve it: right makes it arrive later (it waits,
+  then swoops), left sooner (it swoops, then settles). The stretch stays put meanwhile.
+- A slide is two ordinary points on the note's curve, so you can change it afterwards
+  with Draw (move its points, Alt-drag its segment, delete it). A note with nothing after
+  it shows a no-entry cursor: there is nothing to slide to. The slide keeps the interval
+  it was drawn with if the next note moves later.
 
 **Clear** in the bend bar takes away the selected notes' bends and vibrato (every
 note's, with none selected). Each edit is one undo step.
