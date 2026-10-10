@@ -43,7 +43,7 @@ QString formatValue(double value, const QString& unit) {
         if (beats > 0 && beats % 4 == 0) return countText(beats / 4, QStringLiteral("Bar"), QStringLiteral("Bars"));
         return countText(beats, QStringLiteral("Beat"), QStringLiteral("Beats"));
     }
-    if (unit == u"°") return formatFixed(value, 0) + QStringLiteral("°");  // an angle (a phase offset)
+    if (unit == u"\u00B0") return formatFixed(value, 0) + QStringLiteral("\u00B0");  // an angle (a phase offset): "180°"
     return formatFixed(value, 2) + u' ' + unit;
 }
 

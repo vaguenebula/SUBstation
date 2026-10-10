@@ -15,6 +15,7 @@
 //   keeps everything below its frequency dry (a Linkwitz-Riley split).
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -256,11 +257,14 @@ inline Bands safeBands(double safeBassHz, std::complex<double> z1, double sample
     return b;
 }
 
-// The whole device from the wet path's transfer: Dry/Wet, Safe Bass's bands, Output.
-inline std::complex<double> combine(const Response& r, std::complex<double> wet, const Bands& b) noexcept {
+// Output as a gain.
+inline double outputGain(const Response& r) noexcept { return std::pow(10.0, r.outputDb / 20.0); }
+
+// The whole device from the wet path's transfer: Dry/Wet, Safe Bass's bands, Output (its `gain`).
+inline std::complex<double> combine(const Response& r, std::complex<double> wet, const Bands& b, double gain) noexcept {
     const double mix = std::clamp(r.mix, 0.0, 1.0);
     const std::complex<double> h = b.on ? b.low + (1.0 - mix) * b.high + mix * wet * b.high : (1.0 - mix) + mix * wet;
-    return h * std::pow(10.0, r.outputDb / 20.0);
+    return h * gain;
 }
 
 // The wet path from the turning factor T (the cascade's A^N, or the delay's e^{-jwd}).
@@ -271,30 +275,48 @@ inline std::complex<double> wetFrom(const Response& r, std::complex<double> turn
     return r.mode == Mode::Phaser ? path / (1.0 - r.feedback * z1 * path) : path / (1.0 - r.feedback * path);
 }
 
-inline double toDb(std::complex<double> h) noexcept { return 20.0 * std::log10(std::max(std::abs(h), 1e-6)); }
+inline double toDb(double magnitude) noexcept { return 20.0 * std::log10(std::max(magnitude, 1e-6)); }
+inline double toDb(std::complex<double> h) noexcept { return toDb(std::abs(h)); }
+
+// The Phaser's stage (any other mode's is unused). Designed once for a whole curve, not per point.
+inline disperser::Stage stageOf(const Response& r, double sampleRate) noexcept {
+    return r.mode == Mode::Phaser ? disperser::design(r.centerHz, r.q, sampleRate) : disperser::Stage{};
+}
+
+// The wet path at w with the stage given (wetTransfer, below).
+inline std::complex<double> wetAt(const Response& r, const disperser::Stage& stage, double w,
+                                  double sampleRate) noexcept {
+    const std::complex<double> z1 = std::polar(1.0, -w);
+    std::complex<double> turn;
+    if (r.mode == Mode::Phaser) {
+        const std::complex<double> a = disperser::response(stage, w);
+        const int n = std::clamp(r.notches, 1, kMaxNotches);
+        turn = std::polar(std::pow(std::abs(a), n), n * std::arg(a));
+    } else {
+        turn = std::polar(1.0, -w * delaySamples(r.delayMs, sampleRate));
+    }
+    return wetFrom(r, turn, warmthTransfer(r.warmth, z1, sampleRate), z1);
+}
+
+// The whole device at `freqHz` with the stage and Output's gain given (transfer, below).
+inline std::complex<double> transferAt(const Response& r, const disperser::Stage& stage, double gain, double freqHz,
+                                       double sampleRate) noexcept {
+    const double w = 2.0 * kPi * std::clamp(freqHz, 0.0, 0.5 * sampleRate) / sampleRate;
+    const std::complex<double> z1 = std::polar(1.0, -w);
+    return combine(r, wetAt(r, stage, w, sampleRate), safeBands(r.safeBassHz, z1, sampleRate), gain);
+}
 
 }  // namespace detail
 
 // The wet path's transfer at w (radians per sample): Phaser, W A^N / (1 - g z^-1 W A^N);
 // Flanger/Doubler, W D / (1 - g W D) with D = e^{-jwd}. W is Warmth's filter.
 inline std::complex<double> wetTransfer(const Response& r, double w, double sampleRate) noexcept {
-    const std::complex<double> z1 = std::polar(1.0, -w);
-    std::complex<double> turn;
-    if (r.mode == Mode::Phaser) {
-        const std::complex<double> a = disperser::response(disperser::design(r.centerHz, r.q, sampleRate), w);
-        const int n = std::clamp(r.notches, 1, kMaxNotches);
-        turn = std::polar(std::pow(std::abs(a), n), n * std::arg(a));
-    } else {
-        turn = std::polar(1.0, -w * delaySamples(r.delayMs, sampleRate));
-    }
-    return detail::wetFrom(r, turn, detail::warmthTransfer(r.warmth, z1, sampleRate), z1);
+    return detail::wetAt(r, detail::stageOf(r, sampleRate), w, sampleRate);
 }
 
 // The whole device's transfer at `freqHz`.
 inline std::complex<double> transfer(const Response& r, double freqHz, double sampleRate) noexcept {
-    const double w = 2.0 * kPi * std::clamp(freqHz, 0.0, 0.5 * sampleRate) / sampleRate;
-    const std::complex<double> z1 = std::polar(1.0, -w);
-    return detail::combine(r, wetTransfer(r, w, sampleRate), detail::safeBands(r.safeBassHz, z1, sampleRate));
+    return detail::transferAt(r, detail::stageOf(r, sampleRate), detail::outputGain(r), freqHz, sampleRate);
 }
 
 // Its level at `freqHz`, in dB, floored at -120 dB.
@@ -378,7 +400,12 @@ inline void curve(const Response& r, double lowHz, double highHz, int columns, d
     const auto edge = [&](int c) {
         return c >= columns ? highHz : lowHz * std::pow(ratio, static_cast<double>(c) / columns);
     };
-    const auto db = [&](double f) { return responseDb(r, std::min(f, nyquist), sampleRate); };
+    // (as responseDb, the stage and Output's gain worked out once)
+    const disperser::Stage stage = detail::stageOf(r, sampleRate);
+    const double gain = detail::outputGain(r);
+    const auto db = [&](double f) {
+        return detail::toDb(detail::transferAt(r, stage, gain, std::min(f, nyquist), sampleRate));
+    };
     const bool phaser = r.mode == Mode::Phaser;
     const int n = std::clamp(r.notches, 1, kMaxNotches);
     const double delaySeconds = delaySamples(r.delayMs, sampleRate) / sampleRate;
@@ -426,12 +453,19 @@ inline void curve(const Response& r, double lowHz, double highHz, int columns, d
             const std::complex<double> z1 = std::polar(1.0, -w);
             const std::complex<double> warmth = detail::warmthTransfer(r.warmth, z1, sampleRate);
             const detail::Bands bands = detail::safeBands(r.safeBassHz, z1, sampleRate);
-            for (int i = 0; i < 48; ++i) {
-                const std::complex<double> turnFactor = std::polar(1.0, -2.0 * kPi * i / 48.0);
-                const double v = detail::toDb(detail::combine(r, detail::wetFrom(r, turnFactor, warmth, z1), bands));
-                top = std::max(top, v);
-                bottom = std::min(bottom, v);
+            static const std::array<std::complex<double>, 48> kTurns = [] {
+                std::array<std::complex<double>, 48> turns;
+                for (int i = 0; i < 48; ++i) turns[static_cast<size_t>(i)] = std::polar(1.0, -2.0 * kPi * i / 48.0);
+                return turns;
+            }();
+            double most = 0.0, least = 1e300;
+            for (const std::complex<double>& turnFactor : kTurns) {
+                const double v = std::abs(detail::combine(r, detail::wetFrom(r, turnFactor, warmth, z1), bands, gain));
+                most = std::max(most, v);
+                least = std::min(least, v);
             }
+            top = detail::toDb(most);
+            bottom = detail::toDb(least);
             out.dense[static_cast<size_t>(c)] = 1;
             if (out.line.empty() || f0 > out.line.back().freqHz) out.line.push_back({f0, top});
         }
