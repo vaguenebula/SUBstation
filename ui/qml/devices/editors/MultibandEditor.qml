@@ -13,8 +13,9 @@ import SUBstation
 // region's edge for its threshold, inside it up or down for its ratio. A band
 // switched off (its split: the Mid band then shapes its frequencies) or
 // bypassed (its activator) dims its controls; they stay editable, as Live
-// keeps them. Every box is at least as wide as its widest text and the
-// automation dot beside it, so the dot never covers a minus sign.
+// keeps them. The columns are as wide as their texts need in the font the UI
+// has (measured): every box its widest text with the automation dot clear of
+// it, every knob its name and its widest value, every button its text.
 // Every control shows its parameter as it is now (its automation's value while
 // that plays), sets it undoably, touches it when pressed, and right-click
 // gives its menu.
@@ -37,7 +38,7 @@ Item {
     // The sidechain's menu, under the item `from` (the Sidechain button).
     signal sidechainMenuRequested(var from)
 
-    implicitWidth: 816
+    implicitWidth: globalX + globals.width + 8
     // At the least: the header and three rows of 38 px, or the device's controls 2 px apart.
     implicitHeight: Math.max(142, 6 + knobRow.implicitHeight + buttonRow.implicitHeight + sidechainRow.implicitHeight
                                       + 2 * 2 + 6)
@@ -65,17 +66,62 @@ Item {
         }
     }
 
-    // The columns (x): the band's activator, solo, split switch and crossover; Input; the display; the two
-    // fields; Output; the device's own controls. Boxes are a little wider than their sample text needs (its
-    // width + 16, room for the automation dot at the left), so the dot stays clear of a minus sign.
-    readonly property int inX: 98
-    readonly property int graphX: 167
-    readonly property int fieldX: 441
-    readonly property int field2X: 508
-    readonly property int outX: 573
-    readonly property int globalX: 648
-    readonly property int levelBoxWidth: 63  // "-80.0 dB" (61)
-    readonly property int field2Width: 59    // "1:0.250", "0.88 ms"
+    // The 8 pt font of the captions, boxes and readouts, measured, and its widest figure: a sample text with
+    // its #s in that figure ("-##.# dB") is as wide as any value's text of that form.
+    FontMetrics {
+        id: metrics
+        font: Theme.uiFont(8)
+    }
+    readonly property string figure: {
+        let widest = "0"
+        for (const digit of "123456789") {
+            if (metrics.advanceWidth(digit) > metrics.advanceWidth(widest))
+                widest = digit
+        }
+        return widest
+    }
+    function sample(pattern) {
+        return pattern.replace(/#/g, figure)
+    }
+    // The widest of `texts` as a caption or a readout lays them out (whole pixels): a text's advance, or as
+    // far as its glyphs reach if further (a last glyph overhanging its advance).
+    function textWidth(texts) {
+        return Math.ceil(Math.max(0, ...texts.map(text => {
+            const ink = metrics.boundingRect(text)
+            return Math.max(metrics.advanceWidth(text), ink.x + ink.width)
+        })))
+    }
+    // The widest of `texts` (by advance, as a box centres its text).
+    function widest(texts) {
+        return texts.reduce((a, b) => metrics.advanceWidth(b) > metrics.advanceWidth(a) ? b : a)
+    }
+    // A box for `text`: the text centred with 9 px at either side, so the automation dot (drawn from 3.5 to
+    // 8.5 px) stays clear of it and never touches a minus sign.
+    function boxWidth(text) {
+        return Math.ceil(metrics.advanceWidth(text) + 2 * 9)
+    }
+
+    // The boxes' widest texts: the band's gains (±24 dB), the thresholds (-80 to 0 dB), the ratios (1:0.250 to
+    // 1:100), the times (0.1 ms to 5 s: "0.88 ms", or "1000 ms" just under a second) and the crossovers (to
+    // 15.00 kHz).
+    readonly property string gainSample: sample("-2#.# dB")
+    readonly property string thresholdSample: sample("-##.# dB")
+    readonly property string ratioSample: sample("1:0.###")
+    readonly property string timeSample: widest([sample("0.## ms"), "1000 ms"])
+    readonly property string crossoverSample: sample("1#.## kHz")
+    readonly property int levelBoxWidth: boxWidth(gainSample)                          // Input and Output
+    readonly property int fieldWidth: boxWidth(widest([thresholdSample, timeSample]))  // Above, Below, Attack
+    readonly property int field2Width: boxWidth(widest([ratioSample, timeSample]))     // their ratios, Release
+    readonly property int crossoverWidth: boxWidth(crossoverSample)
+    // The columns (x): the band column (its button and solo over the split's switch and crossover); Input; the
+    // display; the two fields; Output; the device's own controls. Each follows the one before it.
+    readonly property int bandWidth: 16 + crossoverWidth
+    readonly property int inX: 8 + bandWidth + 6
+    readonly property int graphX: inX + levelBoxWidth + 6
+    readonly property int fieldX: graphX + graph.width + 6
+    readonly property int field2X: fieldX + fieldWidth + 4
+    readonly property int outX: field2X + field2Width + 6
+    readonly property int globalX: outX + levelBoxWidth + 12
 
     // A box's formatter: its parameter's text for a value ("-20.0 dB", "1:4.00", "1:0.500", "10 ms"). Bound
     // to the parameter, so a box whose value never changes still gets its text once the parameter comes.
@@ -127,6 +173,7 @@ Item {
         }
     }
     EditorCaption {
+        objectName: "inCaption"
         x: editor.inX
         y: 6
         width: editor.levelBoxWidth
@@ -138,7 +185,7 @@ Item {
         objectName: "pageCaption"
         x: editor.fieldX
         y: 6
-        width: editor.levelBoxWidth
+        width: editor.fieldWidth
         height: 16
         verticalAlignment: Text.AlignVCenter
         text: editor.fieldsPage === "T" ? qsTr("Attack") : editor.fieldsPage === "B" ? qsTr("Below") : qsTr("Above")
@@ -153,6 +200,7 @@ Item {
         text: editor.fieldsPage === "T" ? qsTr("Release") : qsTr("Ratio")
     }
     EditorCaption {
+        objectName: "outCaption"
         x: editor.outX
         y: 6
         width: editor.levelBoxWidth
@@ -170,7 +218,6 @@ Item {
 
         property string band: "high"
         property int rowIndex: 0
-        property string sampleText: ""
         property string switchTip: ""
         property string boxTip: ""
         readonly property DeviceParam on: p.get(band + "_on")
@@ -178,7 +225,7 @@ Item {
 
         x: 8
         y: editor.rowY(rowIndex) + 19
-        width: 84
+        width: editor.bandWidth
         height: 18
 
         ParamButton {
@@ -193,14 +240,14 @@ Item {
         ParamBox {
             objectName: split.band === "high" ? "xoverHigh" : "xoverLow"
             x: 16
-            width: 68
+            width: editor.crossoverWidth
             param: split.frequency
             logScale: true
             decimals: 0
             defaultValue: split.frequency ? split.frequency.defaultValue : undefined
             formatter: editor.formatOf(split.frequency)
             parser: editor.parserOf(split.frequency)
-            sampleText: split.sampleText
+            sampleText: editor.crossoverSample
             tooltip: split.boxTip
             opacity: splitOn.lit ? 1 : editor.dimmed
             Behavior on opacity {
@@ -213,7 +260,6 @@ Item {
     Split {
         band: "high"
         rowIndex: 0
-        sampleText: "15.00 kHz"
         switchTip: qsTr("Splits the high band off at this frequency. Off, its frequencies belong to the Mid band, "
                         + "which then shapes them with its own settings")
         boxTip: qsTr("Where the high band starts: the split between it and the mid band (24 dB/octave, "
@@ -222,7 +268,6 @@ Item {
     Split {
         band: "low"
         rowIndex: 2
-        sampleText: "3.00 kHz"
         switchTip: qsTr("Splits the low band off at this frequency. Off, its frequencies belong to the Mid band, "
                         + "which then shapes them with its own settings")
         boxTip: qsTr("Where the low band ends: the split between it and the mid band (24 dB/octave, phase-aligned)")
@@ -284,7 +329,7 @@ Item {
             objectName: row.name("Active")
             x: 8
             y: 1
-            width: 64
+            width: editor.bandWidth - 20
             height: 16
             role: "activator"
             param: row.param("active")
@@ -300,7 +345,7 @@ Item {
         }
         ParamButton {
             objectName: row.name("Solo")
-            x: 74
+            x: 8 + editor.bandWidth - 18
             y: 1
             width: 18
             height: 16
@@ -320,7 +365,7 @@ Item {
             step: 0.1
             decimals: 1
             formatter: editor.formatOf(row.param("in"))
-            sampleText: "-24.0 dB"
+            sampleText: editor.gainSample
             tooltip: qsTr("Gain before the band's dynamics (it moves the band's level against its thresholds)")
         }
         Page {
@@ -330,12 +375,12 @@ Item {
                 objectName: row.name("Above")
                 x: editor.fieldX
                 y: row.boxY
-                width: editor.levelBoxWidth
+                width: editor.fieldWidth
                 param: row.param("above")
                 step: 0.1
                 decimals: 1
                 formatter: editor.formatOf(row.param("above"))
-                sampleText: "-80.0 dB"
+                sampleText: editor.thresholdSample
                 tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at "
                               + "1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
@@ -350,7 +395,7 @@ Item {
                 decimals: 3
                 formatter: editor.formatOf(row.param("above_ratio"))
                 parser: t => editor.parseRatio(t)
-                sampleText: "1:0.250"
+                sampleText: editor.ratioSample
                 tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at "
                               + "1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
@@ -362,12 +407,12 @@ Item {
                 objectName: row.name("Below")
                 x: editor.fieldX
                 y: row.boxY
-                width: editor.levelBoxWidth
+                width: editor.fieldWidth
                 param: row.param("below")
                 step: 0.1
                 decimals: 1
                 formatter: editor.formatOf(row.param("below"))
-                sampleText: "-80.0 dB"
+                sampleText: editor.thresholdSample
                 tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up "
                               + "(upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 "
                               + "(1:0.500) pushed down (downward expansion)")
@@ -383,7 +428,7 @@ Item {
                 decimals: 3
                 formatter: editor.formatOf(row.param("below_ratio"))
                 parser: t => editor.parseRatio(t)
-                sampleText: "1:0.250"
+                sampleText: editor.ratioSample
                 tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up "
                               + "(upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 "
                               + "(1:0.500) pushed down (downward expansion)")
@@ -396,13 +441,13 @@ Item {
                 objectName: row.name("Attack")
                 x: editor.fieldX
                 y: row.boxY
-                width: editor.levelBoxWidth
+                width: editor.fieldWidth
                 param: row.param("attack")
                 logScale: true
                 decimals: 2
                 formatter: editor.formatOf(row.param("attack"))
                 parser: t => editor.parseTime(t)
-                sampleText: "0.88 ms"
+                sampleText: editor.timeSample
                 tooltip: qsTr("Attack: how fast the band's compression or expansion comes when its level crosses a "
                               + "threshold into a region")
             }
@@ -417,7 +462,7 @@ Item {
                 decimals: 2
                 formatter: editor.formatOf(row.param("release"))
                 parser: t => editor.parseTime(t)
-                sampleText: "0.88 ms"
+                sampleText: editor.timeSample
                 tooltip: qsTr("Release: how fast it lets go when the level comes back")
             }
         }
@@ -431,7 +476,7 @@ Item {
             step: 0.1
             decimals: 1
             formatter: editor.formatOf(row.param("out"))
-            sampleText: "-24.0 dB"
+            sampleText: editor.gainSample
             tooltip: qsTr("Gain after the band's dynamics")
         }
     }
@@ -477,12 +522,29 @@ Item {
 
     // --- The device's own controls -----------------------------------------------------------
 
+    // Their widths: a knob's cell as wide as its name and its widest value (the device's three at least
+    // EditorKnob's own 52 px), and the column as wide as its widest row needs. The button rows fill it, so
+    // their edges line up (Soft Knee, Peak and RMS sharing it as their texts need, Peak and RMS alike), and
+    // the knobs are centred in it.
+    readonly property int knobCellWidth: Math.max(52, textWidth([qsTr("Amount"), qsTr("Time"), qsTr("Output"),
+                                                                 sample("### %"), sample("1### %"), gainSample]))
+    readonly property int scKnobWidth: textWidth([qsTr("S/C Gain"), qsTr("S/C Mix"), thresholdSample,
+                                                  sample("### %")])
+
     Column {
         id: globals
         objectName: "globals"
         x: editor.globalX
         y: 6
-        width: 160
+        width: Math.max(knobRow.implicitWidth, softKneeWidth + 2 * (modeImplicitWidth + 2),
+                        2 * (editor.scKnobWidth + 2) + Math.ceil(Math.max(sidechainButton.implicitWidth,
+                                                                          listen.implicitWidth)))
+        // (what Soft Knee, Peak and RMS need, and Peak's and RMS's share of the row's room in proportion)
+        readonly property int softKneeWidth: Math.ceil(softKnee.implicitWidth)
+        readonly property int modeImplicitWidth: Math.ceil(Math.max(modePeak.implicitWidth, modeRms.implicitWidth))
+        readonly property int modeWidth: Math.max(modeImplicitWidth,
+                                                  Math.floor((width - 4) * modeImplicitWidth
+                                                             / (softKneeWidth + 2 * modeImplicitWidth)))
         // Spread over the body's height (2 px apart at the least), as the band rows are.
         spacing: Math.max(2, Math.floor((editor.height - 12 - knobRow.height - buttonRow.height
                                          - sidechainRow.height) / 2))
@@ -490,10 +552,12 @@ Item {
         Row {
             id: knobRow
             objectName: "globalsKnobs"
+            x: Math.floor((globals.width - width) / 2)
             spacing: 2
 
             EditorKnob {
                 objectName: "amount"
+                width: editor.knobCellWidth
                 size: 28
                 param: p.get("amount")
                 title: qsTr("Amount")
@@ -501,6 +565,7 @@ Item {
             }
             EditorKnob {
                 objectName: "time"
+                width: editor.knobCellWidth
                 size: 28
                 param: p.get("time")
                 title: qsTr("Time")
@@ -508,6 +573,7 @@ Item {
             }
             EditorKnob {
                 objectName: "output"
+                width: editor.knobCellWidth
                 size: 28
                 knob.bipolar: true
                 param: p.get("output")
@@ -521,16 +587,18 @@ Item {
             spacing: 2
 
             ParamButton {
+                id: softKnee
                 objectName: "softKnee"
-                width: 72
+                width: globals.width - 2 * (globals.modeWidth + 2)
                 height: 16
                 param: p.get("soft_knee")
                 text: qsTr("Soft Knee")
                 tooltip: qsTr("Compression and expansion begin gradually around the thresholds (6 dB wide)")
             }
             ParamButton {
+                id: modePeak
                 objectName: "modePeak"
-                width: 42
+                width: globals.modeWidth
                 height: 16
                 param: p.get("mode")
                 choice: 0
@@ -538,8 +606,9 @@ Item {
                 tooltip: qsTr("Peak reacts to short peaks; RMS to the average level, ignoring short peaks")
             }
             ParamButton {
+                id: modeRms
                 objectName: "modeRms"
-                width: 42
+                width: globals.modeWidth
                 height: 16
                 param: p.get("mode")
                 choice: 1
@@ -557,7 +626,7 @@ Item {
             EditorKnob {
                 id: scGain
                 objectName: "scGain"
-                width: 46
+                width: editor.scKnobWidth
                 size: 24
                 param: p.get("sc_gain")
                 title: qsTr("S/C Gain")
@@ -566,7 +635,7 @@ Item {
             }
             EditorKnob {
                 objectName: "scMix"
-                width: 46
+                width: editor.scKnobWidth
                 size: 24
                 param: p.get("sc_mix")
                 title: qsTr("S/C Mix")
@@ -575,7 +644,7 @@ Item {
                               + "(0 %)")
             }
             Item {
-                width: 64
+                width: globals.width - 2 * (editor.scKnobWidth + 2)
                 height: scGain.height
 
                 Column {
@@ -596,6 +665,7 @@ Item {
                         onClicked: editor.sidechainMenuRequested(sidechainButton)
                     }
                     ParamButton {
+                        id: listen
                         objectName: "scListen"
                         width: parent.width
                         height: 16

@@ -539,32 +539,59 @@ void LimiterGraph::paint(SgPainter& p) {
         const QString channels = m == 1 && routing_ == 1 ? QStringLiteral("M S") : QStringLiteral("L R");
         p.drawText(QRectF(cx - 12, 11, 24, 10), Qt::AlignCenter, channels, Theme::kTextDisabled, font7);
     }
-    const auto pill = [&](const QString& text, double rightEdge, double opacity) {
-        const double tw = SgPainter::textWidth(text, font7) + 10;
-        const QRectF box(rightEdge - tw, 5, tw, 13);
+    const auto pill = [&](const QString& text, const QRectF& box, double opacity) {
         p.save();
         p.setOpacity(opacity);
         p.fillRoundedRect(box, 6.5, 6.5, withAlpha(Theme::kAccent, 30));
         p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6, withAlpha(Theme::kAccent, 170));
         p.drawText(box, Qt::AlignCenter, text, Theme::kAccent, font7);
         p.restore();
-        return tw;
     };
-    const double badgeWidth = badgeText_.isEmpty() ? 0.0 : SgPainter::textWidth(badgeText_, font7) + 10;
+    const QList<QRectF> badges = badgeRects();
     if (badge_.value > 0.004 && !badgeText_.isEmpty())
-        pill(badgeText_, r.right(), badge_.value);
+        pill(badgeText_, badges.front(), badge_.value);
     if (maxBadge_.value > 0.004)
-        pill(QStringLiteral("MAX"), r.right() - badge_.value * (badgeWidth + 4), maxBadge_.value);
+        pill(QStringLiteral("MAX"), badges.back(), maxBadge_.value);
 
     // The footer: the gain reduction now, the meters' peaks.
-    const double footer = h - 14;
-    p.drawText(QRectF(r.left(), footer, 120, 12), Qt::AlignLeft | Qt::AlignVCenter, grText_,
+    const QList<QRectF> figures = figureRects();
+    p.drawText(figures[0], Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip, grText_,
                mixColor(Theme::kTextDim, Theme::kAccent, grTint_.value), font8);
     const QString* readouts[3] = {&inText_, &grPeakText_, &outText_};
-    for (int m = 0; m < 3; ++m) {
-        const double cx = kMeterX[m] + (kBarPitch + kBarWidth) / 2;
-        p.drawText(QRectF(cx - 13, footer, 26, 12), Qt::AlignCenter, *readouts[m], Theme::kTextDim, font7);
+    for (int m = 0; m < 3; ++m)
+        p.drawText(figures[m + 1], Qt::AlignCenter | Qt::TextDontClip, *readouts[m], Theme::kTextDim, font7);
+}
+
+QList<QRectF> LimiterGraph::figureRects() const {
+    const QFont font7 = uiFont(7);
+    const double footer = height() - 14;
+    QList<QRectF> rects = {QRectF(plot().left(), footer, SgPainter::textWidth(grText_, uiFont(8)), 12)};
+    // The peaks centred under their meters; then each clears the one before it, and the last, kept inside the
+    // graph, pushes the others back left as far as it needs.
+    const QString* texts[3] = {&inText_, &grPeakText_, &outText_};
+    std::array<double, 3> left{}, w{};
+    for (std::size_t m = 0; m < 3; ++m) {
+        w[m] = SgPainter::textWidth(*texts[m], font7);
+        left[m] = kMeterX[m] + (kBarPitch + kBarWidth) / 2 - w[m] / 2;
     }
+    for (std::size_t m = 1; m < 3; ++m)
+        left[m] = std::max(left[m], left[m - 1] + w[m - 1] + kFigureGap);
+    left[2] = std::min(left[2], width() - 4 - w[2]);
+    for (std::size_t m = 2; m-- > 0;)
+        left[m] = std::min(left[m], left[m + 1] - kFigureGap - w[m]);
+    for (std::size_t m = 0; m < 3; ++m)
+        rects.append(QRectF(left[m], footer, w[m], 12));
+    return rects;
+}
+
+QList<QRectF> LimiterGraph::badgeRects() const {
+    // Right-aligned at the plot's right edge, the mode's badge sliding MAX left as it comes in.
+    const QFont font7 = uiFont(7);
+    const double right = plot().right();
+    const double badgeWidth = badgeText_.isEmpty() ? 0.0 : SgPainter::textWidth(badgeText_, font7) + 10;
+    const double maxWidth = SgPainter::textWidth(QStringLiteral("MAX"), font7) + 10;
+    const double maxRight = right - badge_.value * (badgeWidth + 4);
+    return {QRectF(right - badgeWidth, 5, badgeWidth, 13), QRectF(maxRight - maxWidth, 5, maxWidth, 13)};
 }
 
 // --- The mouse ----------------------------------------------------------------------------------

@@ -1,12 +1,15 @@
 // Multiband Dynamics' editor (ui/qml/devices/editors/MultibandEditor.qml,
 // ui/src/devices/MultibandGraph): loaded as the device view loads it, over a
-// real engine; its controls bound to their parameters (undoably, and the engine
-// has what they set), the graph's drags, double-clicks and wheel (one undo step
-// a gesture), the displays reaching the graph as the engine renders, and its
-// animation easing and settling. Also the `ratio` unit and the ratios and times
-// typed, which need no window (they run on any platform). With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there.
+// real engine; whatever the font, every text whole (its columns as wide as
+// their texts need, the automation dot clear of the boxes' texts); its controls
+// bound to their parameters (undoably, and the engine has what they set), the
+// graph's drags, double-clicks and wheel (one undo step a gesture), the
+// displays reaching the graph as the engine renders, and its animation easing
+// and settling. Also the `ratio` unit and the ratios and times typed, which
+// need no window (they run on any platform). With SUBSTATION_UI_SCREENSHOTS set
+// to a folder, the editor is saved there.
 
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QHash>
 #include <QImage>
@@ -15,6 +18,7 @@
 #include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTextLayout>
 #include <QUndoStack>
 
 #include <algorithm>
@@ -28,6 +32,7 @@
 #include "audio/MultibandResponse.h"
 #include "controls/KnobItem.h"
 #include "controls/ValueBoxItem.h"
+#include "devices/DeviceParam.h"
 #include "devices/DisplayClock.h"
 #include "devices/MultibandGraph.h"
 #include "editor/ProjectEditor.h"
@@ -132,6 +137,39 @@ class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::Edit
         }
         return QStringLiteral("still moving");
     }
+    // How wide `text` is in `font` as a Text lays it out (its implicitWidth: the advance, and what the last
+    // glyph overhangs past it).
+    static double textWidth(const QString& text, const QFont& font) {
+        QTextLayout layout(text, font);
+        layout.beginLayout();
+        QTextLine line = layout.createLine();
+        line.setLineWidth(1e6);
+        layout.endLayout();
+        return line.naturalTextWidth();
+    }
+    // The widest text a parameter shows over its range (its format() at 20001 values across it, in even steps
+    // of the value or, log-scaled, of its log: closer together than its texts step), and how wide it is in
+    // `font`: as a box centres it (its advance) or, `asText`, as a Text lays it out.
+    static std::pair<QString, double> widestText(const sub::ui::DeviceParam* param, const QFont& font,
+                                                 bool asText) {
+        const QFontMetricsF metrics(font);
+        const double from = param->minimum(), to = param->maximum();
+        constexpr int kSteps = 20000;
+        std::pair<QString, double> widest;
+        for (int i = 0; i <= kSteps; ++i) {
+            const double t = double(i) / kSteps;
+            const QString text =
+                param->format(param->logScale() ? from * std::pow(to / from, t) : from + (to - from) * t);
+            const double width = asText ? textWidth(text, font) : metrics.horizontalAdvance(text);
+            if (width > widest.second)
+                widest = {text, width};
+        }
+        return widest;
+    }
+    static sub::ui::DeviceParam* paramOf(QQuickItem* control) {
+        return control ? qvariant_cast<sub::ui::DeviceParam*>(control->property("param")) : nullptr;
+    }
+
     // The application layer's texts: plain checks, no window.
     static bool headless(const char* function) {
         return std::strcmp(function, "ratioTexts") == 0 || std::strcmp(function, "timeTexts") == 0;
@@ -158,7 +196,6 @@ private Q_SLOTS:
         QVERIFY(s.view && s.graph);
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
-        QCOMPARE(s.view->implicitWidth(), 816.0);
 
         // The device's own controls: within the body, their rows one under the other.
         QQuickItem* globals = find(s.view, QStringLiteral("globals"));
@@ -226,21 +263,8 @@ private Q_SLOTS:
         QVERIFY(amount);
         QCOMPARE(amount->value(), 100.0);
 
-        // Every box is as wide as its widest text and the automation dot beside it need (the dot never covers
-        // a minus sign), and the columns don't overlap.
-        for (const char* band : {"high", "mid", "low"}) {
-            for (const char* field : {"In", "Out", "Above", "AboveRatio", "Below", "BelowRatio", "Attack", "Release"}) {
-                const QString name = QString::fromLatin1(band) + QString::fromLatin1(field);
-                QQuickItem* item = find(s.view, name);
-                QVERIFY2(item->width() >= item->implicitWidth(),
-                         qPrintable(QStringLiteral("%1: %2 < %3").arg(name).arg(item->width()).arg(
-                             item->implicitWidth())));
-            }
-        }
-        for (const char* name : {"xoverHigh", "xoverLow"})
-            QVERIFY2(find(s.view, QString::fromLatin1(name))->width() >=
-                         find(s.view, QString::fromLatin1(name))->implicitWidth(),
-                     name);
+        // The columns side by side, apart, each as wide as its contents need in the font the UI has (checked
+        // below), and the editor as wide as they are.
         auto left = [&](const char* name) {
             return find(s.view, QString::fromLatin1(name))->mapToItem(s.view, QPointF(0, 0)).x();
         };
@@ -253,7 +277,56 @@ private Q_SLOTS:
         for (std::size_t i = 1; i < std::size(columns); ++i)
             QVERIFY2(right(columns[i - 1]) <= left(columns[i]), columns[i]);
         QVERIFY(right("highActive") <= left("highSolo") && right("highSolo") <= left("midIn"));
+        QCOMPARE(right("highSolo"), right("xoverHigh"));  // (the band column's edges line up)
         QVERIFY(left("highOn") >= 8 && right("globals") <= s.view->width() - 8);
+        QCOMPARE(s.view->implicitWidth(), right("globals") + 8);
+        // The device's own controls: the button rows fill their column, so their edges line up; the knobs
+        // within it.
+        QCOMPARE(left("softKnee"), left("globals"));
+        QCOMPARE(right("modeRms"), right("globals"));
+        QCOMPARE(left("scGain"), left("globals"));
+        QCOMPARE(right("scListen"), right("globals"));
+        QVERIFY(left("amount") >= left("globals") && right("output") <= right("globals"));
+
+        // Every box is as wide as its widest text and the automation dot beside it need, whatever the font:
+        // the widest text its parameter shows, centred, starts half a pixel clear of the dot (drawn from 3.5 to
+        // 8.5 px from its left), so the dot never touches a minus sign.
+        QStringList boxNames = {QStringLiteral("xoverHigh"), QStringLiteral("xoverLow")};
+        for (const char* band : {"high", "mid", "low"}) {
+            for (const char* field : {"In", "Out", "Above", "AboveRatio", "Below", "BelowRatio", "Attack", "Release"})
+                boxNames.append(QString::fromLatin1(band) + QString::fromLatin1(field));
+        }
+        for (const QString& name : boxNames) {
+            QQuickItem* item = find(s.view, name);
+            ValueBoxItem* valueBox = box(s.view, qPrintable(name));
+            QVERIFY2(item && valueBox && paramOf(item), qPrintable(name));
+            const auto [text, width] = widestText(paramOf(item), valueBox->font(), false);
+            const QString where =
+                QStringLiteral("%1: \"%2\" (%3 px) in %4 px").arg(name, text).arg(width).arg(item->width());
+            QVERIFY2(item->width() >= item->implicitWidth(), qPrintable(where));
+            QVERIFY2((item->width() - width) / 2 >= 9.0, qPrintable(where));
+        }
+        // Every knob's name and widest value fit its cell: its caption and readout never elide.
+        for (const char* name : {"amount", "time", "output", "scGain", "scMix"}) {
+            QQuickItem* cell = find(s.view, QString::fromLatin1(name));
+            const QList<QQuickItem*> children = cell->childItems();
+            QQuickItem* caption = children.first();
+            QQuickItem* readout = children.last();
+            const QFont font = qvariant_cast<QFont>(readout->property("font"));
+            const auto [text, width] = widestText(paramOf(cell), font, true);
+            QVERIFY2(width <= readout->width(),
+                     qPrintable(QStringLiteral("%1: \"%2\" (%3 px) in %4 px").arg(name, text).arg(width).arg(
+                         readout->width())));
+            QVERIFY2(caption->implicitWidth() <= caption->width(), name);
+        }
+        // Every button's text fits within its padding.
+        for (const char* name : {"highActive", "midActive", "lowActive", "highSolo", "midSolo", "lowSolo", "highOn",
+                                 "lowOn", "pageTime", "pageBelow", "pageAbove", "softKnee", "modePeak", "modeRms",
+                                 "sidechainButton", "scListen"}) {
+            QQuickItem* item = find(s.view, QString::fromLatin1(name));
+            QVERIFY2(item->implicitWidth() <= item->width(),
+                     qPrintable(QStringLiteral("%1: %2 > %3").arg(name).arg(item->implicitWidth()).arg(item->width())));
+        }
         // The T/B/A buttons in the header over the band column, clear of the High row's buttons and of Input's
         // caption; every field column has its caption.
         auto under = [&](const char* name) {
@@ -269,6 +342,13 @@ private Q_SLOTS:
         QCOMPARE(left("pageCaption2"), left("midAboveRatio"));
         QCOMPARE(left("midAttack"), left("midAbove"));
         QCOMPARE(right("midRelease"), right("midAboveRatio"));
+        // The captions whole over their columns (and on every page, below).
+        auto captionFits = [&](const char* name) {
+            QQuickItem* caption = find(s.view, QString::fromLatin1(name));
+            return caption->implicitWidth() <= caption->width();
+        };
+        for (const char* name : {"inCaption", "pageCaption", "pageCaption2", "outCaption"})
+            QVERIFY2(captionFits(name), name);
 
         // The rows line up with the graph's lanes.
         for (const auto& [name, band] :
@@ -297,11 +377,13 @@ private Q_SLOTS:
         QVERIFY(!find(s.view, QStringLiteral("pageAbove"))->property("checked").toBool());
         QCOMPARE(caption("pageCaption").toString(), QStringLiteral("Attack"));
         QCOMPARE(caption("pageCaption2").toString(), QStringLiteral("Release"));
+        QVERIFY(captionFits("pageCaption") && captionFits("pageCaption2"));
         click(find(s.view, QStringLiteral("pageBelow")));
         QVERIFY(visible("midBelow") && visible("lowBelowRatio"));
         QVERIFY(!visible("midAttack") && !visible("midAbove"));
         QCOMPARE(caption("pageCaption").toString(), QStringLiteral("Below"));
         QCOMPARE(caption("pageCaption2").toString(), QStringLiteral("Ratio"));
+        QVERIFY(captionFits("pageCaption") && captionFits("pageCaption2"));
         QCOMPARE(undo()->count(), 0);  // (a view, not an edit)
         // The page is the device's, not the editor's: an editor made again (as the chain's frames are, when
         // its devices change) shows it still.
@@ -1091,12 +1173,11 @@ private Q_SLOTS:
         click(chooser);
         QCOMPARE(asked.count(), 1);
         QCOMPARE(qvariant_cast<QQuickItem*>(asked.first().first()), chooser);
-        // Its text clear of its borders: the small role's padding, and room for the text within it (a pixel's
-        // overhang into the padding at most).
+        // Its text clear of its borders: the small role's padding, and room for the text within it.
         const double padding =
             chooser->property("leftPadding").toDouble() + chooser->property("rightPadding").toDouble();
         QVERIFY(chooser->property("leftPadding").toDouble() >= 7 && chooser->property("rightPadding").toDouble() >= 7);
-        QVERIFY2(chooser->property("implicitContentWidth").toDouble() <= chooser->width() - padding + 1.0,
+        QVERIFY2(chooser->property("implicitContentWidth").toDouble() <= chooser->width() - padding,
                  qPrintable(QString::number(chooser->property("implicitContentWidth").toDouble())));
 
         // Listen: a switch (not automatable), one step; the engine has it.

@@ -69,6 +69,7 @@ public:
     static constexpr double kLagSeconds = 0.04;  // the scroll stays this far behind the newest value
     static constexpr int kRing = 4096;           // display values kept per stream (1.5 s at 192 kHz is 2250)
     static constexpr int kStreams = 7;           // input_l, input_r, output_l, output_r, reduction_a, reduction_b, clip
+    static constexpr double kFigureGap = 4.0;    // px at the least between the footer's figures
 
     explicit LimiterGraph(QQuickItem* parent = nullptr);
 
@@ -111,6 +112,13 @@ public:
     // under the meters the In, GR and Out peaks over the last second (In in the line's domain, GR as the
     // footer's, Out in dBFS). The gain reduction includes Soft Clip's share, as the GR bars do.
     Q_INVOKABLE QStringList figures() const { return {grText_, inText_, grPeakText_, outText_}; }
+    // Where they are drawn (graph coordinates, each as wide as its text): the gain reduction at the footer's
+    // left, the peaks under their meters, moved apart where they would come nearer than kFigureGap (long
+    // figures, a wide font), the last kept inside the graph.
+    Q_INVOKABLE QList<QRectF> figureRects() const;
+    // Where the header's badges are drawn, each as wide as its text: the mode's (SOFT CLIP, TRUE PEAK; none in
+    // Standard), then MAX (they show while their mode and Maximize are on).
+    Q_INVOKABLE QList<QRectF> badgeRects() const;
     // How many times it asked to be painted (the tests check it rests when nothing moves).
     int updates() const { return updates_; }
 

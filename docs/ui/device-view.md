@@ -327,8 +327,12 @@ readonly property var editors: ({
 
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
-  `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 608,
-  Multiband Dynamics 816, Spectral Compressor 936, Saturator 771, Amp 642 and Erosion 532 under the default font
+  `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 610,
+  Multiband Dynamics 828, Spectral Compressor 936, Saturator 771, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
+  Sidechain 720, Sampler 760); it may change. The Limiter's and Multiband Dynamics' are their widths in the default
+  font (measured with Inter standing in for Segoe UI): they follow the font, their columns as wide as their texts
+  need in it. It gets the body's whole height and grows its graphs into it (6 px from the top and the bottom), while
+  its knobs stay at the top; `implicitHeight` is the least it needs.
   (they follow the font), Delay 532, Chorus-Ensemble 534, Phaser-Flanger 732, or 906 with More open, Reverb 995,
   Disperser 544, EQ 580, or 756 with its band controls, Sidechain 720, Sampler 760); it may change. It gets the
   body's whole height and grows its graphs into it (6 px from the top and the bottom), while its knobs stay at the
@@ -455,7 +459,11 @@ The editors:
   box at the display's top left (its caption too, as wide as "Threshold" so the box stays put) to the Threshold;
   Release dims while Auto is on (opacity 0.55, as Ableton greys it) and can still be set, for when Auto is off. The
   line's box and Link's are their widest text (the parameter's minimum and maximum, formatted) + 16 px and 4 more,
-  so the automation dot clears a minus sign.
+  so the automation dot clears a minus sign. The columns follow the font (measured with `FontMetrics`): the knobs'
+  are 64 px, or wider where a knob's name or widest value ("-24.0 dB", "0.88 ms") or Maximize's or Auto's text
+  needs it; the right column 96 px, or as wide as its captions, a list's longest name with the arrow, the Routing
+  buttons or Link's caption and box need. The knobs' sample values are written in the font's widest figure, so they
+  are as wide as any value of their form.
   - The display: the level over the last `kHistorySeconds` (1.5 s) on a fixed axis (+12 to -36 dB): the input (grey, red
     where it goes over the line), the output inside it (light), and the gain reduction hanging from the top, filled with
     a gradient and edged with a glow (24 dB at the bottom: twice the level's scale, so its 6, 12 and 18 dB fall on the
@@ -472,7 +480,9 @@ The editors:
     shades where the knee rounds off (from `limiterSoftKneeDb()`, -6.02 dB, to `limiterSoftTopDb()`, +3.52 dB, where it
     reaches the line, dashed), and the knee's share of the reduction (display `clip`) is stacked under the gain
     reduction, lighter, in the history and on the GR bars. A badge names the mode (SOFT CLIP, TRUE PEAK), with MAX
-    beside it while Maximize is on.
+    beside it while Maximize is on, each as wide as its text (`badgeRects()`). The peaks under the meters are each
+    centred under its meter, or moved apart, `kFigureGap` (4 px) at the least, where long figures or a wide font
+    would have them meet (`figureRects()`, each as wide as its text, the last kept inside the graph).
   - The line, across the plot and the meters to its handle, is the Ceiling (the Threshold with Maximize): drag it
     within `kLineGrab` (5 px) up and down (Shift finely: a quarter; pressing Shift mid-drag changes the rate from
     there on), to 0.1 dB within the parameter's range (the device's, read as the drag starts), one undo step per
@@ -515,8 +525,17 @@ The editors:
   through `parseRatio` (the application layer's `multibandParseRatio`): Live's "1:R", R alone, or a compressor's "4:1";
   to three decimals, so a typed "1:0.333" stays. The attack and release boxes read "250 ms", "1.5 s" or a bare number of
   milliseconds (`parseTime`, `multibandParseMs`). Boxes take their formatter and their double-click default from their
-  parameter (`formatOf(param)`, its `defaultValue`), so one whose value never changes still gets its text, and are a
-  little wider than their sample text needs (its width + 16), so the automation dot at their left clears a minus sign.
+  parameter (`formatOf(param)`, its `defaultValue`), so one whose value never changes still gets its text.
+  - Its columns follow the font, each as wide as its widest text needs in it (measured with `FontMetrics`), and each
+    starts where the one before it ends, so the editor's `implicitWidth` is theirs: a box is its widest value's text
+    with 9 px either side, so the automation dot (3.5 to 8.5 px from its left) never touches a minus sign (the gains'
+    "-24.0 dB", the thresholds' "-80.0 dB", the ratios' "1:0.250", the times' "0.88 ms" or "1000 ms" (999.5 ms rounds to
+    it), the crossovers' "15.00 kHz"; the samples written in the font's widest figure, so they are as wide as any value
+    of their form); the band column is a crossover box and its switch, the band's button and solo filling it above; a
+    knob's cell is its name and its widest value (the device's three at least EditorKnob's 52 px); the device's controls
+    are a column as wide as its widest row needs, Soft Knee, Peak and RMS sharing their row as their texts need it and
+    the sidechain's button and Listen taking what the S/C knobs leave of theirs, so the rows' edges line up, the knobs
+    centred over them.
   - The display ([MultibandGraph](../../ui/src/devices/MultibandGraph.h), 268 px): a lane per band on a linear level
     axis from −80 to +6 dB (its figures, −80 to 0, in the header: a "+6" at the edge would run into the "0"; a faint
     line every 10 dB, 0 dB brighter). In each, the Below region is a block from the left edge to the Below threshold and

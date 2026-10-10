@@ -8,6 +8,7 @@ import SUBstation
 // Threshold, dragged up and down or typed into its box at the top left); Release over Auto; then
 // Lookahead, Mode, Routing and Link. Every control shows its parameter as it is now (its automation's
 // value while that plays), sets it undoably, touches it when pressed, and right-click gives its menu.
+// The columns are as wide as their texts need in the font the UI has (measured).
 Item {
     id: editor
 
@@ -15,8 +16,6 @@ Item {
     required property string deviceId
     readonly property alias graph: graph
 
-    readonly property int knobWidth: 64
-    readonly property int sideWidth: 96
     readonly property int gap: 10
     readonly property bool maximizeOn: p.get("maximize") ? p.get("maximize").value >= 0.5 : false
     readonly property bool autoOn: p.get("auto_release") ? p.get("auto_release").value >= 0.5 : false
@@ -25,6 +24,45 @@ Item {
     implicitWidth: 8 + knobWidth + gap + graph.implicitWidth + gap + knobWidth + 8 + sideWidth + 8
     implicitHeight: 6 + Math.max(gainColumn.minimumHeight, releaseColumn.minimumHeight, sideColumn.minimumHeight,
                                  graph.implicitHeight) + 6
+
+    // The 8 pt font of the captions and readouts, measured, and its widest figure: a sample text with its #s
+    // in that figure ("-##.# dB") is as wide as any value's text of that form.
+    FontMetrics {
+        id: metrics
+        font: Theme.uiFont(8)
+    }
+    readonly property string figure: {
+        let widest = "0"
+        for (const digit of "123456789") {
+            if (metrics.advanceWidth(digit) > metrics.advanceWidth(widest))
+                widest = digit
+        }
+        return widest
+    }
+    function sample(pattern) {
+        return pattern.replace(/#/g, figure)
+    }
+    // The widest of `texts` in `font` (a FontMetrics; the 8 pt one by default) as Text lays them out (whole
+    // pixels): a text's advance, or as far as its glyphs reach if further (a last glyph overhanging it).
+    function textWidth(texts, font) {
+        const m = font || metrics
+        return Math.ceil(Math.max(0, ...texts.map(text => {
+            const ink = m.boundingRect(text)
+            return Math.max(m.advanceWidth(text), ink.x + ink.width)
+        })))
+    }
+
+    // The knobs' columns: 64 px, or wider where a knob's name or widest value (Gain and Output to -24.0 dB,
+    // Release from 0.10 ms to 3.00 s, "1000 ms" just under a second) or Maximize's or Auto's text needs it.
+    readonly property int knobWidth: Math.ceil(Math.max(64, maximize.implicitWidth, autoRelease.implicitWidth,
+                                                        textWidth([qsTr("Gain"), qsTr("Output"), qsTr("Release"),
+                                                                   sample("-2#.# dB"), sample("0.## ms"),
+                                                                   sample("### ms"), "1000 ms", sample("#.## s")])))
+    // The right column: 96 px, or wider where its captions, a list's longest name with its arrow, the Routing
+    // buttons or Link's caption and box need it.
+    readonly property int sideWidth: Math.ceil(Math.max(96, textWidth([qsTr("Lookahead"), qsTr("Mode")]),
+                                                        lookahead.widest, mode.widest, routingRow.widest,
+                                                        linkCaption.implicitWidth + 2 + linkBox.width))
 
     DeviceParamMap {
         id: p
@@ -118,6 +156,7 @@ Item {
     }
     EditorCaption {
         id: lineCaption
+        objectName: "lineCaption"
         x: graph.x + 6
         y: graph.y + 2
         width: Math.ceil(captionMetrics.advanceWidth) + 4
@@ -198,11 +237,16 @@ Item {
             width: parent.width
 
             EditorCaption {
+                objectName: "lookaheadCaption"
                 width: parent.width
                 text: qsTr("Lookahead")
             }
             ParamChoice {
+                id: lookahead
                 objectName: "lookahead"
+                // (the width its longest name and the arrow need)
+                readonly property real widest: editor.textWidth(names, listFont) + button.leftPadding
+                                               + button.rightPadding
                 width: parent.width
                 param: p.get("lookahead")
                 tooltip: qsTr("Lookahead: how far ahead peaks are seen (the device's latency). Shorter is punchier "
@@ -214,11 +258,15 @@ Item {
             width: parent.width
 
             EditorCaption {
+                objectName: "modeCaption"
                 width: parent.width
                 text: qsTr("Mode")
             }
             ParamChoice {
+                id: mode
                 objectName: "mode"
+                readonly property real widest: editor.textWidth(names, listFont) + button.leftPadding
+                                               + button.rightPadding
                 width: parent.width
                 param: p.get("mode")
                 tooltip: qsTr("Standard: no sample above the ceiling. Soft Clip: rounds peaks off as they near it, "
@@ -228,9 +276,12 @@ Item {
         }
         Row {
             id: routingRow
+            // (the two alike, as wide as the wider's text needs)
+            readonly property real widest: 2 * Math.max(routingLR.implicitWidth, routingMS.implicitWidth) + spacing
             spacing: 2
 
             ParamButton {
+                id: routingLR
                 objectName: "routingLR"
                 width: (editor.sideWidth - 2) / 2
                 param: p.get("routing")
@@ -239,6 +290,7 @@ Item {
                 tooltip: qsTr("L/R: limits left and right")
             }
             ParamButton {
+                id: routingMS
                 objectName: "routingMS"
                 width: (editor.sideWidth - 2) / 2
                 param: p.get("routing")
@@ -252,6 +304,8 @@ Item {
             spacing: 2
 
             EditorCaption {
+                id: linkCaption
+                objectName: "linkCaption"
                 width: editor.sideWidth - linkBox.width - 2
                 height: linkBox.height
                 verticalAlignment: Text.AlignVCenter
@@ -272,5 +326,10 @@ Item {
                               + "0 %: each its own)")
             }
         }
+    }
+    // The lists' font, measured.
+    FontMetrics {
+        id: listFont
+        font: lookahead.button.font
     }
 }

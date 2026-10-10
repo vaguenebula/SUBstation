@@ -1,16 +1,19 @@
-// The Limiter's editor (ui/qml/devices/editors/LimiterEditor.qml, ui/src/devices/LimiterGraph):
-// loaded as the device view loads it, over a real engine. It fits the view's height; every control is
-// bound to its parameter (undoably); during Gain and Output's crossfade only the one coming takes the
-// mouse; it opens showing the device as it is (nothing animating in); dragging the line is one undo
-// step, and the line's hover follows the line as it moves; what the engine publishes as it renders
-// reaches the graph (levels, gain reduction, Soft Clip's share, the figures), which animates and then
-// rests; the line and Soft Clip's band are the engine's own maths (LimiterResponse.h). With
-// SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there limiting, in Soft Clip, with Maximize.
+// The Limiter's editor (ui/qml/devices/editors/LimiterEditor.qml, ui/src/devices/LimiterGraph): loaded
+// as the device view loads it, over a real engine. It fits the view's height, and whatever the font
+// every text shows whole (its columns as wide as their texts need, the graph's figures apart, its badges
+// clear of the line's box); every control is bound to its parameter (undoably); during Gain and Output's
+// crossfade only the one coming takes the mouse; it opens showing the device as it is (nothing animating
+// in); dragging the line is one undo step, and the line's hover follows the line as it moves; what the
+// engine publishes as it renders reaches the graph (levels, gain reduction, Soft Clip's share, the
+// figures), which animates and then rests; the line and Soft Clip's band are the engine's own maths
+// (LimiterResponse.h). With SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there limiting, in
+// Soft Clip, with Maximize.
 
 #include <QFontMetricsF>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
+#include <QTextLayout>
 #include <QUndoStack>
 
 #include <cmath>
@@ -23,6 +26,7 @@
 #include "controls/ValueBoxItem.h"
 #include "devices/DeviceParam.h"
 #include "devices/LimiterGraph.h"
+#include "theme/Theme.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -87,6 +91,35 @@ class TestUiDeviceEditorsLimiter : public QObject, public sub::app::test::Editor
     static sub::ui::DeviceParam* paramOf(QQuickItem* control) {
         return control ? qvariant_cast<sub::ui::DeviceParam*>(control->property("param")) : nullptr;
     }
+    // How wide `text` is in `font` as a Text lays it out (its implicitWidth: the advance, and what the last
+    // glyph overhangs past it).
+    static double textWidth(const QString& text, const QFont& font) {
+        QTextLayout layout(text, font);
+        layout.beginLayout();
+        QTextLine line = layout.createLine();
+        line.setLineWidth(1e6);
+        layout.endLayout();
+        return line.naturalTextWidth();
+    }
+    // The widest text a parameter shows over its range (its format() at 20001 values across it, in even steps
+    // of the value or, log-scaled, of its log: closer together than its texts step), and how wide it is in
+    // `font`: as a box centres it (its advance) or, `asText`, as a Text lays it out.
+    static std::pair<QString, double> widestText(const sub::ui::DeviceParam* param, const QFont& font,
+                                                 bool asText) {
+        const QFontMetricsF metrics(font);
+        const double from = param->minimum(), to = param->maximum();
+        constexpr int kSteps = 20000;
+        std::pair<QString, double> widest;
+        for (int i = 0; i <= kSteps; ++i) {
+            const double t = double(i) / kSteps;
+            const QString text =
+                param->format(param->logScale() ? from * std::pow(to / from, t) : from + (to - from) * t);
+            const double width = asText ? textWidth(text, font) : metrics.horizontalAdvance(text);
+            if (width > widest.second)
+                widest = {text, width};
+        }
+        return widest;
+    }
     // Clicks a ParamButton.
     void click(QQuickItem* view, const char* name) {
         QQuickItem* control = find(view, QString::fromLatin1(name));
@@ -135,7 +168,6 @@ private Q_SLOTS:
         auto [track, device, view, graph] = limiter();
         QVERIFY(view && graph);
         QVERIFY(view->implicitHeight() <= bodyHeight());  // fits the view
-        QCOMPARE(view->implicitWidth(), 608.0);
         // The graph grows into the body's height, 6 px from its top and bottom; the controls stay at the top.
         QCOMPARE(graph->height(), view->height() - 12);
         QCOMPARE(graph->width(), double(LimiterGraph::kWidth));
@@ -163,11 +195,48 @@ private Q_SLOTS:
         QVERIFY(line && link);
         QCOMPARE(line->text(), QStringLiteral("-0.3 dB"));
         QCOMPARE(link->text(), QStringLiteral("100 %"));
-        // The boxes are wide enough for their widest text with the automation dot (3.5 to 8.5 px from the
-        // left) clear of it, centred; the lists for their longest name with the arrow.
-        for (const auto& [box, widest] : {std::pair{line, "-24.0 dB"}, std::pair{link, "100 %"}}) {
-            const double text = QFontMetricsF(box->font()).horizontalAdvance(QString::fromLatin1(widest));
-            QVERIFY2((box->width() - text) / 2 >= 9.5, widest);
+        // Whatever the font: the boxes are wide enough for their widest text with the automation dot (3.5 to
+        // 8.5 px from the left) a pixel clear of it, centred (the line's box for the Ceiling's, and for the
+        // Threshold's with Maximize); the knobs' cells for their names and widest values; the buttons and the
+        // captions for their texts; the lists for their longest name with the arrow.
+        auto boxFits = [&](ValueBoxItem* box, QQuickItem* control) {
+            const auto [text, width] = widestText(paramOf(control), box->font(), false);
+            QVERIFY2((box->width() - width) / 2 >= 9.5,
+                     qPrintable(QStringLiteral("\"%1\" (%2 px) in %3 px").arg(text).arg(width).arg(box->width())));
+        };
+        boxFits(link, find(view, QStringLiteral("link")));
+        boxFits(line, find(view, QStringLiteral("lineBox")));
+        editor()->setDeviceParam(track, device, QStringLiteral("maximize"), 1.0);
+        QTRY_COMPARE(paramOf(find(view, QStringLiteral("lineBox")))->paramId(), QStringLiteral("threshold"));
+        boxFits(line, find(view, QStringLiteral("lineBox")));
+        undo()->undo();
+        for (const char* name : {"gain", "output", "release"}) {
+            QQuickItem* cell = find(view, QString::fromLatin1(name));
+            const QList<QQuickItem*> children = cell->childItems();
+            QQuickItem* caption = children.first();
+            QQuickItem* readout = children.last();
+            const auto [text, width] = widestText(paramOf(cell), qvariant_cast<QFont>(readout->property("font")), true);
+            QVERIFY2(width <= readout->width(),
+                     qPrintable(QStringLiteral("%1: \"%2\" (%3 px) in %4 px").arg(name, text).arg(width).arg(
+                         readout->width())));
+            QVERIFY2(caption->implicitWidth() <= caption->width(), name);
+        }
+        for (const char* name : {"maximize", "autoRelease", "routingLR", "routingMS"}) {
+            QQuickItem* button = find(view, QString::fromLatin1(name));
+            QVERIFY2(button->implicitWidth() <= button->width(),
+                     qPrintable(QStringLiteral("%1: %2 > %3").arg(name).arg(button->implicitWidth()).arg(
+                         button->width())));
+        }
+        for (const char* name : {"lookaheadCaption", "modeCaption", "linkCaption"}) {
+            QQuickItem* caption = find(view, QString::fromLatin1(name));
+            QVERIFY2(caption->implicitWidth() <= caption->width(), name);
+        }
+        {
+            // The line's caption, as wide as the wider of its names, so the box stays put when they swap.
+            QQuickItem* caption = find(view, QStringLiteral("lineCaption"));
+            const QFont font = qvariant_cast<QFont>(caption->property("font"));
+            for (const QString& name : {QStringLiteral("Ceiling"), QStringLiteral("Threshold")})
+                QVERIFY2(textWidth(name, font) <= caption->width(), qPrintable(name));
         }
         for (const char* name : {"lookahead", "mode"}) {
             QQuickItem* list = find(view, QString::fromLatin1(name));
@@ -201,10 +270,16 @@ private Q_SLOTS:
         }
 
         // Nothing overlaps: the columns side by side within the body, the line's box in the graph's header.
+        // The body is as wide as the columns (as their texts need), the two knob columns alike.
         auto rectOf = [&](const char* name) {
             QQuickItem* item = find(view, QString::fromLatin1(name));
             return item ? item->mapRectToItem(view, QRectF(0, 0, item->width(), item->height())) : QRectF();
         };
+        QCOMPARE(view->implicitWidth(), rectOf("link").right() + 8);
+        QCOMPARE(rectOf("routingMS").right(), rectOf("link").right());
+        QCOMPARE(rectOf("mode").right(), rectOf("link").right());
+        QCOMPARE(rectOf("gain").width(), rectOf("release").width());
+        QCOMPARE(rectOf("maximize").width(), rectOf("gain").width());
         const QRectF graphRect = rectOf("limiterGraph");
         QVERIFY(rectOf("gain").right() <= graphRect.left() && rectOf("maximize").right() <= graphRect.left());
         QVERIFY(rectOf("release").left() >= graphRect.right() && rectOf("autoRelease").left() >= graphRect.right());
@@ -599,6 +674,47 @@ private Q_SLOTS:
         graph->advance(1.0 / 60);
         QCOMPARE(graph->figures().at(3), outFigure);
         QVERIFY2(std::abs(graph->meterOut(0).peak + 1.0) < 0.1, qPrintable(QString::number(graph->meterOut(0).peak)));
+    }
+
+    void figuresKeepApart() {
+        // Long figures: 24 dB of Gain into a -24 dB ceiling (In 18.0, GR -42.0, Out -24.0). Whatever the font,
+        // the footer's figures are each as wide as their text, apart and inside the graph; with Maximize and
+        // True Peak, the header's badges stay clear of the line's box.
+        auto [track, device, view, graph] = limiter();
+        QVERIFY(view && graph);
+        editor()->setDeviceParam(track, device, QStringLiteral("gain"), 24.0);
+        editor()->setDeviceParam(track, device, QStringLiteral("ceiling"), -24.0);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        refreshDisplays();
+        for (int i = 0; i < 60; ++i)
+            graph->advance(1.0 / 60);
+        const QStringList texts = graph->figures();
+        const QList<QRectF> rects = graph->figureRects();
+        QCOMPARE(rects.size(), 4);
+        QCOMPARE(texts.mid(1), QStringList({QStringLiteral("18.0"), QStringLiteral("-42.0"), QStringLiteral("-24.0")}));
+        const QString where = texts.join(QStringLiteral(", "));
+        for (int i = 0; i < 4; ++i) {
+            const double width = QFontMetricsF(uiFont(i == 0 ? 8 : 7)).horizontalAdvance(texts.at(i));
+            QVERIFY2(rects[i].width() >= width - 1e-9, qPrintable(where));
+            QVERIFY2(rects[i].left() >= 0 && rects[i].right() <= graph->width() && rects[i].bottom() <= graph->height(),
+                     qPrintable(where));
+            if (i > 0)  // (left to right: the gain reduction, then the In, GR and Out peaks)
+                QVERIFY2(rects[i].left() >= rects[i - 1].right() + (i > 1 ? LimiterGraph::kFigureGap : 0) - 1e-9,
+                         qPrintable(where));
+        }
+
+        editor()->setDeviceParam(track, device, QStringLiteral("mode"), 2.0);
+        editor()->setDeviceParam(track, device, QStringLiteral("maximize"), 1.0);
+        for (int i = 0; i < 60; ++i)
+            graph->advance(1.0 / 60);  // (the badges ease in)
+        QVERIFY(graph->badge() > 0.99);
+        QTest::qWait(200);  // (the knobs' crossfade)
+        QQuickItem* lineBox = find(view, QStringLiteral("lineBox"));
+        const QRectF box = lineBox->mapRectToItem(graph, QRectF(0, 0, lineBox->width(), lineBox->height()));
+        for (const QRectF& badge : graph->badgeRects())
+            QVERIFY2(box.right() + 4 <= badge.left(),
+                     qPrintable(QStringLiteral("%1 > %2").arg(box.right()).arg(badge.left())));
+        save(grab(), QStringLiteral("limiter-long-figures.png"));
     }
 
     void modeAnimates() {
