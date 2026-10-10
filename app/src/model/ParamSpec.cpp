@@ -46,6 +46,12 @@ QString formatValue(double value, const QString& unit) {
     if (unit == u"\u00B0") return formatFixed(value, 0) + QStringLiteral("\u00B0");  // an angle (a phase offset): "180°"
     // A slope (the Spectral Compressor's Tilt): "-1.5 dB/oct".
     if (unit == u"dB/oct") return formatFixed(value, 1) + QStringLiteral(" dB/oct");
+    if (unit == u"ratio") {  // a ratio either side of 1: "4.00:1", "66.7:1", "100:1"; under 1 "1:2.00"
+        const bool under = value > 0.0 && value < 1.0;
+        const double r = under ? 1.0 / value : value;
+        const QString text = formatFixed(r, r < 10.0 ? 2 : (r < 100.0 ? 1 : 0));
+        return under ? QStringLiteral("1:") + text : text + QStringLiteral(":1");
+    }
     return formatFixed(value, 2) + u' ' + unit;
 }
 
