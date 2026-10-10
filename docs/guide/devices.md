@@ -569,13 +569,14 @@ controls.
 - **Color** steers which frequencies saturate: an EQ before the curve and its exact
   opposite after it. A clean sound passes unchanged; once the curve bends, what the EQ
   boosts is driven harder (and comes out quieter, a dip), and what it cuts stays clean
-  (and comes out louder, like a resonance). **Base** (±36 dB) does this to the lows
+  (and comes out louder, like a resonance). **Amt Lo** (±36 dB) does this to the lows
   below about 150 Hz: negative keeps the fundamental clean and full under a distorted
-  top. **Freq**, **Width** and **Depth** do it to a band of your choice. The graph shows
+  top. **Amt Hi** does it to a band of your choice, set by **Freq** and **Width**. (They
+  are Live 12.1's names; before it Live called them Base and Depth.) The graph shows
   the EQ over the input's spectrum (filled) and the output's (the line), with the Color
-  switch above it; drag its dots (Base up and down, the band's across for Freq and up
-  and down for Depth), which also switches Color on; double-click a dot to set it back
-  to 0 dB. While Color is off its knobs are dimmed.
+  switch above it; drag its dots (Amt Lo's up and down, the band's across for Freq and
+  up and down for Amt Hi), which also switches Color on; double-click a dot to set it
+  back to 0 dB. While Color is off its knobs are dimmed (still editable).
 - **DC** removes DC offset from the input (useful on recordings that sit off centre).
   **HQ** (Hi-Quality) shapes and clips at four times the sample rate, so loud, bright
   sounds driven hard don't fold back as harsh, unrelated tones; it costs more CPU and

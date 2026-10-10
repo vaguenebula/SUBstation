@@ -32,8 +32,8 @@
 //   run all along (but for Color's filters at that rate, which start from
 //   silence: on a clean sound they still cancel exactly). A change during a
 //   fade starts when it is done.
-// - Color fades by its gains: switched off, Base and Depth glide to 0 dB (where
-//   the sections are exactly 1), and once their states have died away the
+// - Color fades by its gains: switched off, Amt Lo and Amt Hi glide to 0 dB
+//   (where the sections are exactly 1), and once their states have died away the
 //   filters are switched out (also when Color is on at 0 dB: it costs nothing).
 //   Each rate has its own filters, designed for it; only the paths that play
 //   run theirs.
@@ -62,12 +62,12 @@ namespace sub {
 namespace {
 
 using saturator::Clip;
+using saturator::kHqFactorLog2;  // Hi-Quality: 4x
 using saturator::Type;
 
 constexpr int kChannels = 2;
 constexpr int kChunk = 16;                         // samples a glide moves at once
-constexpr int kHqFactorLog2 = 2;                   // Hi-Quality: 4x
-constexpr int kHqChunk = kChunk << kHqFactorLog2;  // its samples in a chunk
+constexpr int kHqChunk = kChunk << kHqFactorLog2;  // Hi-Quality's samples in a chunk
 constexpr int kHqPreroll = 80;                     // base samples the 4x path runs unheard first (its filters hold 74)
 constexpr int kMeterSamples = 128;                 // samples per peak published
 constexpr double kGlideSeconds = 0.010;            // each of a glide's two one-poles
@@ -81,8 +81,12 @@ constexpr double kTailTimeConstants = 8.0;  // the tail: until the slowest filte
 constexpr double kMaxTailSeconds = 5.0;
 constexpr int kWsControls = 6;
 
-// A one-pole's coefficient raised to each chunk length, and n (1 - c): what a
-// glide needs to move n samples at once.
+// Moves a dsp::Glide (two one-poles in a row: the first follows the target,
+// the value the first) a chunk at a time, in closed form, rather than its
+// next() sample by sample: after n samples the errors are e1 c^n and
+// c^n (e2 + n (1 - c) e1), what n of its steps with the share 1 - c give, exact
+// at each chunk's end however automation splits the block. The table holds c^n
+// and n (1 - c) for each chunk length.
 struct GlideTable {
     std::array<double, kChunk + 1> power{}, linear{};
 
@@ -93,26 +97,15 @@ struct GlideTable {
             linear[static_cast<size_t>(n)] = n * (1.0 - c);
         }
     }
-};
-
-// Two one-poles in a row gliding to a target (the first follows the target, the
-// value the first), moved a chunk at a time: after n samples the errors are
-// e1 c^n and c^n (e2 + n (1 - c) e1), what n steps of
-// first += (1 - c)(target - first), value += (1 - c)(first - value) give. It
-// lands on the target exactly once both are within `landed` of it.
-struct Glide {
-    double first = 0.0, value = 0.0;
-
-    void snap(double target) noexcept { first = value = target; }
-    bool settled(double target) const noexcept { return value == target && first == target; }
-    // Moves `n` samples on; false if it was already there.
-    bool advance(double target, const GlideTable& table, int n, double landed) noexcept {
-        if (settled(target)) return false;
-        const double e1 = first - target, e2 = value - target;
+    // Moves `glide` `n` samples on towards `target`, landing on it exactly once both poles are within
+    // `landed` of it; false if it was already there.
+    bool advance(dsp::Glide& glide, double target, int n, double landed) const noexcept {
+        if (glide.settled(target)) return false;
+        const double e1 = glide.first - target, e2 = glide.value - target;
         const auto at = static_cast<size_t>(n);
-        value = target + table.power[at] * (e2 + table.linear[at] * e1);
-        first = target + table.power[at] * e1;
-        if (std::abs(first - target) < landed && std::abs(value - target) < landed) snap(target);
+        glide.value = target + power[at] * (e2 + linear[at] * e1);
+        glide.first = target + power[at] * e1;
+        if (std::abs(glide.first - target) < landed && std::abs(glide.value - target) < landed) glide.snap(target);
         return true;
     }
 };
@@ -145,7 +138,7 @@ struct Switch {
                 --preroll;
                 w[i] = 0.f;
             } else {
-                w[i] = saturator::sCurve(static_cast<float>(at + 1) / static_cast<float>(length));
+                w[i] = dsp::sCurve(static_cast<float>(at + 1) / static_cast<float>(length));
                 if (++at >= length) snap(to);
             }
         }
@@ -153,29 +146,8 @@ struct Switch {
     // The weight of value 1 (a switch's "on") now.
     float onWeight(int length) const noexcept {
         if (!fading()) return static_cast<float>(to);
-        const float w = preroll > 0 ? 0.f : saturator::sCurve(static_cast<float>(at) / static_cast<float>(length));
+        const float w = preroll > 0 ? 0.f : dsp::sCurve(static_cast<float>(at) / static_cast<float>(length));
         return to == 1 ? w : 1.f - w;
-    }
-};
-
-// A biquad section (transposed direct form II, states in double) whose two
-// states are cleared together once both are tiny. dsp::Biquad clears each on
-// its own, and a slowly decaying section (a low Color frequency, or any at 4x)
-// can then ring at about 1e-19 for ever: what clearing one state takes out of
-// the ringing, its partner's leftover puts back. Cleared together they reach
-// exact zeros (at worst after 19 s: Depth ±36 dB at 30 Hz, Width 0).
-struct Section {
-    static constexpr double kTiny = 1e-20;
-    double s1 = 0.0, s2 = 0.0;
-
-    void reset() noexcept { s1 = s2 = 0.0; }
-    float process(const dsp::BiquadCoefficients& c, float in) noexcept {
-        const double x = in;
-        const double y = c.b0 * x + s1;
-        s1 = c.b1 * x - c.a1 * y + s2;
-        s2 = c.b2 * x - c.a2 * y;
-        if (std::abs(s1) < kTiny && std::abs(s2) < kTiny) s1 = s2 = 0.0;
-        return static_cast<float>(y);
     }
 };
 
@@ -184,13 +156,16 @@ struct Section {
 // their coefficients follow across a chunk while Color glides (from the last
 // chunk's design to this one's, landing on it). The de-emphasis takes the same
 // line in step, at the same samples: the curve between them has no memory.
+// Each section is a dsp::Biquad (transposed direct form II, states in double,
+// both cleared together once tiny, so even the slowest, Amt Hi ±36 dB at 30 Hz
+// with Width 0, reaches exact zeros: within 19 s).
 struct ColorFilters {
     double rate = 48000.0;
     saturator::ColorDesign from, to;    // the chunk's line
     saturator::ColorDesign emphasis;    // the emphasis's sections now
     saturator::ColorDesign deemphasis;  // what the de-emphasis inverts now
     dsp::BiquadCoefficients invShelf, invPeak;
-    Section preShelf[kChannels], prePeak[kChannels], postPeak[kChannels], postShelf[kChannels];
+    dsp::Biquad preShelf[kChannels], prePeak[kChannels], postPeak[kChannels], postShelf[kChannels];
 
     // Both sides at `design`, in step, nothing moving; the states as they are.
     void start(const saturator::ColorDesign& design) noexcept {
@@ -247,7 +222,7 @@ struct ColorFilters {
     }
     // Every state of the first `n` channels below `limit`.
     bool quiet(int n, double limit) const noexcept {
-        const auto small = [limit](const Section& s) { return std::abs(s.s1) < limit && std::abs(s.s2) < limit; };
+        const auto small = [limit](const dsp::Biquad& s) { return std::abs(s.s1) < limit && std::abs(s.s2) < limit; };
         for (int c = 0; c < n; ++c) {
             if (!small(preShelf[c]) || !small(prePeak[c]) || !small(postPeak[c]) || !small(postShelf[c])) return false;
         }
@@ -255,9 +230,9 @@ struct ColorFilters {
     }
 
 private:
-    static void rescale(Section (&sections)[kChannels], double ratio) noexcept {
+    static void rescale(dsp::Biquad (&sections)[kChannels], double ratio) noexcept {
         if (ratio == 1.0) return;
-        for (Section& s : sections) {
+        for (dsp::Biquad& s : sections) {
             s.s1 *= ratio;
             s.s2 *= ratio;
         }
@@ -318,7 +293,7 @@ public:
     SaturatorProcessor()
         : BuiltinProcessor(infos(),
                            {{"in_peak", kMeterSamples}, {"out_peak", kMeterSamples}, {"input", 1}, {"output", 1}}),
-          hqLatency_(dsp::Oversampler::latencyFor(kHqFactorLog2)) {}
+          hqLatency_(saturator::hqLatency()) {}
 
     std::string typeId() const override { return "builtin:saturator"; }
     std::string name() const override { return "Saturator"; }
@@ -485,11 +460,11 @@ private:
 
         // Glides, to the chunk's end; the gains ramp from where the last chunk ended.
         const float drive0 = driveGain_, out0 = outGain_, mix0 = mixNow_;
-        if (drive_.advance(t.driveDb, fast_, len, kLandedDb))
+        if (fast_.advance(drive_, t.driveDb, len, kLandedDb))
             driveGain_ = expDbToGain(static_cast<float>(drive_.value));
-        if (output_.advance(t.outputDb, fast_, len, kLandedDb))
+        if (fast_.advance(output_, t.outputDb, len, kLandedDb))
             outGain_ = expDbToGain(static_cast<float>(output_.value));
-        if (mix_.advance(t.mix, fast_, len, kLandedFraction)) mixNow_ = static_cast<float>(mix_.value);
+        if (fast_.advance(mix_, t.mix, len, kLandedFraction)) mixNow_ = static_cast<float>(mix_.value);
         const Ramp drive = {drive0, (driveGain_ - drive0) * step}, mix = {mix0, (mixNow_ - mix0) * step};
         const float outStep = (outGain_ - out0) * step;
 
@@ -498,12 +473,12 @@ private:
         std::array<float, kWsControls> ws0{};
         std::copy(std::begin(wsNow_), std::end(wsNow_), ws0.begin());
         bool curveMoved = false;
-        if (threshold_.advance(t.thresholdDb, fast_, len, kLandedDb)) {
+        if (fast_.advance(threshold_, t.thresholdDb, len, kLandedDb)) {
             thresholdNow_ = saturator::thresholdGain(static_cast<float>(threshold_.value));
             curveMoved = true;
         }
         for (int k = 0; k < kWsControls; ++k) {
-            if (ws_[k].advance(t.ws[static_cast<size_t>(k)], fast_, len, kLandedFraction)) {
+            if (fast_.advance(ws_[k], t.ws[static_cast<size_t>(k)], len, kLandedFraction)) {
                 wsNow_[k] = static_cast<float>(ws_[k].value);
                 curveMoved = true;
             }
@@ -687,10 +662,10 @@ private:
                 f.start(colorDesign(f.rate));
             }
         }
-        shelfMoved_ = base_.advance(base, slow_, len, kLandedDb);
-        peakMoved_ = depth_.advance(depth, slow_, len, kLandedDb);
-        peakMoved_ = freq_.advance(t.logFreq, slow_, len, kLandedFraction) || peakMoved_;
-        peakMoved_ = width_.advance(t.width, slow_, len, kLandedDb) || peakMoved_;
+        shelfMoved_ = slow_.advance(base_, base, len, kLandedDb);
+        peakMoved_ = slow_.advance(depth_, depth, len, kLandedDb);
+        peakMoved_ = slow_.advance(freq_, t.logFreq, len, kLandedFraction) || peakMoved_;
+        peakMoved_ = slow_.advance(width_, t.width, len, kLandedDb) || peakMoved_;
         const bool runs[2] = {run1x, run4x};
         if (shelfMoved_ || peakMoved_) {
             for (int r = 0; r < 2; ++r)
@@ -720,10 +695,11 @@ private:
                 {"clip", "Post Clip", "", 0.f, static_cast<float>(saturator::kClips - 1), 0.f, false,
                  saturator::clipLabels()},
                 {"color", "Color", "", 0.f, 1.f, 0.f, false, offOnLabels()},
-                {"base", "Base", "dB", -36.f, 36.f, 0.f},
-                {"freq", "Frequency", "Hz", 30.f, 18500.f, 1000.f, true},
-                {"width", "Width", "%", 0.f, 100.f, 50.f},
-                {"depth", "Depth", "dB", -36.f, 36.f, 0.f},
+                // (Live 12.1's names; the ids are those of before it: Base, Frequency, Width, Depth)
+                {"base", "Color Amt Low", "dB", -36.f, 36.f, 0.f},
+                {"freq", "Color Freq", "Hz", 30.f, 18500.f, 1000.f, true},
+                {"width", "Color Width", "%", 0.f, 100.f, 50.f},
+                {"depth", "Color Amt Hi", "dB", -36.f, 36.f, 0.f},
                 {"dc", "DC", "", 0.f, 1.f, 0.f, false, offOnLabels()},
                 {"hq", "Hi-Quality", "", 0.f, 1.f, 0.f, false, offOnLabels()},
                 {"ws_drive", "WS Drive", "%", 0.f, 100.f, 50.f},
@@ -746,8 +722,8 @@ private:
     int reportedLatency_ = 0;
     int channels_ = kChannels;
 
-    Glide drive_, output_, mix_, threshold_;
-    Glide ws_[kWsControls];
+    dsp::Glide drive_, output_, mix_, threshold_;
+    dsp::Glide ws_[kWsControls];
     float driveGain_ = 1.f, outGain_ = 1.f, mixNow_ = 1.f;  // at the last chunk's end
     float thresholdNow_ = 0.125893f;
     float wsNow_[kWsControls] = {};
@@ -758,7 +734,7 @@ private:
     // Color: emphasis (shelf, then peak) and de-emphasis (the peak's inverse, then the shelf's), for the
     // base rate and for the 4x path.
     bool colorRunning_ = false;
-    Glide base_, depth_, freq_, width_;            // dB, dB, log Hz, %
+    dsp::Glide base_, depth_, freq_, width_;       // dB, dB, log Hz, %
     bool shelfMoved_ = false, peakMoved_ = false;  // which sections move in this chunk
     ColorFilters color_[2];
 

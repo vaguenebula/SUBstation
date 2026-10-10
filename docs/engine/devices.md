@@ -948,10 +948,10 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
 | `mix` | Dry/Wet | % | 0..100 | 100 |
 | `clip` | Post Clip | | No Clip, Soft Clip, Hard Clip | No Clip |
 | `color` | Color | | Off, On | Off |
-| `base` | Base | dB | -36..36 | 0 |
-| `freq` | Frequency | Hz | 30..18500, log | 1000 |
-| `width` | Width | % | 0..100 | 50 |
-| `depth` | Depth | dB | -36..36 | 0 |
+| `base` | Color Amt Low | dB | -36..36 | 0 |
+| `freq` | Color Freq | Hz | 30..18500, log | 1000 |
+| `width` | Color Width | % | 0..100 | 50 |
+| `depth` | Color Amt Hi | dB | -36..36 | 0 |
 | `dc` | DC | | Off, On | Off |
 | `hq` | Hi-Quality | | Off, On (not automatable: it is the latency) | Off |
 | `ws_drive` | WS Drive | % | 0..100 | 50 |
@@ -960,6 +960,9 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
 | `ws_damp` | WS Damp | % | 0..100 | 0 |
 | `ws_depth` | WS Depth | % | 0..100 | 0 |
 | `ws_period` | WS Period | % | 0..100 | 0 |
+
+Color's four are named as in Live 12.1 (its editor captions them Amt Lo, Freq, Width and Amt Hi); their ids are the
+names they had before it (Base, Frequency, Width, Depth).
 
 - **Signal flow**, per channel (the channels are independent): x is the input after the DC filter (as DC says);
   the dry signal is x. u is x times Drive (`expDbToGain`) through Color's emphasis; the curve shapes u; then Color's
@@ -980,15 +983,15 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
     the input as it is; below 100 % the curve isn't bounded (Post Clip is the cure, as in Live).
   - tanh is `dsp::fastTanh`; sin is `saturator::sine` (reduced in double to ±pi/2, then an odd polynomial to r¹¹,
     within 6e-8 there).
-- **Color** is an EQ before the curve and its exact inverse after it: a low shelf at 150 Hz (Q 0.7071) of Base dB,
-  then a peak at Frequency (kept below 0.45 of the sample rate) of Depth dB, Width wide (0.25 · 16^(width/100)
+- **Color** is an EQ before the curve and its exact inverse after it: a low shelf at 150 Hz (Q 0.7071) of Amt Lo dB,
+  then a peak at Freq (kept below 0.45 of the sample rate) of Amt Hi dB, Width wide (0.25 · 16^(width/100)
   octaves, Q 5.77 at 0 %, 1.41 at 50 %, 0.27 at 100 %), all RBJ sections; after the curve the peak's inverse, then
   the shelf's (`saturator::inverse`: numerator and denominator swapped, stable since the sections are minimum
   phase). Where the curve is straight they cancel, so a clean sound comes through unchanged (within 1e-5); where it
-  bends, a band boosted before it saturates harder and is turned back down after (less of it: Depth +24 at 2 kHz
+  bends, a band boosted before it saturates harder and is turned back down after (less of it: Amt Hi +24 at 2 kHz
   takes 9.4 dB out of that band of a hard-clipped noise), and a band cut before it stays clean and is restored on
-  top, ringing like a resonance (Depth -24 adds 16.7 dB; Base ±24, -5.4 and +17.8 dB below 100 Hz). Switched off,
-  Base and Depth glide to 0 dB (where RBJ's sections are exactly 1), and once every state is below 1e-6 the filters
+  top, ringing like a resonance (Amt Hi -24 adds 16.7 dB; Amt Lo ±24, -5.4 and +17.8 dB below 100 Hz). Switched off,
+  Amt Lo and Amt Hi glide to 0 dB (where RBJ's sections are exactly 1), and once every state is below 1e-6 the filters
   are switched out and cleared; on at 0 dB they are switched out too, bit for bit as off.
 - **Post Clip** comes after the de-emphasis (so it catches what that adds back) and after Dry/Wet, on the blend:
   Soft is the Analog Clip curve again, Hard a clip at ±1, so at any Dry/Wet the output never passes the Output level
@@ -1012,7 +1015,7 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
   clean sound they still cancel exactly); switched off, it fades out to the 1x path, whose Color filters likewise
   start from silence.
 - **Smoothing**: the work goes in chunks of up to 16 samples. Drive, Output, Dry/Wet, Threshold and the six WS
-  controls glide through two one-poles in a row of 10 ms each (Base, Depth, Frequency in log, and Width, 20 ms), so
+  controls glide through two one-poles in a row of 10 ms each (`dsp::Glide`; Color's four, Freq in log, 20 ms), so
   a jump eases in and out; a glide moves a chunk at a time in closed form (after n samples its errors are
   `e1 cⁿ` and `cⁿ (e2 + n (1 - c) e1)`, exact at each chunk's end however automation splits the block) and lands
   exactly once within 1e-4 dB (1e-6 for fractions and log Hz). Across a chunk the gains and the curve's settings
@@ -1031,11 +1034,11 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
   and zeros, Q·max(A, 1/A) / (pi f) seconds with A = 10^(depth/40), and the shelf's lower corner,
   0.7071 / (pi · 150 · 10^(-|base|/80)); only a section whose gain isn't 0) or the DC filter (1 / (2 pi 5 Hz)):
   8 time constants of the slowest, plus 80 samples with Hi-Quality (its filters' memory), at most 5 s. 0 at the
-  defaults; 3.9 s at its longest (Depth -36 dB at 30 Hz, Width 0 %).
+  defaults; 3.9 s at its longest (Amt Hi -36 dB at 30 Hz, Width 0 %).
 - **Denormals**: every curve gives exactly 0 for 0; the DC filter's states are flushed below 1e-20, and Color's
-  sections clear both their states together once both are below it (one at a time, a slow section, at 4x or at a
-  low Frequency, can ring at about 1e-19 for ever: what clearing one takes out, its partner puts back); the FIRs
-  aren't recursive and the glides land, so silence rings out to exact zeros without the renderer's
+  sections (`dsp::Biquad`) clear both their states together once both are below it (one at a time, a slow section,
+  at 4x or at a low Freq, could ring at about 1e-19 for ever: what clearing one takes out, its partner puts back);
+  the FIRs aren't recursive and the glides land, so silence rings out to exact zeros without the renderer's
   flush-to-zero. `reset()` clears every state and snaps every glide and fade to the parameters (no pre-roll: from
   silence a 4x path is already in step); `prepare()` (a new rate) works out the glides and fades again and resets.
   On one channel it processes that one, as a stereo pair's left.
@@ -1043,11 +1046,16 @@ Clip, Output and Dry/Wet, a DC filter, and 4x oversampling (Hi-Quality). The mat
   louder channel's peak of x (after DC, before Drive) and of the output, linear, since the editor's curve has linear
   axes; `input` and `output`, one value per sample, x and the output summed to mono. The editor draws the live level
   on its curve from `in_peak` and the In/Out strips, and the input and output spectra behind Color's EQ curve.
-- **Shared with the editor**: the curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip and
-  Color's design (`colorDesign`, `colorResponseDb`) are inline in SaturatorDesign.h; the application layer's
-  `saturatorCurve()`, `saturatorSlope()` and `saturatorColorDb()`
+- **Input that isn't audio** (NaN, infinity) never reaches its states: `BuiltinProcessor::process()` takes it as
+  silence first, so the DC filter (which runs while DC is off too), Color's sections and the 4x path's filters can't
+  keep it; what comes out is exactly what zeros there would give.
+- **Shared with the editor**: the curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip,
+  Color's design (`colorDesign`, `colorResponseDb`) and Hi-Quality's factor and latency (`kHqFactorLog2`,
+  `hqLatency()`) are inline in SaturatorDesign.h; the application layer's `saturatorCurve()`, `saturatorSlope()`,
+  `saturatorColorDb()` and `saturatorHqLatency()`
   ([app/src/audio/SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h)) call them, so the curve drawn is
-  the curve played, from the same float arithmetic.
+  the curve played, from the same float arithmetic. The editor also takes the Type list's Bass Shaper and
+  Waveshaper entries and the parameters' ranges (`saturatorRange()`, what its drags stay within) from there.
 - At 48 kHz stereo on the machine it was written on (`builtin_devices_bench`): 0.09 % of one core at the defaults,
   0.12 % at Medium Curve +12 dB, 0.31 % with the Waveshaper's ripples and gate, Color and DC; with Hi-Quality too,
   and Drive at +12 dB, 0.67 % ([benchmarks/README.md](../../benchmarks/README.md)). Before `dsp::Oversampler`'s stages
@@ -2164,8 +2172,6 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   those a glide crosses, and an unfaded splice; Hi-Quality with Color and with Post Clip too); automation through the
   engine, to the sample; reset and a new rate; silence ringing out to exact zeros without flush-to-zero (slow Color
   sections at 1x and 4x too); the tail; extremes at 44.1 to 192 kHz (Hard Clip's ceiling at any Dry/Wet, within the
-  4x filters' worst gain with Hi-Quality); one channel, and channels independent; its displays (also in blocks that
-  split the meters' 128 samples).
 - [test_amp_engine.cpp](../../tests/engine/test_amp_engine.cpp): its listing; the design (each stack's make-up and its
   digital response against the analog one, the curve, its anti-aliasing exact at rest and when clipped, the morph's
   ends, the transfer's parts); each model's character and level-matched defaults; Gain, Volume (the power stage it
@@ -2184,6 +2190,9 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   any blocks); model changes faster than a morph, and a change in a morph, level-matched while a dial moves; blocks of
   1 to 1024 frames and slices bit for bit (soft onsets, silence and sleep in Dual too); sleep (its cost, Release only)
   and waking as a fresh amp.
+  4x filters' worst gain with Hi-Quality); NaN and infinity in the input coming out as zeros there would (DC and
+  Color running, at 4x, DC switched on after); one channel, and channels independent; its displays (also in blocks
+  that split the meters' 128 samples).
 - [test_erosion_engine.cpp](../../tests/engine/test_erosion_engine.cpp): its listing and 2 ms latency at any rate;
   Amount 0 a clean delay of its latency, bit for bit, and transparent through the engine (its modulators running on
   as at any Amount); a sine's sidebands as Bessel functions of the modulation index (within 0.1 %), Frequency moving

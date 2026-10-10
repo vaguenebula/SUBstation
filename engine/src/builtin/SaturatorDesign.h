@@ -4,12 +4,13 @@
 // only, and no DC): Drive sets how far up it the input reaches, and what is
 // past its straight part comes out rounded, clipped or folded.
 //
-// Color is an EQ around the curve: before it a low shelf at 150 Hz (Base) and a
-// peak (Frequency, Width, Depth), after it their exact inverses. Where the
-// curve is straight the two cancel, so a clean sound comes through unchanged;
-// where it bends, a band boosted before it saturates harder and is turned back
-// down after it (less of it in the result), and a band cut before it stays
-// clean and is restored on top (more of it, ringing like a resonance).
+// Color is an EQ around the curve: before it a low shelf at 150 Hz (Amt Lo, the
+// parameter `base`) and a peak (Freq, Width, and Amt Hi: `depth`), after it
+// their exact inverses. Where the curve is straight the two cancel, so a clean
+// sound comes through unchanged; where it bends, a band boosted before it
+// saturates harder and is turned back down after it (less of it in the
+// result), and a band cut before it stays clean and is restored on top (more
+// of it, ringing like a resonance).
 //
 // Shared by the device (builtin/devices/Saturator.cpp) and its editor (through
 // the application layer's SaturatorResponse), so the curve drawn is the very
@@ -39,11 +40,15 @@ inline constexpr float kHardCurveEdge = 1.5f;      // Hard Curve: its cubic reac
 inline constexpr float kRippleSpan = 15.f;         // Waveshaper: Period adds up to 15 more half-waves per unit
 inline constexpr float kDampScale = 0.25f;         // Waveshaper: Damp's gate is -6 dB at 0.25 * damp²
 inline constexpr float kWaveshaperLimit = 1000.f;  // its input is held within this (the cubic stays finite)
-inline constexpr float kHalfPi = 1.57079632679f;
-inline constexpr float kPiF = 3.14159265359f;
+inline constexpr float kPiF = static_cast<float>(dsp::kPi);
+inline constexpr float kHalfPi = static_cast<float>(dsp::kPi / 2.0);
 inline constexpr double kBaseHz = 150.0;  // Color's shelf
 inline constexpr double kShelfQ = 0.7071;
 inline constexpr double kMaxFreqFraction = 0.45;  // Color's peak is kept below this much of the sample rate
+inline constexpr int kHqFactorLog2 = 2;           // Hi-Quality: 4x
+
+// Hi-Quality's latency in samples: its 4x filters' (36).
+inline int hqLatency() noexcept { return dsp::Oversampler::latencyFor(kHqFactorLog2); }
 
 inline const std::vector<std::string>& typeLabels() {
     static const std::vector<std::string> kLabels = {"Analog Clip", "Soft Sine",   "Bass Shaper",  "Medium Curve",
@@ -61,19 +66,15 @@ inline const std::vector<std::string>& clipLabels() {
 // (in double, so a large argument keeps its phase), then the odd Taylor
 // polynomial to r^11, within 6e-8 there. Beyond ±65536 it holds there.
 inline float sine(float x) noexcept {
-    constexpr double kPi = 3.14159265358979323846;
     const double held = std::max(-65536.0, std::min(65536.0, static_cast<double>(x)));  // (a NaN holds at the top)
-    const double k = std::floor(held * (1.0 / kPi) + 0.5);
-    const auto r = static_cast<float>(held - k * kPi);
+    const double k = std::floor(held * (1.0 / dsp::kPi) + 0.5);
+    const auto r = static_cast<float>(held - k * dsp::kPi);
     const float r2 = r * r;
     const float p =
         r * (1.f + r2 * (-1.f / 6.f +
                          r2 * (1.f / 120.f + r2 * (-1.f / 5040.f + r2 * (1.f / 362880.f - r2 * (1.f / 39916800.f))))));
     return (static_cast<int64_t>(k) & 1) != 0 ? -p : p;
 }
-
-// 0 at 0, 1 at 1, flat at both ends: the crossfades' shape.
-inline float sCurve(float t) noexcept { return t * t * (3.f - 2.f * t); }
 
 // The Bass Shaper's Threshold (dB) as a level.
 inline float thresholdGain(float db) noexcept { return expDbToGain(db); }
@@ -227,8 +228,8 @@ inline float transfer(const Shape& s, Clip clip, float driveGain, float x) noexc
 
 // --- Color ----------------------------------------------------------------------------------
 
-// Color's emphasis (before the curve): a low shelf at kBaseHz of Base dB, then
-// a peak at Frequency of Depth dB, Width wide.
+// Color's emphasis (before the curve): a low shelf at kBaseHz of Amt Lo dB
+// (`base`), then a peak at Freq of Amt Hi dB (`depth`), Width wide.
 struct ColorDesign {
     dsp::BiquadCoefficients shelf, peak;
 };
@@ -288,12 +289,11 @@ inline double colorResponseDb(const ColorDesign& d, double f, double sampleRate)
 // gains are 0 (the sections are then exactly 1).
 inline double colorTimeConstant(double baseDb, double freq, double widthPercent, double depthDb,
                                 double sampleRate) noexcept {
-    constexpr double kPi = 3.14159265358979323846;
     double seconds = 0.0;
-    if (baseDb != 0.0) seconds = 0.7071 / (kPi * kBaseHz * std::pow(10.0, -std::abs(baseDb) / 80.0));
+    if (baseDb != 0.0) seconds = kShelfQ / (dsp::kPi * kBaseHz * std::pow(10.0, -std::abs(baseDb) / 80.0));
     if (depthDb != 0.0) {
         const double a = std::pow(10.0, std::abs(depthDb) / 40.0);
-        seconds = std::max(seconds, widthToQ(widthPercent) * a / (kPi * colorFrequency(freq, sampleRate)));
+        seconds = std::max(seconds, widthToQ(widthPercent) * a / (dsp::kPi * colorFrequency(freq, sampleRate)));
     }
     return seconds;
 }

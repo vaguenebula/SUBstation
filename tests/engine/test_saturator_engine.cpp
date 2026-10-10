@@ -7,7 +7,8 @@
 // every control changes without a click;
 // automation through the engine to the sample; reset and a new sample rate;
 // silence rings out to exact zeros; the tail covers the ringing; extremes stay
-// finite; one channel; the displays.
+// finite, and NaN or infinity in the input is silence; one channel; the
+// displays.
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +24,7 @@
 #include "builtin/SaturatorDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace saturator = sub::saturator;
@@ -34,84 +36,21 @@ constexpr int kHqLatency = 36;
 constexpr int kHqPreroll = 80;
 constexpr int kFade = kSampleRate / 100;  // the lists' and switches' 10 ms
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
+using Change = ParamChange;
 
-// A parameter's change at a frame: as automation hands it over, or (`direct`,
-// for one that isn't automatable) set between blocks, a block starting there.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
-    bool direct = false;
-};
-
-// A Saturator on its own, outside an engine, at any sample rate: processed in
-// blocks, its changes handed over as automation (so its blocks split there) as
-// the renderer does.
-class Saturator {
-public:
-    explicit Saturator(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("saturator")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
-
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-    void set(const Values& values) {
-        for (const auto& [id, value] : values) set(id, value);
-    }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames;) {
-            int64_t n = std::min<int64_t>(block, frames - start);
-            for (; next < changes.size() && changes[next].direct && changes[next].frame <= start; ++next)
-                set(changes[next].id, changes[next].value);
-            for (size_t c = next; c < changes.size(); ++c) {  // a block ends where a direct change comes
-                if (changes[c].direct && changes[c].frame > start) n = std::min(n, changes[c].frame - start);
-            }
-            while (next < changes.size() && !changes[next].direct && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), static_cast<int>(n));
-            processor_->clearAutomation();
-            start += n;
-        }
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}) {
-        run({&mono}, changes);
-        return mono;
-    }
+// A Saturator on its own, outside an engine (harness/Standalone.h), and what
+// its displays published.
+struct Saturator : Standalone {
+    explicit Saturator(double rate = kSampleRate, const Values& values = {}) : Standalone("saturator", rate, values) {}
 
     // Everything display `id` published since the last call.
     std::vector<float> display(const std::string& id) {
-        const std::vector<sub::DisplayInfo> displays = processor_->displays();
+        const std::vector<sub::DisplayInfo> displays = processor().displays();
         for (size_t i = 0; i < displays.size(); ++i) {
             if (displays[i].id != id) continue;
             std::vector<float> out;
-            positions_[i] = processor_->readDisplay(static_cast<int>(i), positions_[i], out);
+            positions_[i] = processor().readDisplay(static_cast<int>(i), positions_[i], out);
             return out;
         }
         INFO(id);
@@ -120,8 +59,6 @@ public:
     }
 
 private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
     uint64_t positions_[8] = {};
 };
 
@@ -318,10 +255,10 @@ TEST_CASE("the saturator is listed with its parameters") {
         {"Dry/Wet", "%", 0.f, 100.f, 100.f},
         {"Post Clip", "", 0.f, 2.f, 0.f},
         {"Color", "", 0.f, 1.f, 0.f},
-        {"Base", "dB", -36.f, 36.f, 0.f},
-        {"Frequency", "Hz", 30.f, 18500.f, 1000.f},
-        {"Width", "%", 0.f, 100.f, 50.f},
-        {"Depth", "dB", -36.f, 36.f, 0.f},
+        {"Color Amt Low", "dB", -36.f, 36.f, 0.f},  // (Live 12.1's names)
+        {"Color Freq", "Hz", 30.f, 18500.f, 1000.f},
+        {"Color Width", "%", 0.f, 100.f, 50.f},
+        {"Color Amt Hi", "dB", -36.f, 36.f, 0.f},
         {"DC", "", 0.f, 1.f, 0.f},
         {"Hi-Quality", "", 0.f, 1.f, 0.f},
         {"WS Drive", "%", 0.f, 100.f, 50.f},
@@ -622,7 +559,7 @@ TEST_CASE("the saturator's Color leaves clean sound alone and moves the saturati
     const Samples hqOut = play(start + Values{{"hq", 1.f}}, quiet, glides);
     CHECK_ALLCLOSE(hqOut, through, 0.0, 2e-5);
 
-    // Hi-Quality switched off while Color glides on and on (Base and Depth
+    // Hi-Quality switched off while Color glides on and on (Amt Lo and Amt Hi
     // jumping every 150 ms, as stepped automation or a knob kept moving): once
     // the fade is done, the 1x path is clean at once.
     {
@@ -964,8 +901,8 @@ TEST_CASE("the saturator's silence rings out to exact zeros") {
     CHECK(allFinite(quiet));
     CHECK(allEqual(slice(quiet, kSampleRate), 0.0));
 
-    // A slowly decaying section (Depth at 60 Hz) too, at 1x and at 4x: its two states are
-    // cleared together (cleared one at a time, it would ring at about 1e-19 for ever).
+    // A slowly decaying section (Amt Hi at 60 Hz) too, at 1x and at 4x: dsp::Biquad clears its two
+    // states together (cleared one at a time, it would ring at about 1e-19 for ever).
     for (const float hq : {0.f, 1.f}) {
         INFO(std::to_string(hq));
         Saturator low(kSampleRate, {{"hq", hq}, {"color", 1.f}, {"depth", 6.f}, {"freq", 60.f}, {"drive", 12.f}});
@@ -1066,6 +1003,37 @@ TEST_CASE("the saturator stays finite and bounded at the extremes") {
     }
     CHECK_APPROX(saturator::colorFrequency(18500.0, 22050.0), 9922.5);
     CHECK_APPROX(saturator::colorFrequency(18500.0, 44100.0), 18500.0);
+}
+
+TEST_CASE("the saturator takes NaN and infinity in its input as silence") {
+    // BuiltinProcessor::process() takes what isn't audio as 0 before the device sees it, so the
+    // DC filter (which runs even while DC is off), Color's sections and the 4x path's filters
+    // never hold it: the output is exactly what zeros there would give, also with DC switched on
+    // long after, and the device goes on playing.
+    const float bad[] = {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 3e38f};
+    const std::vector<Values> settings = {
+        {{"dc", 1.f}},
+        {{"color", 1.f}, {"depth", 10.f}},
+        {{"type", 7.f}, {"drive", 12.f}, {"color", 1.f}, {"base", -12.f}, {"depth", 10.f}, {"dc", 1.f}, {"hq", 1.f}},
+        {},
+    };
+    const std::vector<Change> dcLater = {{seconds(0.5), "dc", 1.f}};
+    for (const float value : bad) {
+        for (size_t k = 0; k < settings.size(); ++k) {
+            INFO(std::to_string(value) + ", set " + std::to_string(k));
+            Samples in = noise(kSampleRate, 11, 0.5f), zeroed = in;
+            for (const size_t at : {1000u, 1001u, 7000u}) {
+                in[at] = value;
+                zeroed[at] = 0.f;
+            }
+            const std::vector<Change> changes = settings[k].empty() ? dcLater : std::vector<Change>{};
+            const Samples out = play(settings[k], in, changes);
+            CHECK(allFinite(out));
+            CHECK_ARRAY_EQUAL(out, play(settings[k], zeroed, changes));
+            CHECK(rms(slice(out, seconds(0.9))) > 0.1);
+        }
+    }
 }
 
 TEST_CASE("the saturator on one channel, and its channels independent") {
