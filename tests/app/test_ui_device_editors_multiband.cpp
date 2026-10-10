@@ -95,6 +95,37 @@ class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::Edit
     }
     // One undo step more than `before`, nothing to redo.
     bool oneStepAfter(int before) { return undo()->index() == before + 1 && undo()->count() == undo()->index(); }
+    // Ticks with no new audio (the rest of the hold, then the meters letting go) until the band's lane is still,
+    // checking every tick that its bars and its figure agree: the change drawn runs from the in meter to the out
+    // meter, and the figure is their difference, or the last reading where the change goes on past a meter at the
+    // floor (as while playing). The first disagreement, or "" (and `ticked`, how many ticks it took).
+    QString lettingGo(MultibandGraph* graph, int band, double reading, int* ticked = nullptr) {
+        constexpr double kFloor = MultibandGraph::kFloorDb, kTolerance = 0.2;
+        for (int i = 1; i <= 600; ++i) {
+            refreshDisplays();
+            const double in = graph->inLevel(band), out = graph->outLevel(band), gain = graph->gainShown(band);
+            const auto [from, to] = graph->changeSpan(band);
+            const QString at = QStringLiteral("tick %1: in %2, out %3, shown %4, drawn from %5 to %6")
+                                   .arg(i)
+                                   .arg(in)
+                                   .arg(out)
+                                   .arg(gain)
+                                   .arg(from)
+                                   .arg(to);
+            if (to != out || (in > kFloor && std::abs(from - in) > kTolerance))
+                return at;
+            if (in > kFloor && out > kFloor && std::abs(gain - (out - in)) > kTolerance)
+                return at;
+            if ((in > kFloor) != (out > kFloor) && std::abs(gain - reading) > kTolerance)  // (one at the floor)
+                return at;
+            if (in <= kFloor && out <= kFloor && !graph->animating()) {
+                if (ticked)
+                    *ticked = i;
+                return gain == 0.0 ? QString() : at;
+            }
+        }
+        return QStringLiteral("still moving");
+    }
     // The application layer's texts: plain checks, no window.
     static bool headless(const char* function) {
         return std::strcmp(function, "ratioTexts") == 0 || std::strcmp(function, "timeTexts") == 0;
@@ -388,6 +419,38 @@ private Q_SLOTS:
         QVERIFY(value("low_below") < -44.0);
     }
 
+    void theBubbleClearsTheOffLabel() {
+        // High off, Mid's Above handle dragged: its bubble, over the lane above, would sit on High's "→ Mid" (it
+        // did, by a pixel or two). The label makes way while the bubble is on it, and comes back after.
+        const Shown s = showDevice({{QStringLiteral("high_on"), 0.0}});
+        QVERIFY(s.view && s.graph);
+        MultibandGraph* graph = s.graph;
+        QVERIFY(graph->offLabelOpacity(kHigh) > 0.99);  // (shown as it is: snapped)
+        QCOMPARE(graph->offLabelOpacity(kMid), 0.0);
+        QVERIFY(graph->bubbleRect().isEmpty());
+        const QPoint at = scenePoint(graph, graph->aboveHandle(kMid));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at + QPoint(-12, 0));
+        dragTo(at + QPoint(-24, 0));
+        QVERIFY(graph->bubbleRect().intersects(graph->offLabelRect(kHigh)));  // (they meet)
+        ticks(30);
+        QVERIFY2(graph->offLabelOpacity(kHigh) < 0.01, qPrintable(QString::number(graph->offLabelOpacity(kHigh))));
+        // Towards 0 dB the bubble leaves it: the label is back; over it again, gone.
+        dragTo(at + QPoint(50, 0));
+        QVERIFY(!graph->bubbleRect().intersects(graph->offLabelRect(kHigh)));
+        ticks(30);
+        QVERIFY(graph->offLabelOpacity(kHigh) > 0.99);
+        dragTo(at + QPoint(-24, 0));
+        ticks(30);
+        QVERIFY(graph->offLabelOpacity(kHigh) < 0.01);
+        // Let go: no bubble, the label back.
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(-24, 0));
+        QVERIFY(graph->bubbleRect().isEmpty());
+        ticks(45);
+        QCOMPARE(graph->offLabelOpacity(kHigh), 1.0);
+        QVERIFY(!graph->animating());
+    }
+
     void graphDragsARatio() {
         const Shown s = showDevice();
         QVERIFY(s.view && s.graph);
@@ -555,7 +618,7 @@ private Q_SLOTS:
     }
 
     void displaysReachTheGraph() {
-        // One band (High and Low off), Peak, Above -20 at 4:1; a tone at 0.5 (-6.02 dB).
+        // One band (High and Low off), Peak, Above -20 at 1:4; a tone at 0.5 (-6.02 dB).
         const Shown s = showDevice({{QStringLiteral("low_on"), 0.0},
                                     {QStringLiteral("high_on"), 0.0},
                                     {QStringLiteral("mode"), 0.0},
@@ -592,16 +655,18 @@ private Q_SLOTS:
         QCOMPARE(graph->staticOutDb(kMid, in), in + multibandGainDb(in, -20.0, 4.0, -40.0, 1.0, false, 100.0));
         QVERIFY(std::abs(graph->staticOutDb(kMid, in) - (in + gain)) < 0.01);
 
-        // The audio stopped: the meters fall, the gain eases home, the glow fades.
+        // The audio stopped: the meters fall, the gain change shown goes down with them (the change between them:
+        // lettingGoKeepsTheBarsTogether), the glow fades.
         ticks(75);
         QVERIFY2(graph->outLevel(kMid) < -46.0, qPrintable(QString::number(graph->outLevel(kMid))));
-        QVERIFY(std::abs(graph->gainShown(kMid)) < 0.1);
+        QVERIFY(std::abs(graph->gainShown(kMid) - (graph->outLevel(kMid) - graph->inLevel(kMid))) < 0.1);
         QVERIFY2(graph->glow(kMid, kAbove) < 0.1, qPrintable(QString::number(graph->glow(kMid, kAbove))));
-        // And once all is still, it stops repainting.
+        // And once all is still (the gain home), it stops repainting.
         ticks(300);
         QVERIFY(!graph->animating());
         QCOMPARE(graph->inLevel(kMid), MultibandGraph::kFloorDb);
         QCOMPARE(graph->outPeak(kMid), MultibandGraph::kFloorDb);
+        QCOMPARE(graph->gainShown(kMid), 0.0);
     }
 
     void aCutUnderTheFloorStopsAtTheLevelBefore() {
@@ -626,6 +691,53 @@ private Q_SLOTS:
         QCOMPARE(from, graph->inLevel(kMid));
         // Settled there: no target marker (a target under the floor is at it).
         QVERIFY(!graph->targetMarkerDb(kMid));
+    }
+
+    void lettingGoKeepsTheBarsTogether() {
+        // Once the audio stops the meters fall at 36 dB/s, for seconds; the change drawn between them and its figure
+        // go down with them rather than easing home at once (which left a lifted band's out bar in the meters'
+        // colours past its input, reading "0.0", and a cut's short of it with no orange).
+        const double in = 20 * std::log10(0.5);
+        const auto oneBand = [](const char* id, double threshold, double ratio) {
+            return sub::app::OrderedMap<QString, double>{{QStringLiteral("low_on"), 0.0},
+                                                         {QStringLiteral("high_on"), 0.0},
+                                                         {QStringLiteral("mode"), 0.0},
+                                                         {QStringLiteral("mid_") + QLatin1String(id), threshold},
+                                                         {QStringLiteral("mid_%1_ratio").arg(id), ratio}};
+        };
+        // A lift: Above -24 at 1:0.500 doubles the 18 dB over it, to +12 dB; the in meter reaches the floor first.
+        Shown s = showDevice(oneBand("above", -24.0, 0.5), tone(1000.0, kSampleRate, 0.5));
+        QVERIFY(s.view && s.graph);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);  // (within the hold: as if it played on)
+        QVERIFY2(std::abs(s.graph->gainShown(kMid) - (in + 24.0)) < 0.3,
+                 qPrintable(QString::number(s.graph->gainShown(kMid))));
+        int ticked = 0;
+        QString wrong = lettingGo(s.graph, kMid, s.graph->gainTarget(kMid), &ticked);
+        QVERIFY2(wrong.isEmpty(), qPrintable(wrong));
+        QVERIFY2(ticked > 150, qPrintable(QString::number(ticked)));  // (+12 dB to the floor: 2.6 s, 160 ticks)
+
+        // A cut: Above -20 at 1:4 takes 10.5 dB off; the out meter reaches the floor first.
+        clearHost();
+        s = showDevice(oneBand("above", -20.0, 4.0), tone(1000.0, kSampleRate, 0.5));
+        QVERIFY(s.view && s.graph);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);
+        QVERIFY(s.graph->gainShown(kMid) < -10.0);
+        wrong = lettingGo(s.graph, kMid, s.graph->gainTarget(kMid));
+        QVERIFY2(wrong.isEmpty(), qPrintable(wrong));
+
+        // A cut under the floor all along (Below -40 at 1:0.250, a -55 dB tone: out at -100): the change drawn runs
+        // from the falling in meter to the floor, its figure the reading, until the in meter is at the floor too.
+        clearHost();
+        s = showDevice(oneBand("below", -40.0, 0.25), tone(1000.0, kSampleRate, std::pow(10.0, -55.0 / 20.0)));
+        QVERIFY(s.view && s.graph);
+        engine()->renderOffline(0.0, kSampleRate / 2);
+        ticks(13);
+        QCOMPARE(s.graph->outLevel(kMid), MultibandGraph::kFloorDb);
+        QVERIFY(s.graph->gainShown(kMid) < -44.0);
+        wrong = lettingGo(s.graph, kMid, s.graph->gainTarget(kMid));
+        QVERIFY2(wrong.isEmpty(), qPrintable(wrong));
     }
 
     void glowsWhileTheBandIsWorked() {
@@ -825,6 +937,7 @@ private Q_SLOTS:
         QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
         dragTo(at + QPoint(-12, 0));
         dragTo(at + QPoint(-24, 0));
+        ticks(100);  // (High's "→ Mid" makes way for the bubble; its meter, off, falls to the floor)
         engine()->renderOffline(0.0, kSampleRate / 2);
         ticks(10);
         QTest::qWait(30);

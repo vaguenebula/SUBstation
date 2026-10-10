@@ -16,10 +16,10 @@
 //
 // It reads the device's displays (`<band>_in`, `_out`, `_gain`) each display
 // tick, the recent ones only (a stall's backlog is old audio), and eases
-// everything it draws there: meters with ballistics, the gain change, each
-// side's glow while it works, highlights under the mouse, lanes dimmed when
-// switched off or muted by a solo. Once all of it has settled, it stops
-// repainting.
+// everything it draws there: meters with ballistics, the gain change (once the
+// audio stops, going down with the meters), each side's glow while it works,
+// highlights under the mouse, lanes dimmed when switched off or muted by a solo.
+// Once all of it has settled, it stops repainting.
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -98,6 +98,11 @@ public:
         return (handle ? v.handleLight : v.blockLight)[side == Above].value;
     }
     bool animating() const { return animating_; }  // the last tick moved something (and repainted)
+    // A switched-off band's "→ Mid" label: its box, and how much it shows (with the lane's dimming; it gives way to
+    // a drag's bubble over it).
+    QRectF offLabelRect(int band) const;
+    double offLabelOpacity(int band) const;
+    QRectF bubbleRect() const;  // the drag's value, over the handle or at the mouse; empty without a drag
 
     Q_INVOKABLE QString ratioText(double ratio) const;           // "1:4.00", "1:0.500"
     Q_INVOKABLE double parseRatio(const QString& text) const;   // 0: unreadable
@@ -137,11 +142,13 @@ private:
         bool on = true;
         MeterBallistics in, out;
         Eased gain;
-        double inRead = kFloorDb, outRead = kFloorDb, gainRead = 0.0;  // the displays' latest (held a while)
+        // The displays' latest: in and out held a while, then the floor; the gain kept (lettingGoGain's).
+        double inRead = kFloorDb, outRead = kFloorDb, gainRead = 0.0;
         std::array<Eased, 2> glow;         // [Below, Above]: the side is working
         std::array<Eased, 2> handleLight;  // under the mouse or dragged
         std::array<Eased, 2> blockLight;
         Eased opacity;  // 1, 0.5 (muted by a solo), 0.35 (switched off)
+        Eased offLabel;  // 1; 0 while a drag's bubble covers it
     };
     // What the mouse is on: a threshold's handle or inside a block.
     struct Target {
@@ -167,11 +174,15 @@ private:
     std::optional<Target> targetAt(const QPointF& pos) const;
     double sideGainDb(int band, int side, double levelDb) const;  // one side's static change
     void setTargets();  // the eased values' targets from the settings, levels and the mouse
+    // The gain change shown once the audio has stopped and the meters fall: the change between them, so the bars
+    // and the figure agree all the way down (or the last reading, where it goes on past a meter at the floor).
+    static double lettingGoGain(const BandView& view);
     void setHover(const std::optional<Target>& target, const std::optional<QPointF>& at);
     void dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers);
     void writeThresholds(const Drag& drag, double deltaDb, const QString& gesture);
     void writeRatios(const Drag& drag, double factor, const QString& gesture);
     static double ratioStep(double ratio);  // held, 1:1 within the detent, 3 significant digits
+    QString bubbleText() const;
 
     void paintLane(SgPainter& p, int band) const;
     void paintBubble(SgPainter& p) const;

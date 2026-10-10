@@ -7,14 +7,15 @@
 // upward expansion; Below: downward expansion). 1:1 does nothing.
 //
 // - A side's gain change is s (L - T) past its threshold, on either side (Above:
-//   L over T; Below: L under T), s = 1 / R - 1: from -0.99 at 100:1 through 0
-//   at 1:1 to +3 at 1:4. So below the Below threshold, R > 1 lifts the level.
+//   L over T; Below: L under T), s = 1 / R - 1: from -0.99 at 1:100 through 0
+//   at 1:1 to +3 at 1:0.250 (ratios written as Live and the editor write them,
+//   "1:R"). So below the Below threshold, R > 1 lifts the level.
 // - Soft Knee bends it in over kKneeDb (6 dB) around the threshold, quadratically
 //   (the Compressor's shape).
 // - Upward compression (Below, R > 1) fades out between -72 and -96 dB
 //   (kUpwardFloorDb, kUpwardFadeDb), so silence, and whatever lies under
 //   -96 dB, isn't lifted. A noise floor above that is, as Over The Top's is
-//   (at -80 dB under a Below of -40 at 4:1, by 20 dB).
+//   (at -80 dB under a Below of -40 at 1:4, by 20 dB).
 // - Each side's change is held to -96..+30 dB (kMaxCutDb, kMaxBoostDb), and so
 //   is the band's (Amount times the sum of its sides): a gate-like expansion
 //   lets go from at most 96 dB down.

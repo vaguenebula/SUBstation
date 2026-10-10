@@ -29,6 +29,7 @@ namespace {
 const QColor kBoost(0x4f, 0xd1, 0xc5);  // a region pulled up (teal); pulled down is the accent (orange)
 const char* const kBandIds[MultibandGraph::kBands] = {"low", "mid", "high"};
 const char* const kSideNames[2] = {"Below", "Above"};
+const QString kOffLabel = QStringLiteral("→ Mid");  // over a switched-off band's lane
 
 // The time constants of what eases (s).
 constexpr double kGainSeconds = 0.03;
@@ -95,6 +96,7 @@ MultibandGraph::MultibandGraph(QQuickItem* parent) : DeviceCanvas(parent) {
         view.in.reset(kFloorDb);
         view.out.reset(kFloorDb);
         view.opacity.snap(1.0);
+        view.offLabel.snap(1.0);
     }
     // A device shown afresh is drawn as it is, not eased into.
     connect(this, &DeviceCanvas::deviceChanged, this, [this] { snap_ = true; });
@@ -214,6 +216,7 @@ void MultibandGraph::sync() {
         snap_ = false;
         for (BandView& view : bands_) {
             view.opacity.snap(view.opacity.target);
+            view.offLabel.snap(view.offLabel.target);
             for (int side : {Below, Above}) {
                 view.glow[side].snap(view.glow[side].target);
                 view.handleLight[side].snap(view.handleLight[side].target);
@@ -228,10 +231,13 @@ void MultibandGraph::setTargets() {
     const BandView &low = bands_[Low], &mid = bands_[Mid], &high = bands_[High];
     // Solo as the engine has it: a band switched off follows Mid's.
     const bool anySolo = mid.settings.solo || (low.settings.solo && low.on) || (high.settings.solo && high.on);
+    // (A drag's bubble sits over the lane above the handle, or by the mouse: a "→ Mid" under it makes way.)
+    const QRectF bubble = bubbleRect().adjusted(-1.0, -1.0, 1.0, 1.0);
     for (int b = 0; b < kBands; ++b) {
         BandView& view = bands_[std::size_t(b)];
         const bool solo = b == Mid || !view.on ? mid.settings.solo : view.settings.solo;
         view.opacity.target = !view.on ? kOffOpacity : (!anySolo || solo ? 1.0 : kMutedOpacity);
+        view.offLabel.target = !view.on && bubble.isValid() && bubble.intersects(offLabelRect(b)) ? 0.0 : 1.0;
         // Working by the level the display last reported (held a while, then the floor), not by the falling
         // meter: once the audio stops, a meter passing through a Below region isn't the band being lifted.
         const bool sounding = view.on && view.inRead > kFloorDb + 0.5;
@@ -254,6 +260,18 @@ void MultibandGraph::setTargets() {
 
 // --- Displays and animation ----------------------------------------------------------------------
 
+double MultibandGraph::lettingGoGain(const BandView& view) {
+    // The meters fall at one rate, so the change between them is the reading until one reaches the floor; from
+    // there the change goes on past it (as changeSpan draws it while playing), and the figure keeps the reading
+    // until the other meter is at the floor too.
+    const double in = view.in.level, out = view.out.level, between = out - in;
+    if (out <= kFloorDb && in > kFloorDb)  // a cut, on under the floor
+        return std::min(between, view.gainRead);
+    if (in <= kFloorDb && out > kFloorDb)  // a lift, from under it
+        return std::max(between, view.gainRead);
+    return between;  // (both at the floor: none)
+}
+
 void MultibandGraph::refreshDisplays() {
     static const char* const kKinds[3] = {"in", "out", "gain"};
     std::array<std::array<std::vector<float>, 3>, kBands> read;
@@ -265,6 +283,7 @@ void MultibandGraph::refreshDisplays() {
         }
     }
     quietTicks_ = any ? 0 : quietTicks_ + 1;
+    const bool lettingGo = !any && quietTicks_ > kHoldTicks;  // the audio stopped (or the device)
     // Only the recent values: a buffer's worth arrives at once, but after a stall the backlog is old audio.
     const auto latest = std::size_t(std::max(1.0, std::ceil(kRecentSpan * sampleRate() / kMeterSamples)));
     bool moved = false;
@@ -278,16 +297,15 @@ void MultibandGraph::refreshDisplays() {
                 view.outRead = largest(values[1], latest);
             if (!values[2].empty())
                 view.gainRead = extreme(values[2], latest);
-        } else if (quietTicks_ > kHoldTicks) {  // the audio stopped (or the device): let go
+        } else if (lettingGo) {
             view.inRead = view.outRead = kFloorDb;
-            view.gainRead = 0.0;
         }
         const MeterBallistics in = view.in, out = view.out;
         view.in.update(view.inRead, kTick, 36.0, 0.8, kFloorDb);
         view.out.update(view.outRead, kTick, 36.0, 1.0, kFloorDb);
         moved = moved || in.level != view.in.level || in.peak != view.in.peak || out.level != view.out.level ||
                 out.peak != view.out.peak;
-        view.gain.target = view.gainRead;
+        view.gain.target = lettingGo ? lettingGoGain(view) : view.gainRead;
         moved = view.gain.step(easeFraction(kTick, kGainSeconds), 1e-3) || moved;
     }
     setTargets();
@@ -300,6 +318,7 @@ void MultibandGraph::refreshDisplays() {
             moved = view.blockLight[side].step(easeFraction(kTick, kLightSeconds), 1e-3) || moved;
         }
         moved = view.opacity.step(easeFraction(kTick, kLaneSeconds), 1e-3) || moved;
+        moved = view.offLabel.step(easeFraction(kTick, kLightSeconds), 1e-3) || moved;
     }
     animating_ = moved;
     if (moved) {
@@ -440,6 +459,7 @@ void MultibandGraph::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers)
         const double sign = drag.target.side == Above ? 1.0 : -1.0;
         writeRatios(drag, std::pow(2.0, sign * drag.dy / kRatioPixels), drag.gesture);
     }
+    setTargets();  // (the bubble moved)
     update();
 }
 
@@ -555,16 +575,15 @@ void MultibandGraph::wheelEvent(QWheelEvent* event) {
 void MultibandGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QFont font7 = uiFont(7);
-    // The level axis' figures over the lanes.
+    // The level axis' figures over the lanes. (Not the +6 dB at the right edge: 6 dB from the 0, it read as one
+    // figure with it, "0 +6"; the brighter 0 dB line says what lies past it.)
     const QRectF top = lane(High);
-    for (const int db : {-80, -60, -40, -20, 0, 6}) {
+    for (const int db : {-80, -60, -40, -20, 0}) {
         const double x = xOfDb(db);
-        const QString text = typeset(db > 0 ? QStringLiteral("+%1").arg(db) : QString::number(db));
-        const int align = db == -80 ? Qt::AlignLeft : (db == 6 ? Qt::AlignRight : Qt::AlignHCenter);
-        const QRectF rect = db == -80 ? QRectF(top.left() + 1, 0, 40, kHeaderHeight)
-                                      : (db == 6 ? QRectF(top.right() - 41, 0, 40, kHeaderHeight)
-                                                 : QRectF(x - 20, 0, 40, kHeaderHeight));
-        p.drawText(rect, align | Qt::AlignVCenter, text, Theme::kTextDim, font7);
+        const bool edge = db == -80;  // (at the lanes' left edge: from it)
+        const QRectF rect = edge ? QRectF(top.left() + 1, 0, 40, kHeaderHeight) : QRectF(x - 20, 0, 40, kHeaderHeight);
+        p.drawText(rect, (edge ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignVCenter, typeset(QString::number(db)),
+                   Theme::kTextDim, font7);
     }
     for (const int band : {High, Mid, Low})
         paintLane(p, band);
@@ -699,35 +718,55 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
     p.restore();
 
     // A band switched off: the Mid band takes it.
-    const double off = std::clamp((1.0 - view.opacity.value) / (1.0 - kOffOpacity), 0.0, 1.0);
-    if (!view.on && off > 0.01) {
+    if (const double off = offLabelOpacity(band); off > 0.01) {
         p.save();
         p.setOpacity(off);
-        const QString text = QStringLiteral("→ Mid");
-        const double w = SgPainter::textWidth(text, uiFont(8)) + 12.0;
-        pill(p, QRectF(l.center().x() - w / 2, ym - 7.0, w, 14.0), text, Theme::kTextDim, uiFont(8), 230);
+        pill(p, offLabelRect(band), kOffLabel, Theme::kTextDim, uiFont(8), 230);
         p.restore();
     }
+}
+
+QRectF MultibandGraph::offLabelRect(int band) const {
+    const QRectF l = lane(band);
+    const double w = SgPainter::textWidth(kOffLabel, uiFont(8)) + 12.0;
+    return QRectF(l.center().x() - w / 2, std::round(l.center().y()) - 7.0, w, 14.0);
+}
+
+double MultibandGraph::offLabelOpacity(int band) const {
+    const BandView& view = bands_[index(band)];
+    if (view.on)
+        return 0.0;
+    return std::clamp((1.0 - view.opacity.value) / (1.0 - kOffOpacity), 0.0, 1.0) * view.offLabel.value;
+}
+
+QString MultibandGraph::bubbleText() const {
+    const Target& t = drag_->target;
+    const Settings& s = bands_[index(t.band)].settings;
+    const QString value = t.handle ? sub::app::formatValue(s.threshold(t.side), QStringLiteral("dB"))
+                                   : ratioText(s.ratio(t.side));
+    return typeset(QStringLiteral("%1 %2").arg(QLatin1String(kSideNames[t.side]), value));
+}
+
+QRectF MultibandGraph::bubbleRect() const {
+    if (!drag_)
+        return {};
+    const Target& t = drag_->target;
+    const Settings& s = bands_[index(t.band)].settings;
+    const double w = SgPainter::textWidth(bubbleText(), uiFont(8)) + 12.0, h = 16.0;
+    QPointF at = t.handle ? QPointF(xOfDb(s.threshold(t.side)), lane(t.band).top() - 2.0 - h / 2)
+                          : QPointF(drag_->at.x(), drag_->at.y() - 18.0);
+    at.setX(std::clamp(at.x(), w / 2 + 1, width() - w / 2 - 1));
+    at.setY(std::clamp(at.y(), h / 2, height() - h / 2));
+    return QRectF(at.x() - w / 2, at.y() - h / 2, w, h);
 }
 
 void MultibandGraph::paintBubble(SgPainter& p) const {
     if (!drag_)
         return;
-    const Target& t = drag_->target;
-    const Settings& s = bands_[index(t.band)].settings;
-    const QString value = t.handle ? sub::app::formatValue(s.threshold(t.side), QStringLiteral("dB"))
-                                   : ratioText(s.ratio(t.side));
-    const QString text = typeset(QStringLiteral("%1 %2").arg(QLatin1String(kSideNames[t.side]), value));
-    const QFont font = uiFont(8);
-    const double w = SgPainter::textWidth(text, font) + 12.0, h = 16.0;
-    QPointF at = t.handle ? QPointF(xOfDb(s.threshold(t.side)), lane(t.band).top() - 2.0 - h / 2)
-                          : QPointF(drag_->at.x(), drag_->at.y() - 18.0);
-    at.setX(std::clamp(at.x(), w / 2 + 1, width() - w / 2 - 1));
-    at.setY(std::clamp(at.y(), h / 2, height() - h / 2));
-    const QRectF rect(at.x() - w / 2, at.y() - h / 2, w, h);
+    const QRectF rect = bubbleRect();
     p.fillRoundedRect(rect, 3, 3, Theme::kPanelAlt);
     p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, Theme::kGridBar);
-    p.drawText(rect, Qt::AlignCenter, text, Theme::kText, font);
+    p.drawText(rect, Qt::AlignCenter, bubbleText(), Theme::kText, uiFont(8));
 }
 
 }  // namespace sub::ui

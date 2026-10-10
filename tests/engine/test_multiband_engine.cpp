@@ -449,7 +449,7 @@ TEST_CASE("multiband: attack and release are each side's, as Ableton defines the
             if (centre(v) > from && std::abs(gain[v]) > mark) last = centre(v);
         return (last - from) * 1000.0;
     };
-    // Above: 100:1 at -20 dB; the tone from -40 to -6 dB at 0.5 s, and back at 1.5 s.
+    // Above: 1:100 at -20 dB; the tone from -40 to -6 dB at 0.5 s, and back at 1.5 s.
     for (const auto& [time, attack, release] :
          std::vector<std::tuple<float, double, double>>{{100.f, 100.0, 225.0}, {50.f, 50.0, 125.0}}) {
         INFO("Time " + std::to_string(time));
@@ -951,7 +951,7 @@ TEST_CASE("multiband: its tail covers the crossovers' ringing") {
 }
 
 TEST_CASE("multiband: its displays show each band's level in and out and its gain change") {
-    // Three bands, the mid compressing 4:1 above -20 dB; 1 kHz at 0.5 (97.5 % of it in the mid band).
+    // Three bands, the mid compressing 1:4 above -20 dB; 1 kHz at 0.5 (97.5 % of it in the mid band).
     Multiband d(base({{"mid_above", -20.f}, {"mid_above_ratio", 4.f}}));
     d.play(tone(1000.0, 100 * 256.0 / kSampleRate, 0.5));
     for (const char* band : {"low", "mid", "high"})
