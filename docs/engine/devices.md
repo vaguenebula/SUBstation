@@ -507,11 +507,12 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   it fades over 10 ms. **Floor** is ramped over 20 ms; at its bottom (-75 dB) the gain is 0.
 - **Lookahead** (0, 1 or 10 ms, in whole samples: 0, 48, 480 at 48 kHz) delays the audio, and the level is the key's
   largest over the lookahead window plus the current sample: the gate opens that much before a transient reaches
-  the output, and the hold counts from when the fall reaches it. Each choice with a window has its own `dsp::SlidingMax`,
-  exactly as long as it (at 0 ms the level is the key's peak as it is); a change refills the new one from a short delay line of the key's peaks, so
-  its window holds what the key did before it was chosen, and crossfades (an S-curve, 10 ms) from the old delay tap
-  to the new. `latencySamples()` is the lookahead (48 at the default, as Live's); `idle()` returns true once when it
-  changes, so the engine realigns the tracks. `tailSamples()` is the lookahead too (what is still in the delay).
+  the output, and the hold counts from when the fall reaches it. Each choice with a window has its own
+  `dsp::SlidingMax`, exactly as long as it (at 0 ms the level is the key's peak as it is); a change refills the new
+  one from a short delay line of the key's peaks, so its window holds what the key did before it was chosen, and
+  crossfades (an S-curve, 10 ms) from the old delay tap to the new. `latencySamples()` is the lookahead (48 at the
+  default, as Live's); `idle()` returns true once when it changes, so the engine realigns the tracks.
+  `tailSamples()` is the lookahead too (what is still in the delay).
 - **Listen** puts out the key (after S/C Gain, Mix and the EQ, delayed by the lookahead as the audio is) instead
   of the gated audio, crossfading over 10 ms; on one channel, the mean of the key's two channels.
 - A change of lookahead or EQ type that comes during its crossfade waits until it is done.
@@ -521,10 +522,10 @@ the editor shares is in [GateDesign.h](../../engine/src/builtin/GateDesign.h) (n
   ramp, the lookahead and the EQ at the parameters as they are then (whether a sidechain is connected is only known
   there), so an offline render's first transient sees the key as set. `prepare()` (a new rate) sizes the delays for
   10 ms and works out the ramps again.
-- **Denormals**: the only recursive state is the key EQ's. Besides `dsp::Biquad`'s own flush of each state below
-  1e-20, both of a section's states are zeroed together once both are below 1e-15: low down or narrow (30 Hz, Q 0.1
-  or 12), its two states nearly cancel, and zeroing one alone kicks the other back up, so it would go on at about
-  1e-19 for minutes. So silence rings out to exact zeros as soon as the filter's slowest pole takes it there:
+- **Denormals**: the only recursive state is the key EQ's. `dsp::Biquad` zeroes a section's two states together
+  once both are below 1e-20, and the Gate sooner, once both are below 1e-15: low down or narrow (30 Hz, Q 0.1 or 12),
+  the two states nearly cancel, and zeroing one alone would kick the other back up, so it would go on at about 1e-19
+  for minutes. So silence rings out to exact zeros as soon as the filter's slowest pole takes it there:
   0.08 s for the default high-pass after loud noise, 4 s for a bell 15 dB down at 30 Hz and Q 0.1 (a real pole
   near 1 Hz), 8.5 s at most (a bell 15 dB up at 30 Hz and Q 12, the key 24 dB up).
 - **Displays**, one value per 256 samples (`gate::kDisplaySamples`), pushed together so they stay in step: `input`
@@ -1230,8 +1231,8 @@ clean delay of its latency.
   the device is transparent, to the sample. `tailSamples()` is 2D: no sample stays longer. Nothing in it decays (the
   delay has no feedback, the sections always hear noise), so silence comes out as exact zeros 2D samples on.
 - **Reset**: the line and sections cleared, the noises reseeded with the instance's own seeds and the phasor
-  restarted (its renders repeat exactly, noise included), every glide and ramp where the parameters are. `prepare()` (a new rate) works out D, the limit and
-  the glides again, and resets.
+  restarted (its renders repeat exactly, noise included), every glide and ramp where the parameters are.
+  `prepare()` (a new rate) works out D, the limit and the glides again, and resets.
 - **Displays**:
 
   | id | Values | Each |
@@ -1492,8 +1493,9 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   slow, a quieter rounded triangle when fast (0.46 high at 5 Hz), its shape following the rate (glided, so a jump of
   Freq doesn't jump its level). Random glides from one cycle's value to the next's, Random S&H holds one a cycle,
   both from the cycle's number (renders repeat exactly). LFO 2 is a triangle. The right channel runs Phase ahead of
-  the left (gliding to it the short way round, 50 ms), or with Spin `1 + spin` times as fast. Synced while the song plays an
-  LFO is at the song's position (`(beat / division)`, cycles and all); stopped, it runs free at the tempo's rate.
+  the left (gliding to it the short way round, 50 ms), or with Spin `1 + spin` times as fast. Synced while the song
+  plays an LFO is at the song's position (`(beat / division)`, cycles and all); stopped, it runs free at the tempo's
+  rate.
   Where its phase jumps (a new waveform, Sync switched on, a synced division changed, the transport starting or
   looping) its value crossfades from where it was over 20 ms (an S-curve) rather than jump.
 - **Envelope follower** (Env Follow): the input's peak (the louder channel; before Safe Bass) with Attack and Release,
@@ -1550,10 +1552,11 @@ Ableton's Phaser-Flanger: a phaser, a flanger and a doubler in one device, swept
   where a comb is finer than the columns, its top and bottom at 48 fixed angles of the turning factor (the same each
   time, so the band stands still as the sweep moves). It designs the Phaser's stage and works out Output's gain once
   per curve (the same sums `responseDb()` does per point): 0.1-0.3 ms for the editor's 226 columns. The application
-  layer's `phaserResponseDb()` and `phaserCurvePoints()` ([app/src/audio/PhaserResponse.h](../../app/src/audio/PhaserResponse.h))
-  wrap them, so the curve drawn is the sound; `curve()` also gives each column's turn (the radians the wet path turns
-  across it, what tells the dense columns), with which the graph draws a comb finer than it can show as a line as a
-  band too. `wetTransfer()` is the wet path alone (what Dry/Wet at 100 % plays, before Output).
+  layer's `phaserResponseDb()` and `phaserCurvePoints()`
+  ([app/src/audio/PhaserResponse.h](../../app/src/audio/PhaserResponse.h)) wrap them, so the curve drawn is the
+  sound; `curve()` also gives each column's turn (the radians the wet path turns across it, what tells the dense
+  columns), with which the graph draws a comb finer than it can show as a line as a band too. `wetTransfer()` is the
+  wet path alone (what Dry/Wet at 100 % plays, before Output).
 - **Cost** (`builtin_devices_bench`, 48 kHz stereo): about 0.2 % of one core at the defaults (0.21 %, the Disperser
   0.21 % in the same runs); the Flanger 0.30 % and the Doubler 0.25 %; 42 notches, Feedback 95 %, Amount 100 %, Random
   S&H 0.65 %; a deep, fast sweep (Amount 100 %, a 5 Hz sine: the stages designed every sample) 0.49 %; Warmth at 100 %
@@ -1905,22 +1908,23 @@ readonly property var editors: ({
   the engine's own biquad); the Limiter the level over the last 1.5 s with the gain reduction hanging from the top,
   In, GR and Out meters, and the Ceiling (or with Maximize the Threshold) as a line to drag, Soft Clip's band under
   it (from `limiter::scales` and its knee); Multiband Dynamics a lane per band, its Above and Below regions with their
-  thresholds and ratios to drag, over each band's level before and after its dynamics (`<band>_in`, `_out`, `_gain`;
+  thresholds and ratios to drag, and each band's level before and after its dynamics (`<band>_in`, `_out`, `_gain`;
   the static curve from `multiband::staticGainDb`); the Spectral Compressor the spectra of `input` and `output` with
-  the threshold and Below lines (from `spectral::thresholdDb` and `belowDb`) and the Focus band to drag, and the cut
-  or lift at each frequency (`gain`, against `key`); the Saturator its curve (from `saturator::transfer`) lit by
-  `in_peak`, and Color's EQ (from `saturator::colorResponseDb`) over spectra of `input` and `output`; the Amp its
-  transfer and tone curves (from `amp::Transfer` and `amp::toneResponseDb`), its tubes glowing as hard as each stage
-  is driven (`drive1`..`drive3`, `power`, `sag`), a pilot lamp and an output meter; Erosion its noise band (from
-  `erosion::bandMagnitude`) on an X-Y field of Frequency and Amount over spectra of `input` and `output`, shimmering
-  with `erosion`, and a scope of `mod_l` against `mod_r`; the Delay its filter over a spectrum of `input`; the
-  Chorus-Ensemble each voice's delay as it moves (from `ChorusDesign.h`'s maths at the LFO's `phase`, glowing with
-  `level`), dragged for the Rate and the Amount; the Phaser-Flanger its response (from `phaser::curve`) at the sweep
-  the engine publishes (`sweep_l`, `sweep_r`, `q_l`, `q_r`), its notches marked, and the LFO's shape and phase; the
-  Reverb its input filter's band over a spectrum of `signal`, its early reflections as particles Spin swings
-  (`early`, `spin`), and its decay time per frequency (from `reverb::decaySeconds`) over the tail's spectrum
-  (`tail`, `diffuse`), each with handles to drag; the Disperser its group delay in ms on a fixed log axis (from `disperser::groupDelayMs`, the engine's own stages); the EQ its
-  bands' curves (from `eq::responseDb`) over an analyzer of `input` and `output`; the Sidechain its curve, its
+  the threshold and Below lines (from `spectral::thresholdDb` and `belowDb`) and the Focus band to drag, the cut or
+  lift at each frequency (`gain`) and where the levels compared (`key`) are over the threshold; the Saturator its
+  curve (from `saturator::transfer`) lit by `in_peak`, and Color's EQ (from `saturator::colorResponseDb`) over spectra
+  of `input` and `output`; the Amp its transfer and tone curves (from `amp::Transfer` and `amp::toneResponseDb`),
+  its tubes glowing as hard as each stage is driven (`drive1`..`drive3`, `power`, `sag`), a pilot lamp and an output
+  meter; Erosion its noise band (from `erosion::bandMagnitude`) on an X-Y field of Frequency and Amount over spectra
+  of `input` and `output`, shimmering with `erosion`, and a scope of `mod_l` against `mod_r`; the Delay its filter
+  over a spectrum of `input`; the Chorus-Ensemble each voice's delay as it moves (from `ChorusDesign.h`'s maths at
+  the LFO's `phase`, glowing with `level`), dragged for the Rate and the Amount; the Phaser-Flanger its response (from
+  `phaser::curve`) at the sweep the engine publishes (`sweep_l`, `sweep_r`, `q_l`, `q_r`), its notches marked, and
+  the LFO's shape and phase; the Reverb its input filter's band over a spectrum of `signal`, its early reflections as
+  particles Spin swings (`early`, `spin`), and its decay time per frequency (from `reverb::decaySeconds`) over the
+  tail's spectrum (`tail`, `diffuse`), each with handles to drag; the Disperser its group delay in ms on a fixed log
+  axis (from `disperser::groupDelayMs`, the engine's own stages); the EQ its bands' curves (from `eq::responseDb`)
+  over an analyzer of `input` and `output`; the Sidechain its curve, its
   playhead from `phase` and its fit to the kick (`key`, against `input`); the Sampler the sample's waveform as it plays
   with its markers, its loop, fades or slices (the engine's own, through the application layer's `sampleSlices`) and
   the playhead from `position` (drop or double-click to load a sample; loading is an undoable state change through
@@ -1972,11 +1976,11 @@ See [ui/device-view.md](../ui/device-view.md#device-editors) for the editors and
    - Parameter ids are saved in projects and automation keys (`device:<device id>:<param id>`): don't rename them
      once released. Use `logScale` for frequencies and times, `valueLabels` for lists, `steps` for whole numbers.
    - What other devices already do is in [builtin/Dsp.h](../../engine/src/builtin/Dsp.h) (filter sections,
-     interpolation, envelopes, rendering between note events), [builtin/DspBlocks.h](../../engine/src/builtin/DspBlocks.h)
-     (one-pole and DC filters, a delay line, an envelope follower, noise, a fast tanh, LFOs and synced rates, biquads,
-     a crossover, a sliding maximum, oversampling) and [rt/RtUtils.h](../../engine/src/rt/RtUtils.h)
-     (smoothing, dB, one-pole coefficients): use them rather than writing them again. They are inline, so they
-     cost what the same code written out would.
+     interpolation, envelopes, rendering between note events),
+     [builtin/DspBlocks.h](../../engine/src/builtin/DspBlocks.h) (one-pole and DC filters, a delay line, an envelope
+     follower, noise, a fast tanh, LFOs and synced rates, biquads, a crossover, a sliding maximum, oversampling) and
+     [rt/RtUtils.h](../../engine/src/rt/RtUtils.h) (smoothing, dB, one-pole coefficients): use them rather than
+     writing them again. They are inline, so they cost what the same code written out would.
    - An instrument writes its output (it is first on a MIDI track) and reads notes from `ctx.inEvents`; an effect
      processes in place.
    - A sidechain: override `hasSidechain()` and read `sidechain(c)` / `sidechainConnected()` in `render()`.
@@ -1999,8 +2003,8 @@ See [ui/device-view.md](../ui/device-view.md#device-editors) for the editors and
    DspBlocks.h gets a case in [tests/engine/test_dsp_blocks.cpp](../../tests/engine/test_dsp_blocks.cpp)), and if it
    has an editor, give the editor a test file of its own, `tests/app/test_ui_device_editors_mydevice.cpp` (as
    [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) is), on the host in
-   [tests/app/support/EditorHarness.h](../../tests/app/support/EditorHarness.h) (every `test_*.cpp` there is a program
-   of its own; nothing needs listing), and add its kind to `registry()` in
+   [tests/app/support/EditorHarness.h](../../tests/app/support/EditorHarness.h) (each `test_*.cpp` in tests/app is a
+   program of its own; nothing needs listing), and add its kind to `registry()` in
    [tests/app/test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp), which checks the registry. See
    [testing.md](../testing.md).
 6. **Docs**: add it to this page and to [guide/devices.md](../guide/devices.md).
@@ -2041,13 +2045,15 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   nothing below the knee), attack holding on low notes, sidechain keying, and its displays.
 - [test_gate_engine.cpp](../../tests/engine/test_gate_engine.cpp): its listing; opening at the threshold and closing
   below Return, after Hold, over Attack and Release, to the sample (and opening again from where a release had got
-  to; a Hold changed while it counts applying at once); Floor (silence, no effect, in between) and Flip; lookahead as latency (opening early, the hold counted from
-  the output, a new window holding what came before it, `idle()`, the engine lining the output up with the
-  timeline); keying from a sidechain, its gain and mix; the key EQ (each type plays as `gate::keyFilterDb` draws
-  it; a new type, or the EQ switched on, fading between two settled outputs, with nothing to settle); listening; every control moving without a jump (the largest steps) and click-free (a 6th-difference measure
-  against the same change made at once); automation to the sample whatever the block size, and through the engine;
-  reset and a new rate; the extremes at 8 to 192 kHz, stability, and silence ringing out to exact zeros (bounded by
-  the key EQ's own poles); one channel (and back to two without the right's old delay); the displays.
+  to; a Hold changed while it counts applying at once); Floor (silence, no effect, in between) and Flip; lookahead as
+  latency (opening early, the hold counted from the output, a new window holding what came before it, `idle()`, the
+  engine lining the output up with the timeline); keying from a sidechain, its gain and mix; the key EQ (each type
+  plays as `gate::keyFilterDb` draws it; a new type, or the EQ switched on, fading between two settled outputs, with
+  nothing to settle); listening; every control moving without a jump (the largest steps) and click-free (a
+  6th-difference measure against the same change made at once); automation to the sample whatever the block size,
+  and through the engine; reset and a new rate; the extremes at 8 to 192 kHz, stability, and silence ringing out to
+  exact zeros (bounded by the key EQ's own poles); one channel (and back to two without the right's old delay); the
+  displays.
 - [test_limiter_engine.cpp](../../tests/engine/test_limiter_engine.cpp): its listing, latency and tail; below the
   ceiling the input, the lookahead late; no sample over the ceiling for every mode, routing and link and other settings
   (sines, noise, lone spikes, a square, Nyquist); a lone peak caught exactly, the gain falling only over the S - 1

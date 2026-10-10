@@ -329,8 +329,8 @@ readonly property var editors: ({
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
   `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 608,
   Multiband Dynamics 800, Spectral Compressor 924, Saturator 756, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
-  534, Phaser-Flanger 732, or 906 with More open, Reverb 890, Disperser 544, Sampler 760, Sidechain 720, EQ 580, or
-  756 with its band controls); it may change. It gets the body's whole height and grows its graphs into it (6 px
+  534, Phaser-Flanger 732, or 906 with More open, Reverb 890, Disperser 544, EQ 580, or 756 with its band controls,
+  Sidechain 720, Sampler 760); it may change. It gets the body's whole height and grows its graphs into it (6 px
   from the top and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs, and `pageNames` (the title bar's tabs instead of
   its arrows); `menuActions` (a list of `Action`s the

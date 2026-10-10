@@ -323,8 +323,8 @@ What the application needs besides an `Engine` is plain functions and singletons
 | The Chorus-Ensemble's voices' delays | `chorus::layout()`, `delayMs()`, `voicePhase()` and `peakDetuneCents()` ([builtin/ChorusDesign.h](../../engine/src/builtin/ChorusDesign.h); the application's `chorusDelayMs()`, `chorusVoicePhase()` and `chorusPeakDetuneCents()` wrap them, see [devices.md](devices.md)) |
 | The Phaser-Flanger's response and curve | `phaser::responseDb()`, `phaser::curve()`, `phaser::notchFrequencies()` ([builtin/PhaserDesign.h](../../engine/src/builtin/PhaserDesign.h); the application's `phaserResponseDb()` and `phaserCurvePoints()` wrap them, see [devices.md](devices.md)) |
 | The Reverb's decay curve, input filter and reflections | `reverb::decaySeconds()`, `inputFilterDb()`, `earlyTaps()` and `spinPan()` ([builtin/ReverbDesign.h](../../engine/src/builtin/ReverbDesign.h); the application's `reverbDecaySeconds()`, `reverbInputFilterDb()`, `reverbEarlyTaps()` and `reverbSpinPan()` wrap them, see [devices.md](devices.md)) |
-| An EQ band's response | `eq::design()` and `eq::responseDb()` ([builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h); the application's `eqResponseDb()` wraps them, see [devices.md](devices.md)) |
 | The Disperser's group delay | `disperser::groupDelayMs()` ([builtin/DisperserDesign.h](../../engine/src/builtin/DisperserDesign.h); the application's `disperserGroupDelayMs()` wraps it, see [devices.md](devices.md)) |
+| An EQ band's response | `eq::design()` and `eq::responseDb()` ([builtin/EqDesign.h](../../engine/src/builtin/EqDesign.h); the application's `eqResponseDb()` wraps them, see [devices.md](devices.md)) |
 
 - Long-running calls (loading sources, opening devices, plug-in state, recording, offline renders,
   `RenderJob::finish()`, `idle()`) block the thread that calls them; the bridge decodes on threads
