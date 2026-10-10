@@ -150,10 +150,10 @@ int64_t samples(double seconds, double rate = kSampleRate) {
     return static_cast<int64_t>(std::llround(seconds * rate));
 }
 
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d, a
-// kink (a step in the slope) of s as up to 6 s; a smooth signal well below
+// The largest 6th difference over [from, to): a steep high-pass, about 8 times
+// (18 dB) more sensitive at Nyquist than at a quarter of the sample rate and
+// 2 x 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 10 d,
+// a kink (a step in the slope) of s as up to 6 s; a smooth signal well below
 // Nyquist hardly at all.
 double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
     std::vector<double> d(x.begin(), x.end());
@@ -410,11 +410,34 @@ TEST_CASE("the chorus's voices, as designed") {
     CHECK_APPROX_TOL(chorus::limitFeedback(1.001f), 1.001, 0.0, 1e-6);
     CHECK(chorus::limitFeedback(100.f) <= 2.f);
     CHECK_EQ(chorus::limitFeedback(-100.f), -chorus::limitFeedback(100.f));
-    // The warmth: the identity at 0, unity slope at silence, 0 in for 0 out.
-    const chorus::WarmShape off = chorus::warmShape(0.0), full = chorus::warmShape(1.0);
-    for (const float x : {-1.5f, -0.3f, 0.f, 0.2f, 0.9f}) CHECK_EQ(chorus::warm(off, x), x);
-    CHECK_EQ(chorus::warm(full, 0.f), 0.f);
-    CHECK_APPROX_TOL(chorus::warm(full, 1e-4f) / 1e-4f, 1.0, 0.0, 1e-3);
+    // The warmth: the identity at 0, unity slope at silence, 0 in for 0 out, bounded (a colour, not a
+    // limiter: a full-scale value loses only a little).
+    for (const double x : {-1.5, -0.3, 0.0, 0.2, 0.9}) CHECK_EQ(chorus::warm(0.0, x), x);
+    CHECK_EQ(chorus::warm(1.0, 0.0), 0.0);
+    CHECK_APPROX_TOL(chorus::warm(1.0, 1e-6) / 1e-6, 1.0, 0.0, 1e-5);
+    CHECK_APPROX_TOL(chorus::warm(1.0, -1e-6) / -1e-6, 1.0, 0.0, 1e-5);
+    CHECK_APPROX_TOL(chorus::warm(1.0, 1.0), 0.78, 0.0, 0.01);  // (the curve before: 0.36)
+    CHECK_APPROX_TOL(chorus::warm(1.0, -1.0), -0.91, 0.0, 0.01);
+    const chorus::WarmCurve curve;
+    CHECK_APPROX_TOL(curve(1e9), 1.41, 0.0, 0.01);
+    CHECK_APPROX_TOL(curve(-1e9), -1.71, 0.0, 0.01);
+    // Its antiderivative is its antiderivative.
+    for (const double x : {-3.0, -0.8, -0.15, 0.0, 0.4, 1.2, 2.5}) {
+        const double h = 1e-4, slope = (curve.integral(x + h) - curve.integral(x - h)) / (2.0 * h);
+        CHECK_APPROX_TOL(slope, curve(x), 0.0, 1e-8);
+    }
+    // Played through the stage (its bend averaged over each step), a slow sound is the curve's, Warmth 0 the
+    // input bit for bit, and silence silence.
+    chorus::WarmStage stage, dry;
+    double worst = 0.0;
+    for (int i = 0; i < 4800; ++i) {
+        const double x = 0.9 * std::sin(2.0 * kPi * 50.0 * i / kSampleRate) + (i % 7 == 0 ? 1e-6 : 0.0);
+        worst = std::max(worst, std::abs(stage.process(x, 1.0) - chorus::warm(1.0, x)));
+        CHECK_EQ(dry.process(x, 0.0), x);
+    }
+    CHECK(worst < 1e-3);
+    stage.reset();
+    for (int i = 0; i < 10; ++i) CHECK_EQ(stage.process(0.0, 1.0), 0.0);
     CHECK_EQ(chorus::warmLowpassCoefficient(0.0, 48000.0), 0.0);
     CHECK_APPROX(chorus::warmLowpassCoefficient(1.0, 48000.0), std::exp(-2.0 * kPi * 4000.0 / 48000.0));
     CHECK(chorus::warmLowpassCoefficient(1e-6, 48000.0) < 1e-12);
@@ -427,13 +450,31 @@ TEST_CASE("fully dry, the chorus passes the input bit for bit") {
     const Samples left = noise(kSampleRate, 1), right = noise(kSampleRate, 2), third = noise(kSampleRate, 3);
     for (const float mode : {0.f, 1.f, 2.f}) {
         INFO(std::to_string(mode));
-        Chorus c(kSampleRate, {{"mode", mode}, {"feedback", 90.f}, {"warmth", 100.f}, {"hp", 1.f}, {"mix", 0.f},
-                               {"amount", 100.f}, {"rate", 7.f}, {"width", 200.f}, {"output", 6.f}});
+        const Values values = {{"mode", mode},    {"feedback", 90.f}, {"warmth", 100.f}, {"mix", 0.f},
+                               {"amount", 100.f}, {"rate", 7.f},      {"width", 200.f},  {"output", 6.f}};
+        Chorus c(kSampleRate, values);
         Samples l = left, r = right, t = third;
         c.run({&l, &r, &t});
         CHECK_ARRAY_EQUAL(l, left);
         CHECK_ARRAY_EQUAL(r, right);
-        CHECK_ARRAY_EQUAL(t, third);  // (a third channel is never touched)
+        CHECK_ARRAY_EQUAL(t, third);
+
+        // The high-pass on, the dry goes through its crossover (in phase with the wet's lows): the crossover's
+        // lows and highs summed, an all-pass, flat in level.
+        Chorus filtered(kSampleRate, with(values, {{"hp", 1.f}, {"hp_freq", 300.f}}));
+        const auto [fl, fr] = filtered.play(left, right);
+        const sub::dsp::CrossoverCoefficients coefficients = sub::dsp::CrossoverCoefficients::at(300.0, kSampleRate);
+        for (const auto& [in, out] : {std::pair{&left, &fl}, std::pair{&right, &fr}}) {
+            sub::dsp::Crossover crossover;
+            Samples want(in->size());
+            for (size_t i = 0; i < in->size(); ++i) {
+                float low = 0.f, high = 0.f;
+                crossover.process(coefficients, (*in)[i], low, high);
+                want[i] = low + high;
+            }
+            CHECK_ALLCLOSE(*out, want, 0.0, 1e-6);
+            CHECK_APPROX_TOL(rms(*out) / rms(*in), 1.0, 0.0, 0.01);
+        }
     }
 }
 
@@ -594,13 +635,23 @@ TEST_CASE("the chorus's feedback repeats the echoes; Invert flips them; it holds
         const Samples in = noise(kSampleRate, 4);
         CHECK_ARRAY_EQUAL(on.play(in), off.play(in));
     }
-    // Feedback 100 on loud noise: the limiter holds it.
+    // Feedback 100 on loud noise: stable (the modulation smears the comb, and a loop gain of 0.97 is stable).
     for (const bool invert : {false, true}) {
         Chorus c(kSampleRate, {{"feedback", 100.f}, {"invert", invert ? 1.f : 0.f}, {"mix", 100.f}});
         const auto [l, r] = c.play(noise(10 * kSampleRate, 5), noise(10 * kSampleRate, 6));
         CHECK(allFinite(l) && allFinite(r));
         INFO("peak " + std::to_string(std::max(maxAbs(l), maxAbs(r))));
         CHECK(std::max(maxAbs(l), maxAbs(r)) < 20.0);
+    }
+    // A tone on the loop's resonance (100 Hz round 10 ms), still: the echoes would build up towards 0.5 / 0.03,
+    // about 17 (10 within these 5 s); the limiter holds what is fed back to 2, so the line holds the tone and 2
+    // at most.
+    {
+        Chorus c(kSampleRate, with(kPure, {{"taps", 0.f}, {"time", 2.f}, {"feedback", 100.f}}));
+        const Samples y = c.play(tone(100.0, 5.0));
+        INFO("peak " + std::to_string(maxAbs(y)));
+        CHECK(maxAbs(y) < 2.6);
+        CHECK(maxAbs(y) > 2.0);  // (it does build up to the limiter)
     }
     // A DC offset passes once, as through any delay, and doesn't build up round the loop.
     {
@@ -614,7 +665,7 @@ TEST_CASE("the chorus's feedback repeats the echoes; Invert flips them; it holds
     }
 }
 
-TEST_CASE("the chorus's Warmth distorts and darkens, gently at low levels, and doesn't alias much") {
+TEST_CASE("the chorus's Warmth colours gently, darkens, and doesn't alias much") {
     constexpr size_t kN = 1 << 15;
     const std::vector<double> window = hanning(kN);
     const auto analyse = [&](float warmth, double freq, double amplitude) {
@@ -624,26 +675,38 @@ TEST_CASE("the chorus's Warmth distorts and darkens, gently at low levels, and d
     };
     const double f200 = binFrequency(200.0, kN);
     const size_t k200 = binOf(f200, kN);
-    const auto thd = [&](const Samples& y, double* second) {
+    // The fundamental's level against the tone's, in dB, and the THD; `second`: the 2nd harmonic against it.
+    const auto harmonics = [&](const Samples& y, double amplitude, double* second) {
         const std::vector<double> s = spectrum(y, window);
         const double fundamental = binLevel(s, k200);
+        const double reference = binLevel(spectrum(slice(tone(f200, 1.0, kSampleRate, amplitude), 0,
+                                                         static_cast<int64_t>(kN)),
+                                                   window),
+                                          k200);
         double power = 0.0;
         for (size_t h = 2; h * k200 + 1 < s.size(); ++h) power += std::pow(binLevel(s, h * k200), 2);
         if (second) *second = binLevel(s, 2 * k200) / fundamental;
-        return std::sqrt(power) / fundamental;
+        return std::pair{20.0 * std::log10(fundamental / reference), std::sqrt(power) / fundamental};
     };
     // Warmth 0: the delayed tone, untouched.
-    CHECK(thd(analyse(0.f, f200, 0.5), nullptr) < 1e-4);
-    // Warmth 100: distorted, with even harmonics (the bias), and no DC.
+    CHECK(harmonics(analyse(0.f, f200, 0.5), 0.5, nullptr).second < 1e-4);
+    // Warmth 100: a little distortion, mostly even (the bias), no DC, and the level kept: a colour, not a
+    // limiter (at -6 dBFS 2.5 % and 0.3 dB down; at 0 dBFS 1.1 dB down).
     {
         const Samples y = analyse(100.f, f200, 0.5);
         double second = 0.0;
-        const double distortion = thd(y, &second);
-        INFO("THD " + std::to_string(100.0 * distortion) + " %, 2nd " + std::to_string(20.0 * std::log10(second)) +
-             " dBc");
-        CHECK(distortion > 0.03);
+        const auto [levelDb, distortion] = harmonics(y, 0.5, &second);
+        INFO("-6 dBFS: " + std::to_string(levelDb) + " dB, THD " + std::to_string(100.0 * distortion) + " %, 2nd " +
+             std::to_string(20.0 * std::log10(second)) + " dBc");
+        CHECK(distortion > 0.01);
+        CHECK(distortion < 0.04);
         CHECK(20.0 * std::log10(second) > -40.0);
+        CHECK(levelDb > -0.6);
         CHECK(std::abs(mean(y)) < 1e-3);
+        const auto [fullDb, fullDistortion] = harmonics(analyse(100.f, f200, 1.0), 1.0, nullptr);
+        INFO("0 dBFS: " + std::to_string(fullDb) + " dB, THD " + std::to_string(100.0 * fullDistortion) + " %");
+        CHECK(fullDb > -1.5);
+        CHECK(fullDistortion < 0.08);
     }
     // Quiet, it keeps its level, and the low-pass takes the highs down as its one-pole does.
     {
@@ -659,12 +722,12 @@ TEST_CASE("the chorus's Warmth distorts and darkens, gently at low levels, and d
              std::to_string(20.0 * std::log10(predicted)));
         CHECK(std::abs(20.0 * std::log10(gain10k / predicted)) < 0.3);
     }
-    // Aliasing: a loud 5 kHz tone's harmonics above Nyquist fold back at least 40 dB down.
-    {
-        const double f5k = binFrequency(5000.0, kN);
-        const size_t k = binOf(f5k, kN);
-        const std::vector<double> s = spectrum(analyse(100.f, f5k, 0.5), window);
-        const double fundamental = binLevel(s, k);
+    // Aliasing: loud tones' harmonics above Nyquist fold back far down (the curve is anti-aliased through
+    // its antiderivative): every component neither a harmonic below Nyquist nor DC, against the tone.
+    for (const auto& [approx, limitDb] : {std::pair{5000.0, -70.0}, {9000.0, -45.0}, {13000.0, -42.0}}) {
+        const double f = binFrequency(approx, kN);
+        const size_t k = binOf(f, kN);
+        const std::vector<double> s = spectrum(analyse(100.f, f, 0.5), window);
         double worst = 0.0;
         for (size_t b = 3; b < s.size(); ++b) {
             const size_t nearest = (b + k / 2) / k * k;  // the nearest harmonic below Nyquist
@@ -672,9 +735,8 @@ TEST_CASE("the chorus's Warmth distorts and darkens, gently at low levels, and d
             worst = std::max(worst, s[b]);
         }
         const double aliasDb = 20.0 * std::log10(worst / s[k]);
-        INFO("the largest alias " + std::to_string(aliasDb) + " dB under the fundamental");
-        CHECK(aliasDb < -40.0);
-        (void)fundamental;
+        INFO(std::to_string(approx) + " Hz: the largest alias " + std::to_string(aliasDb) + " dB under the tone");
+        CHECK(aliasDb < limitDb);
     }
 }
 
@@ -702,6 +764,23 @@ TEST_CASE("the chorus's high-pass keeps the lows out of the delays") {
             CHECK(rest > -20.0);
         }
     }
+
+    // Half wet, the lows below the high-pass come out whole: the dry goes through the crossover too, in phase
+    // with the wet's lows (a dry left as it was would cancel them round the frequency, by 13 dB at it).
+    for (const float amount : {0.f, 50.f}) {
+        for (const double freq : {100.0, 1000.0}) {
+            for (const double ratio : {0.5, 0.7}) {
+                Chorus c(kSampleRate, {{"amount", amount}, {"mix", 50.f}, {"hp", 1.f},
+                                       {"hp_freq", static_cast<float>(freq)}});
+                const Samples in = tone(ratio * freq, 2.0);
+                const Samples y = c.play(in);
+                const double gainDb = 20.0 * std::log10(rms(slice(y, samples(1.0))) / rms(slice(in, samples(1.0))));
+                INFO("Amount " + std::to_string(amount) + ", " + std::to_string(ratio * freq) + " Hz under " +
+                     std::to_string(freq) + " Hz: " + std::to_string(gainDb) + " dB");
+                CHECK(std::abs(gainDb) < 1.2);
+            }
+        }
+    }
 }
 
 TEST_CASE("the chorus's Width, and one channel or three") {
@@ -723,6 +802,24 @@ TEST_CASE("the chorus's Width, and one channel or three") {
     }
     CHECK_ALLCLOSE(side2, side1, 0.0, 1e-5);  // the side doubled
     CHECK_ALLCLOSE(mid2, mid1, 0.0, 1e-5);    // the middle as it was
+
+    // Width is Chorus's and Ensemble's: in Vibrato it changes nothing (the sides Offset apart stay as they are).
+    {
+        const Values vibrato = {{"mode", 2.f}, {"offset", 90.f}, {"mix", 100.f}};
+        const auto [lw, rw] = Chorus(kSampleRate, with(vibrato, {{"width", 0.f}})).play(a, b);
+        const auto [ln, rn] = Chorus(kSampleRate, with(vibrato, {{"width", 100.f}})).play(a, b);
+        CHECK_ARRAY_EQUAL(lw, ln);
+        CHECK_ARRAY_EQUAL(rw, rn);
+    }
+
+    // A third channel passes untouched, fully wet too.
+    {
+        const Samples third = noise(kSampleRate, 28);
+        Samples l = a, r = b, t = third;
+        Chorus(kSampleRate, {{"mix", 100.f}, {"feedback", 50.f}, {"warmth", 50.f}}).run({&l, &r, &t});
+        CHECK_ARRAY_EQUAL(t, third);
+        CHECK(!allclose(l, a, 0.0, 1e-3));
+    }
 
     // One channel plays as the left of two with the same input on both sides.
     const std::vector<Change> changes = {{9000, "amount", 90.f}, {20000, "mode", 1.f}, {30000, "warmth", 40.f}};
@@ -760,7 +857,7 @@ TEST_CASE("changing any chorus control is click-free") {
     // A 440 Hz tone through a moderate chorus, each control jumping as
     // automation's steps make it at 0.5 s. Around the change the output is no
     // clickier than twice the clickier of the steady renders at the settings
-    // before and after, plus 1e-5 (a step of 5e-7, a kink of 2e-6: a linear
+    // before and after, plus 1e-5 (a step of 1e-6, a kink of 2e-6: a linear
     // 20 ms ramp of Dry/Wet would make 3e-3).
     struct Case {
         std::string what;
@@ -784,11 +881,17 @@ TEST_CASE("changing any chorus control is click-free") {
         {"Amount 100 to 0, Auto", with(base, {{"amount", 100.f}}), {{s(0.5), "amount", 0.f}}},
         {"Amount 0 to 100, 10 ms", with(base, {{"amount", 0.f}, {"time", 2.f}}), {{s(0.5), "amount", 100.f}}},
         {"Width 0 to 200", with(base, {{"width", 0.f}}), {{s(0.5), "width", 200.f}}},
+        {"Width 200 to 0", with(base, {{"width", 200.f}}), {{s(0.5), "width", 0.f}}},
         {"Offset 0 to 180, Vibrato", with(base, {{"mode", 2.f}}), {{s(0.5), "offset", 180.f}}},
+        {"Offset 180 to 0, Vibrato", with(base, {{"mode", 2.f}, {"offset", 180.f}}), {{s(0.5), "offset", 0.f}}},
         {"Shape 0 to 100, Vibrato", with(base, {{"mode", 2.f}, {"amount", 100.f}}), {{s(0.5), "shape", 100.f}}},
+        {"Shape 100 to 0, Vibrato",
+         with(base, {{"mode", 2.f}, {"amount", 100.f}, {"shape", 100.f}}),
+         {{s(0.5), "shape", 0.f}}},
         {"Warmth 0 to 100", base, {{s(0.5), "warmth", 100.f}}},
         {"Warmth 100 to 0", with(base, {{"warmth", 100.f}}), {{s(0.5), "warmth", 0.f}}},
         {"Output -36 to +6 dB", with(base, {{"output", -36.f}}), {{s(0.5), "output", 6.f}}},
+        {"Output +6 to -36 dB", with(base, {{"output", 6.f}}), {{s(0.5), "output", -36.f}}},
         {"Dry/Wet 0 to 100", with(base, {{"mix", 0.f}}), {{s(0.5), "mix", 100.f}}},
         {"Dry/Wet 100 to 0", with(base, {{"mix", 100.f}}), {{s(0.5), "mix", 0.f}}},
         {"High-pass 20 to 2000 Hz", with(base, {{"hp", 1.f}, {"hp_freq", 20.f}}), {{s(0.5), "hp_freq", 2000.f}}},
@@ -998,6 +1101,8 @@ TEST_CASE("the chorus's tail covers its echoes; it has no latency") {
     CHECK_EQ(defaults.processor().tailSamples(), 2952);  // 11.5 ms, and 50 ms for the filters
     Chorus dry(kSampleRate, {{"mix", 0.f}});
     CHECK_EQ(dry.processor().tailSamples(), 0);
+    Chorus dryFiltered(kSampleRate, {{"mix", 0.f}, {"hp", 1.f}});
+    CHECK_EQ(dryFiltered.processor().tailSamples(), 2400);  // (the dry's crossover)
     Chorus longest(kSampleRate, {{"time", 5.f}, {"feedback", 100.f}});
     CHECK(longest.processor().tailSamples() > 12 * kSampleRate);
     CHECK(longest.processor().tailSamples() <= 60 * kSampleRate);
@@ -1046,11 +1151,17 @@ TEST_CASE("the chorus's displays: the LFO's phase and the wet's level") {
         CHECK(worst < 1e-6);
     }
     // The level: the wet's peak after Output, in dB.
+    for (const float output : {0.f, -12.f}) {
+        INFO("Output " + std::to_string(output));
+        Chorus c(kSampleRate, with(kPure, {{"taps", 0.f}, {"output", output}}));
+        c.play(tone(1000.0, 1.0));
+        const std::vector<float> level = c.display(1);
+        REQUIRE(level.size() == 375);
+        for (size_t k = 38; k < level.size(); ++k) CHECK_APPROX_TOL(level[k], -6.02 + output, 0.0, 0.2);
+    }
     Chorus c(kSampleRate, with(kPure, {{"taps", 0.f}}));
     c.play(tone(1000.0, 1.0));
-    const std::vector<float> level = c.display(1);
-    REQUIRE(level.size() == 375);
-    for (size_t k = 38; k < level.size(); ++k) CHECK_APPROX_TOL(level[k], -6.02, 0.0, 0.2);
+    c.display(1);
     c.play(Samples(kSampleRate, 0.f));
     const std::vector<float> silent = c.display(1);
     for (size_t k = 10; k < silent.size(); ++k) CHECK_EQ(silent[k], -90.f);

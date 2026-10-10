@@ -36,8 +36,7 @@ double chorusHighestMs(const ChorusLayout& layout);
 double chorusVoicePhase(const ChorusLayout& layout, int channel, int voice, double offsetDegrees);
 // The delay (ms) at absolute LFO phase `phase` (the LFO's phase plus the voice's).
 double chorusDelayMs(const ChorusLayout& layout, double amountPercent, double shapePercent, double phase);
-// The largest detune up, and the largest either way (down), in cents.
-double chorusDetuneUpCents(const ChorusLayout& layout, double rateHz, double amountPercent, double shapePercent);
+// The largest detune either way (the down one, the larger), in cents: the readout's.
 double chorusPeakDetuneCents(const ChorusLayout& layout, double rateHz, double amountPercent, double shapePercent);
 
 }  // namespace sub::app

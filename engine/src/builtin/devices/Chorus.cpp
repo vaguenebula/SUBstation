@@ -10,20 +10,26 @@
 //
 // - The High-Pass splits the input with a Linkwitz-Riley crossover: the highs go
 //   into the delays, the lows pass to the wet unmodulated (so a bass stays solid
-//   and a fully wet Vibrato keeps its lows). Off, the whole input goes in. The
-//   crossover always runs, so switching it on finds it warm.
+//   and a fully wet Vibrato keeps its lows). The dry goes through the same
+//   crossover (its lows and highs summed: an all-pass, flat in level), so it is
+//   in phase with the wet's lows and Dry/Wet blends them without cancelling. Off,
+//   the whole input goes in and the dry is the input. The crossover always runs,
+//   so switching it on finds it warm.
 // - The voices are read before the line is written (an echo of d samples comes
 //   d samples later, and feedback adds no sample), 4-point Hermite between
 //   samples, and averaged: at Amount 0 the wet is exactly the delayed input.
-// - Warmth: a tanh with a little bias into the line (a bucket-brigade chip's
-//   input stage: echoes recirculating through it saturate and darken instead of
-//   growing), a one-pole low-pass after the voices, and a 5 Hz DC blocker on the
-//   wet while it plays (the bias makes DC). At 0 the wet is untouched.
+// - Warmth: a gentle soft-clipping curve with a little bias into the line (a
+//   bucket-brigade chip's input stage: echoes recirculating through it saturate
+//   and darken instead of growing), anti-aliased through its antiderivative
+//   (it sits in the feedback loop, where an oversampler's latency can't go), a
+//   one-pole low-pass after the voices, and a 5 Hz DC blocker on the wet while
+//   it plays (the bias makes DC). At 0 the wet is untouched.
 // - Feedback: the wet, through a second 5 Hz DC blocker (so a DC offset doesn't
 //   build up round the loop) and a limiter (the identity within ±1, never
 //   beyond ±2), back into the line; Invert flips its sign (not in Vibrato).
 // - Width (Chorus, Ensemble) scales the wet's side; Output its level; Dry/Wet
-//   blends it with the input (fully dry, the input passes bit for bit).
+//   blends it with the dry (fully dry with the High-Pass off, the input passes
+//   bit for bit).
 //
 // Smoothing, so no control clicks or zippers:
 //
@@ -87,7 +93,6 @@ constexpr double kFeedbackRamp = 0.01;   // the feedback's gain, the DC blocker'
 constexpr double kRampLanded = 1e-7;
 
 constexpr float kFeedbackGate = 1e-15f;  // fed back below this: nothing (a dying loop drains to zeros)
-constexpr float kButterworthK = 1.41421356f;
 
 // 0 at 0, 1 at 1, flat at both ends: the layout cross-fade's shape.
 inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
@@ -155,9 +160,10 @@ public:
     std::string name() const override { return "Chorus-Ensemble"; }
 
     // The longest delay (at any Amount) times the repeats until the feedback has
-    // taken an echo down 60 dB, and 50 ms for the filters; at most 60 s.
+    // taken an echo down 60 dB, and 50 ms for the filters; at most 60 s. Fully
+    // dry, nothing (or with the high-pass on, the dry's crossover: 50 ms).
     int tailSamples() const override {
-        if (param(Mix) <= 0.f) return 0;
+        if (param(Mix) <= 0.f) return isOn(HighPass) ? static_cast<int>(0.05 * sampleRate_) : 0;
         const double longest = chorus::highestMs(targetLayout()) * sampleRate_ / 1000.0;
         const double gain = chorus::kFeedbackScale * std::clamp(param(Feedback), 0.f, 100.f) / 100.0;
         const double repeats = gain > 0.001 ? std::min(1000.0, -3.0 / std::log10(gain)) : 0.0;
@@ -330,9 +336,8 @@ private:
         return p;
     }
 
-    // The warmth's curve and filter while it holds still.
+    // The warmth's filter while it holds still.
     void settleWarmth(double w) noexcept {
-        warmShape_ = chorus::warmShape(w);
         lowpass_ = static_cast<float>(chorus::warmLowpassCoefficient(w, sampleRate_));
         settledWarmth_ = w;
     }
@@ -394,7 +399,7 @@ private:
         const float scale[2] = {1.f / static_cast<float>(voices[0]),
                                 voices[1] > 0 ? 1.f / static_cast<float>(voices[1]) : 0.f};
 
-        // Warmth's curve and filter, and the crossover, follow their glides sample by sample.
+        // Warmth's amount and filter, and the crossover, follow their glides sample by sample.
         const bool warmthMoving = !(w0 == mid.warmth && mid.warmth == end.warmth);
         Quad warmthPath, lowpassPath;
         if (warmthMoving) {
@@ -417,7 +422,7 @@ private:
 
         const bool fading = fading_;
         const double fadeLength = fadeLength_;
-        chorus::WarmShape shape = warmShape_;
+        double warmth = settledWarmth_;
         float lowpass = lowpass_;
         dsp::CrossoverCoefficients crossover = crossover_;
         float peak = peak_;
@@ -434,19 +439,20 @@ private:
                 ++fadeAt_;
             }
             if (warmthMoving) {
-                shape = chorus::warmShape(warmthPath.next());
+                warmth = std::clamp(warmthPath.next(), 0.0, 1.0);
                 lowpass = static_cast<float>(std::clamp(lowpassPath.next(), 0.0, 0.999));
             }
-            if (highPassMoving) {
-                crossover.svf = dsp::SvfCoefficients(static_cast<float>(crossoverPath.next()), kButterworthK);
+            if (highPassMoving) {  // (with the settled coefficients' damping: the crossover's Butterworth k)
+                crossover.svf = dsp::SvfCoefficients(static_cast<float>(crossoverPath.next()), crossover_.svf.k);
             }
 
             float dry[N], wet[N];
             for (int c = 0; c < N; ++c) {
                 const float x = ch[c][i];
-                dry[c] = x;
                 float low = 0.f, high = 0.f;
                 crossovers_[c].process(crossover, x, low, high);
+                // The high-pass on, the dry is the crossover's all-pass (in phase with the wet's lows).
+                dry[c] = x + highPass * ((low + high) - x);
                 const float lineSource = (1.f - highPass) * x + highPass * high;
 
                 float raw = readVoices(*heard[0], c, voices[0]) * scale[0];
@@ -456,9 +462,13 @@ private:
 
                 float fedBack = chorus::limitFeedback(feedback * loopDc_[c].process(wetHere));
                 if (std::abs(fedBack) < kFeedbackGate) fedBack = 0.f;
-                float lineIn = lineSource + fedBack;
-                if (shape.w > 0.f) lineIn = chorus::warm(shape, lineIn);
-                lines_[c].push(lineIn);
+                const float lineIn = lineSource + fedBack;
+                if (warmth > 0.0) {
+                    lines_[c].push(static_cast<float>(warmers_[c].process(lineIn, warmth)));
+                } else {
+                    warmers_[c].pass(lineIn);
+                    lines_[c].push(lineIn);
+                }
                 wet[c] = wetHere + highPass * low;
             }
             if constexpr (N == 2) {
@@ -486,6 +496,7 @@ private:
         for (auto& lp : lowpasses_) lp.reset();
         for (auto& dc : wetDc_) dc.reset();
         for (auto& dc : loopDc_) dc.reset();
+        for (auto& warmer : warmers_) warmer.reset();
     }
 
     // Flushes what has died away to zero, so silence never runs into denormals.
@@ -532,6 +543,7 @@ private:
     dsp::OnePole lowpasses_[kChannels];  // the warmth's
     dsp::DcBlocker wetDc_[kChannels];    // the warmth's DC, on the wet
     dsp::DcBlocker loopDc_[kChannels];   // DC round the feedback loop
+    chorus::WarmStage warmers_[kChannels];  // the warmth's curve, into the lines
 
     // The modulation, glided per chunk.
     dsp::Lfo lfo_;  // (its phase: the voices' shapes are chorus::lfoValue's)
@@ -544,8 +556,7 @@ private:
     Ease mix_, gain_, width_, feedback_, highPass_, dcBlend_;
     Step gainStep_, feedbackStep_;
 
-    // Warmth's curve and filter, and the crossover, while their glides hold still.
-    chorus::WarmShape warmShape_;
+    // Warmth and its filter, and the crossover, while their glides hold still.
     float lowpass_ = 0.f;
     double settledWarmth_ = 0.0;
     dsp::CrossoverCoefficients crossover_;

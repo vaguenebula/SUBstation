@@ -30,6 +30,24 @@ Item {
     readonly property int mode: p.get("mode") ? p.get("mode").index : 0
     readonly property bool highPassOn: p.get("hp") ? p.get("hp").value >= 0.5 : false
 
+    // The cross-fades between what one mode shows and another's (the strip's Taps and Time or its voices,
+    // column 3's Width or Offset and Shape): 1 for the first, 0 for the second, eased. The old set fades out
+    // over the first half and the new in over the second, never both at once, so their texts never overlap.
+    property real chorusShown: mode === 0 ? 1 : 0
+    property real widthShown: mode !== 2 ? 1 : 0
+    Behavior on chorusShown {
+        NumberAnimation {
+            duration: 140
+            easing.type: Easing.InOutQuad
+        }
+    }
+    Behavior on widthShown {
+        NumberAnimation {
+            duration: 140
+            easing.type: Easing.InOutQuad
+        }
+    }
+
     // The device's body: 8 + GRAPH_WIDTH + SPACING + 4 * COLUMN_WIDTH + INVERT_WIDTH + 3 * COLUMN_SPACING + 8,
     // less the frame's border.
     implicitWidth: 8 + graphWidth + spacing + 4 * columnWidth + invertWidth + 3 * columnSpacing + 8 - 2
@@ -136,17 +154,14 @@ Item {
             Item {
                 id: chorusOptions
                 anchors.fill: parent
-                opacity: editor.mode === 0 ? 1 : 0
+                opacity: Math.max(0, 2 * editor.chorusShown - 1)
                 visible: opacity > 0
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: 120
-                    }
-                }
+
+                readonly property int tapsX: 138  // the first Taps button; the caption ends 4 px before it
 
                 EditorCaption {
-                    x: 112
-                    width: 24
+                    objectName: "tapsCaption"
+                    x: chorusOptions.tapsX - 4 - width
                     anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("Taps")
                 }
@@ -156,7 +171,7 @@ Item {
                         required property string modelData
                         required property int index
                         objectName: "taps" + modelData
-                        x: 138 + 18 * index
+                        x: chorusOptions.tapsX + 18 * index
                         anchors.verticalCenter: parent.verticalCenter
                         width: 16
                         param: p.get("taps")
@@ -184,13 +199,8 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 text: voices === 1 ? qsTr("1 voice a side") : qsTr("%1 voices a side").arg(voices)
-                opacity: editor.mode !== 0 ? 1 : 0
+                opacity: Math.max(0, 1 - 2 * editor.chorusShown)
                 visible: opacity > 0
-                Behavior on opacity {
-                    NumberAnimation {
-                        duration: 120
-                    }
-                }
             }
         }
     }
@@ -260,13 +270,8 @@ Item {
             x: knobs.column(2)
             width: editor.columnWidth
             height: knobs.height
-            opacity: editor.mode !== 2 ? 1 : 0
+            opacity: Math.max(0, 2 * editor.widthShown - 1)
             visible: opacity > 0
-            Behavior on opacity {
-                NumberAnimation {
-                    duration: 120
-                }
-            }
 
             EditorKnob {
                 objectName: "width"
@@ -281,13 +286,8 @@ Item {
             x: knobs.column(2)
             width: editor.columnWidth
             height: knobs.height
-            opacity: editor.mode === 2 ? 1 : 0
+            opacity: Math.max(0, 1 - 2 * editor.widthShown)
             visible: opacity > 0
-            Behavior on opacity {
-                NumberAnimation {
-                    duration: 120
-                }
-            }
 
             EditorKnob {
                 objectName: "offset"

@@ -18,13 +18,15 @@
 // first after a gap), so the traces scroll smoothly at the display's rate while
 // the dots move as the delays do. The wet's level (display `level`), through
 // meter ballistics, makes the traces and the dots glow as sound passes.
-// Mode, Taps, Time, Amount, Shape and Offset changes ease (the old voices
-// fading out as the new fade in, as the engine cross-fades them); the device off
-// or nothing rendering, the traces stop and dim; silent, they rest. Nothing
-// repaints once everything has settled and no sound passes.
+// Mode, Taps, Time, Amount, Shape and Offset changes ease (the old voices, their
+// dots and their axis' figures fading out as the new fade in, as the engine
+// cross-fades them); the device off or nothing rendering, the traces stop and
+// dim; silent, they rest where they are (a change while resting reshapes them in
+// place). Nothing repaints once everything has settled and no sound passes.
 //
-// Drag up and down for the Rate (doubling every kRatePixels), across for the
-// Amount (kAmountPixels for all of it), Shift four times as finely: one undo step per drag.
+// Drag up and down for the Rate (doubling every kRatePixels), or across for the
+// Amount (kAmountPixels for all of it): the first few pixels of a drag pick which,
+// and it sets only that one. Shift four times as finely: one undo step per drag.
 
 #include "audio/ChorusVoices.h"
 #include "devices/DeviceCanvas.h"
@@ -57,6 +59,7 @@ public:
     static constexpr double kFadeWidth = 36.0;  // the traces' oldest end fades out over this, under the figures
     static constexpr double kRatePixels = 40.0;     // dragged up this far, the Rate doubles
     static constexpr double kAmountPixels = 150.0;  // dragged across this far, the Amount moves 100 %
+    static constexpr double kLockPixels = 3.0;      // a drag picks the Rate or the Amount once this far
     static constexpr double kMargin = 0.12;       // the delay axis: the layout's range and 12 % of it each side
     static constexpr double kSnapSeconds = 0.3;   // values after a gap this long (or the first): snap to them
     static constexpr double kSilentDb = -80.0;    // the wet's level below which the traces rest
@@ -76,7 +79,8 @@ public:
     double windowCycles() const { return window_.value; }  // LFO cycles across the graph (eased)
     int voiceCount() const;                                // traces of the current layout: both sides'
     sub::app::ChorusLayout layout() const { return layout_; }
-    double layoutFade() const { return fade_.value; }      // 0..1: the previous layout fading out
+    double layoutFade() const { return layers_[0].alpha.value; }  // 0..1: the current layout fading in
+    double layoutAlpha(const sub::app::ChorusLayout& layout) const;  // how much a layout's voices show (0..1)
     // Where a voice's dot is now: its delay, and the point.
     double voiceDelayMs(int channel, int voice) const;
     QPointF voiceDot(int channel, int voice) const;
@@ -106,17 +110,29 @@ protected:
     void mouseUngrabEvent() override;
 
 private:
+    // What a drag sets: picked by its first few pixels.
+    enum class DragAxis { None, Rate, Amount };
+    // The voices of a layout, drawn at an alpha of their own: the current one fading in, the ones before
+    // it fading out (each from where it was, so a change during a fade pops nothing).
+    struct Layer {
+        sub::app::ChorusLayout layout;
+        Eased alpha;
+    };
+    static constexpr int kLayers = 3;
+
     int index(const QString& paramId) const;
     // A drag goes on from its last position and values (at the press, and when Shift changes).
     void startDrag(bool fine);
+    double delayMs(const sub::app::ChorusLayout& layout, int channel, int voice) const;
     QColor voiceColour(const sub::app::ChorusLayout& layout, int channel, int voice) const;
     void drawVoices(SgPainter& p, const sub::app::ChorusLayout& layout, double alpha);
-    void drawDots(SgPainter& p);
+    void drawDots(SgPainter& p, const sub::app::ChorusLayout& layout, double alpha);
     void drawAxis(SgPainter& p);
+    void drawFigures(SgPainter& p);
 
     // The parameters, as they are now.
     sub::app::ChorusLayout layout_;
-    sub::app::ChorusLayout previous_;  // fading out while fade_ < 1
+    Layer layers_[kLayers];  // [0]: layout_'s; the others fading out (alpha 0: unused)
     double rate_ = 0.8;
     double amount_ = 50.0;
     double feedback_ = 0.0;
@@ -137,13 +153,14 @@ private:
     Eased amountShown_;  // %
     Eased shapeShown_;   // %
     Eased offsetShown_;  // degrees
-    Eased fade_;         // the layout's cross-fade, 0..1
     Eased glow_;         // 0..1
     Eased dim_;          // 1, or 0.6 frozen
     MeterBallistics meter_;
 
-    // The LFO's phase as drawn (cycles, 0..1), and the engine's values it follows.
+    // The LFO's phase: the estimate following the engine's values, and as drawn (cycles, 0..1; held while
+    // resting, so the traces don't jump when a change repaints them).
     double estimate_ = 0.0;
+    double drawn_ = 0.0;
     bool haveValues_ = false;
     double sinceValues_ = 0.0;  // seconds of ticks since the last values
     bool frozen_ = true;
@@ -153,6 +170,7 @@ private:
     // A drag: its merge key ("": none), where it started (or Shift last changed) and the values then, and
     // where it was last and what that set (held to the ranges, not yet rounded).
     QString gesture_;
+    DragAxis axis_ = DragAxis::None;
     QPointF pressedAt_;
     double pressedRate_ = 0.8;
     double pressedAmount_ = 50.0;

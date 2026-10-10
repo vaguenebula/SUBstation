@@ -44,10 +44,6 @@ double chorusDelayMs(const ChorusLayout& layout, double amountPercent, double sh
     return sub::chorus::delayMs(l, fraction(amountPercent), lfo);
 }
 
-double chorusDetuneUpCents(const ChorusLayout& layout, double rateHz, double amountPercent, double shapePercent) {
-    return sub::chorus::detuneUpCents(engineLayout(layout), rateHz, fraction(amountPercent), fraction(shapePercent));
-}
-
 double chorusPeakDetuneCents(const ChorusLayout& layout, double rateHz, double amountPercent, double shapePercent) {
     return sub::chorus::peakDetuneCents(engineLayout(layout), rateHz, fraction(amountPercent), fraction(shapePercent));
 }

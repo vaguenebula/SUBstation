@@ -6,15 +6,14 @@
 // with nothing to show); and what the engine has after. With
 // SUBSTATION_UI_SCREENSHOTS set to a folder, it is saved there as PNGs.
 
+#include <QElapsedTimer>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
 
-#include <algorithm>
 #include <cmath>
-#include <vector>
 
 #include "EditorHarness.h"
 #include "audio/ChorusVoices.h"
@@ -24,6 +23,7 @@
 #include "devices/ChorusGraph.h"
 #include "devices/DeviceParam.h"
 #include "editor/ProjectEditor.h"
+#include "model/Automation.h"
 #include "model/ParamSpec.h"
 
 using namespace sub::app;
@@ -225,8 +225,11 @@ private Q_SLOTS:
                                     .arg(rect.y())
                                     .arg(rect.width())
                                     .arg(rect.height())));
-            if (item->inherits("QQuickText"))
-                QVERIFY2(!item->property("truncated").toBool(), qPrintable(item->property("text").toString()));
+            if (item->inherits("QQuickText")) {  // (cut short, or spilling out of its box)
+                const QString text = item->property("text").toString();
+                QVERIFY2(!item->property("truncated").toBool(), qPrintable(text));
+                QVERIFY2(item->property("contentWidth").toDouble() <= item->width() + 0.5, qPrintable(text));
+            }
         }
         QList<QPair<QString, QRectF>> placed;
         for (const auto& [name, id] : kControls) {
@@ -235,7 +238,7 @@ private Q_SLOTS:
                 placed.append({QString::fromLatin1(name), rectOf(control)});
         }
         placed.append({QStringLiteral("chorusGraph"), rectOf(graph)});
-        placed.append({QStringLiteral("tapsCaption"), QRectF(8 + 112, view->height() - 6 - 18, 24, 18)});
+        placed.append({QStringLiteral("tapsCaption"), rectOf(find(view, QStringLiteral("tapsCaption")))});
         for (qsizetype i = 0; i < placed.size(); ++i) {
             for (qsizetype j = i + 1; j < placed.size(); ++j) {
                 const QRectF overlap = placed[i].second.intersected(placed[j].second);
@@ -361,8 +364,24 @@ private Q_SLOTS:
         QCOMPARE(graph->axisLowMs(), 2.5);
         QCOMPARE(graph->axisHighMs(), 12.5);
 
-        // Vibrato: one voice a side; Offset and Shape instead of Width; Ø dimmed and inert.
+        // Vibrato: one voice a side; Offset and Shape instead of Width; Ø dimmed and inert. The sets cross-fade
+        // one after the other, never both shown at once (their texts would overlap).
+        QQuickItem* widthSet = find(view, QStringLiteral("width"))->parentItem();
+        QQuickItem* vibratoSet = find(view, QStringLiteral("offset"))->parentItem();
+        QQuickItem* tapsSet = find(view, QStringLiteral("taps1"))->parentItem();
+        QQuickItem* voicesText = find(view, QStringLiteral("voicesText"));
         click(view, "modeVibrato");
+        QElapsedTimer fading;
+        fading.start();
+        bool sawBoth = false, sawFading = false;
+        while (fading.elapsed() < 300) {
+            sawBoth |= widthSet->opacity() > 0.0 && vibratoSet->opacity() > 0.0;
+            for (QQuickItem* set : {widthSet, vibratoSet})
+                sawFading |= set->opacity() > 0.0 && set->opacity() < 1.0;
+            QTest::qWait(5);
+        }
+        QVERIFY(!sawBoth);
+        QVERIFY(sawFading);  // (it did fade)
         QCOMPARE(value("mode"), 2.0);
         QCOMPARE(graph->voiceCount(), 2);
         QTRY_VERIFY(shown(find(view, QStringLiteral("offset"))) && shown(find(view, QStringLiteral("shape"))));
@@ -378,11 +397,19 @@ private Q_SLOTS:
         QCOMPARE(graph->axisLowMs(), 0.5);
         QCOMPARE(graph->axisHighMs(), 11.5);
 
-        // Back to Chorus: the text keeps naming Vibrato's voices while it fades out.
+        // Back to Chorus: the text keeps naming Vibrato's voices while it fades out, and Taps and Time fade in
+        // only once it has.
         undo()->undo();
         QCOMPARE(value("mode"), 1.0);
         undo()->undo();
         QCOMPARE(value("mode"), 0.0);
+        fading.restart();
+        sawBoth = false;
+        while (fading.elapsed() < 300) {
+            sawBoth |= tapsSet->opacity() > 0.0 && voicesText->opacity() > 0.0;
+            QTest::qWait(5);
+        }
+        QVERIFY(!sawBoth);
         QCOMPARE(graph->voiceCount(), 4);
         QVERIFY(lit(view, "modeChorus"));
         QTRY_VERIFY(shown(find(view, QStringLiteral("taps1"))) && shown(find(view, QStringLiteral("width"))));
@@ -528,6 +555,48 @@ private Q_SLOTS:
         QCOMPARE(value("amount"), 50.0);
     }
 
+    void graphDragSetsOne() {
+        QQuickItem* view = showChorus();
+        QVERIFY(view);
+        auto* graph = find<ChorusGraph>(view, QStringLiteral("chorusGraph"));
+        QVERIFY(graph);
+        const int steps = undo()->index();
+        const QPoint at = centerOf(graph);
+
+        // Up with a hand's drift sideways: the Rate, and only it (the first few pixels pick which).
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at + QPoint(1, -2));
+        QCOMPARE(undo()->index(), steps);  // (not yet: too short to tell)
+        dragTo(at + QPoint(2, -20));
+        dragTo(at + QPoint(6, -40));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(6, -40));
+        QVERIFY2(std::abs(value("rate") / 1.6 - 1.0) < 0.02, qPrintable(QString::number(value("rate"))));
+        QCOMPARE(value("amount"), 50.0);
+        QCOMPARE(undo()->index(), steps + 1);
+
+        // Across with drift up and down: the Amount, and only it.
+        const double rate = value("rate");
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at + QPoint(20, -2));
+        dragTo(at + QPoint(45, 8));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(45, 8));
+        QVERIFY2(std::abs(value("amount") - 80.0) < 0.5, qPrintable(QString::number(value("amount"))));
+        QCOMPARE(value("rate"), rate);
+        QCOMPARE(undo()->index(), steps + 2);
+
+        // The Amount automated: a drag for the Rate leaves its envelope playing (not overridden).
+        const QString amountKey = sub::app::automation::deviceKey(device_, QStringLiteral("amount"));
+        editor()->setEnvelope(track_, amountKey, {{0.0, 0.2, 0.0}, {16.0, 0.9, 0.0}});
+        QVERIFY(bridge()->isAutomated(track_, amountKey));
+        QVERIFY(!bridge()->isOverridden(track_, amountKey));
+        QTest::mousePress(window_, Qt::LeftButton, Qt::NoModifier, at);
+        dragTo(at - QPoint(0, 20));
+        dragTo(at - QPoint(0, 40));
+        QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at - QPoint(0, 40));
+        QVERIFY(value("rate") > rate);
+        QVERIFY(!bridge()->isOverridden(track_, amountKey));
+    }
+
     void displaysReachGraph() {
         QQuickItem* view = showChorus();
         QVERIFY(view);
@@ -542,6 +611,8 @@ private Q_SLOTS:
 
         // The phase is the engine's newest (the first values snap): 187 values of 128 samples, from a reset.
         engine()->renderOffline(0.0, 24000);
+        QElapsedTimer ticking;  // (from this tick: the time the ticks below count lies within what it reads)
+        ticking.start();
         refreshDisplays();
         const double expected = std::fmod(2.0 * 23936.0 / 48000.0, 1.0);
         QVERIFY2(std::abs(graph->phase() - expected) < 1e-6, qPrintable(QString::number(graph->phase())));
@@ -561,12 +632,15 @@ private Q_SLOTS:
         QSignalSpy animated(graph, &ChorusGraph::animated);
         const double phase = graph->phase();
         tick(10);
+        const double seconds = double(ticking.nsecsElapsed()) / 1e9;
         QVERIFY2(graph->glow() > 0.9, qPrintable(QString::number(graph->glow())));
         QVERIFY(!graph->frozen() && !graph->resting());
         QCOMPARE(animated.count(), 10);  // moving: every tick repaints
-        // (the estimate runs on at the rate: 10 ticks of 16 ms at 2 Hz)
-        QVERIFY2(std::abs(std::fmod(graph->phase() - phase + 1.0, 1.0) - 10 * 0.016 * 2.0) < 1e-6,
-                 qPrintable(QString::number(graph->phase())));
+        // The estimate runs on at the rate: 2 Hz over the ticks, each counting at least 16 ms and at most the
+        // real time since the tick before more (a loaded machine).
+        const double advance = std::fmod(graph->phase() - phase + 1.0, 1.0);
+        QVERIFY2(advance >= 10 * 0.016 * 2.0 - 1e-6 && advance <= 2.0 * (10 * 0.016 + seconds) + 1e-6,
+                 qPrintable(QString::number(advance)));
         const double glow = graph->glow();
         tick(30);
         QVERIFY(graph->frozen());
@@ -591,16 +665,36 @@ private Q_SLOTS:
         silence(1);
         QVERIFY(!graph->frozen());
         QVERIFY(graph->resting());
+        // (values after a gap: the phase drawn is the engine's newest, resting or not; 32 values from a reset)
+        QVERIFY2(std::abs(graph->phase() - std::fmod(2.0 * 4096.0 / 48000.0, 1.0)) < 1e-6,
+                 qPrintable(QString::number(graph->phase())));
         silence(20);  // (the dimming eases away)
         animated.clear();
         silence(3);
         QVERIFY(!graph->frozen() && graph->resting());
         QCOMPARE(animated.count(), 0);
         QCOMPARE(graph->glow(), 0.0);
-        // A parameter changing still eases what is drawn.
+        // Resting, the traces hold where they are though the engine's phase runs on (as live: each piece a
+        // tick longer than the last), and a parameter changing eases them in place instead of scrolling them
+        // on by all the phase gone meanwhile.
+        int length = 4096;
+        auto live = [&](int pieces) {
+            for (int i = 0; i < pieces; ++i) {
+                engine()->renderOffline(8.0, length);
+                length += 768;
+                refreshDisplays();
+            }
+        };
+        live(3);
+        const double rested = graph->phase();
+        live(30);
+        QVERIFY(!graph->frozen() && graph->resting());
+        QCOMPARE(animated.count(), 0);
+        QCOMPARE(graph->phase(), rested);
         set("amount", 90.0);
-        silence(1);
+        live(1);
         QVERIFY(animated.count() > 0);
+        QCOMPARE(graph->phase(), rested);
 
         // The device off: frozen however much renders.
         engine()->renderOffline(0.0, 8192);
@@ -611,6 +705,77 @@ private Q_SLOTS:
         refreshDisplays();
         QVERIFY(graph->frozen());
         editor()->setDeviceEnabled(track_, device_, true);
+    }
+
+    // The level the glow shows is the sound's now: an editor opened (or shown again) after a loud part, the
+    // device silent since, doesn't light up from the display's history.
+    void glowShowsNow() {
+        const QString name = QStringLiteral("long tone");
+        track_ = audioTrackWith(tone(220.0, 4 * kSampleRate), name, 4.0);
+        QVERIFY(!track_.isEmpty());
+        device_ = editor()->addDevice(track_, QStringLiteral("chorus"));
+        const QString path = dir_.path(name + QStringLiteral(".wav"));
+        QVERIFY(QTest::qWaitFor([&] { return bridge()->source(path) != nullptr; }));  // (the clip's audio loaded)
+        engine()->renderOffline(0.0, 2 * 48000);  // loud
+        engine()->renderOffline(8.0, 3 * 48000);  // then silent (after the clip)
+        QQuickItem* view = show(QStringLiteral("chorus"), track_, device_);
+        QVERIFY(view);
+        auto* graph = find<ChorusGraph>(view, QStringLiteral("chorusGraph"));
+        QVERIFY(graph);
+        for (int i = 0; i < 30; ++i) {
+            engine()->renderOffline(8.0, 768);
+            refreshDisplays();
+            QVERIFY2(graph->glow() < 0.05, qPrintable(QString::number(graph->glow())));
+        }
+        QVERIFY(graph->resting() && !graph->frozen());
+
+        // Hidden through a loud part, silent again, then shown.
+        view->setVisible(false);
+        engine()->renderOffline(0.0, 2 * 48000);
+        engine()->renderOffline(8.0, 3 * 48000);
+        view->setVisible(true);
+        engine()->renderOffline(8.0, 768);
+        refreshDisplays();
+        QVERIFY2(graph->glow() < 0.05, qPrintable(QString::number(graph->glow())));
+
+        // Sound now: it lights up.
+        engine()->renderOffline(0.0, 4096);
+        refreshDisplays();
+        tick(5);
+        QVERIFY2(graph->glow() > 0.5, qPrintable(QString::number(graph->glow())));
+    }
+
+    // A layout change during a fade: each layout's voices go on from what they show (nothing pops), and one
+    // fading out comes back from where it is.
+    void layoutsFadeWithoutPops() {
+        QQuickItem* view = showChorus();
+        QVERIFY(view);
+        auto* graph = find<ChorusGraph>(view, QStringLiteral("chorusGraph"));
+        QVERIFY(graph);
+        const ChorusLayout chorus{0, 1, 0}, ensemble{1, 1, 0}, vibrato{2, 1, 0};
+        refreshDisplays();
+        set("mode", 1.0);
+        tick(2);
+        const double in = graph->layoutAlpha(ensemble), out = graph->layoutAlpha(chorus);
+        QVERIFY2(in > 0.2 && in < 0.95 && out > 0.05 && out < 0.8,
+                 qPrintable(QStringLiteral("%1 %2").arg(in).arg(out)));
+        set("mode", 2.0);  // half way: Vibrato fades in, the other two fade out from where they are
+        QCOMPARE(graph->layoutAlpha(ensemble), in);
+        QCOMPARE(graph->layoutAlpha(chorus), out);
+        QCOMPARE(graph->layoutAlpha(vibrato), 0.0);
+        QCOMPARE(graph->layoutFade(), 0.0);
+        tick(1);
+        QVERIFY(graph->layoutAlpha(ensemble) < in && graph->layoutAlpha(chorus) < out);
+        QVERIFY(graph->layoutAlpha(vibrato) > 0.0);
+        const double ensembleNow = graph->layoutAlpha(ensemble);
+        set("mode", 1.0);  // back to Ensemble while it fades out: from there
+        QCOMPARE(graph->layoutAlpha(ensemble), ensembleNow);
+        QCOMPARE(graph->layoutFade(), ensembleNow);
+        tick(40);
+        QCOMPARE(graph->layoutAlpha(ensemble), 1.0);
+        QCOMPARE(graph->layoutAlpha(chorus), 0.0);
+        QCOMPARE(graph->layoutAlpha(vibrato), 0.0);
+        QCOMPARE(graph->voiceCount(), 6);
     }
 
     void screenshots() {
@@ -674,10 +839,19 @@ private Q_SLOTS:
         QTest::mouseRelease(window_, Qt::LeftButton, Qt::NoModifier, at + QPoint(0, -1));
 
         // Half way from those voices to Ensemble's: the old fading out as the new fade in, the axis easing.
+        refreshDisplays();  // (the clock starts afresh: the ticks below count a clock period each)
         set("mode", 1.0);
         tick(2);
-        QVERIFY(graph->layoutFade() > 0.3 && graph->layoutFade() < 0.8);
+        QVERIFY2(graph->layoutFade() > 0.3 && graph->layoutFade() < 0.95,
+                 qPrintable(QString::number(graph->layoutFade())));
         save(grab(), QStringLiteral("chorus-fading.png"));
+
+        // Half way to Vibrato: the strip and the mode's column between their sets, one fading out before
+        // the other fades in.
+        tick(40);
+        set("mode", 2.0);
+        QTest::qWait(50);
+        save(grab(), QStringLiteral("chorus-switching.png"));
     }
 };
 
