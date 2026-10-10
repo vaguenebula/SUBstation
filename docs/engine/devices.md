@@ -1060,13 +1060,12 @@ names they had before it (Base, Frequency, Width, Depth).
 - **Input that isn't audio** (NaN, infinity) never reaches its states: `BuiltinProcessor::process()` takes it as
   silence first, so the DC filter (which runs while DC is off too), Color's sections and the 4x path's filters can't
   keep it; what comes out is exactly what zeros there would give.
-- **Shared with the editor**: the curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip,
-  Color's design (`colorDesign`, `colorResponseDb`) and Hi-Quality's factor and latency (`kHqFactorLog2`,
-  `hqLatency()`) are inline in SaturatorDesign.h; the application layer's `saturatorCurve()`, `saturatorSlope()`,
-  `saturatorColorDb()` and `saturatorHqLatency()`
-  ([app/src/audio/SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h)) call them, so the curve drawn is
-  the curve played, from the same float arithmetic. The editor also takes the Type list's Bass Shaper and
-  Waveshaper entries and the parameters' ranges (`saturatorRange()`, what its drags stay within) from there.
+- **Shared with the editor**: the curves (`saturator::makeShape`, `params`, `curve`, `transfer`), Post Clip, Color's
+  design (`colorDesign`, `colorResponseDb`) and Hi-Quality's factor and latency (`kHqFactorLog2`, `hqLatency()`) are
+  inline in SaturatorDesign.h; the application layer's `saturatorCurve()`, `saturatorSlope()`, `saturatorColorDb()` and
+  `saturatorHqLatency()` ([app/src/audio/SaturatorResponse.h](../../app/src/audio/SaturatorResponse.h)) call them, so
+  the curve drawn is the curve played, from the same float arithmetic. The editor also takes the Type list's Bass Shaper
+  and Waveshaper entries and the parameters' ranges (`saturatorRange()`, what its drags stay within) from there.
 - At 48 kHz stereo on the machine it was written on (`builtin_devices_bench`): 0.09 % of one core at the defaults,
   0.12 % at Medium Curve +12 dB, 0.31 % with the Waveshaper's ripples and gate, Color and DC; with Hi-Quality too,
   and Drive at +12 dB, 0.67 % ([benchmarks/README.md](../../benchmarks/README.md)). Before `dsp::Oversampler`'s stages
@@ -1143,8 +1142,8 @@ decimal, no sign: `formatValue` in [ParamSpec.cpp](../../app/src/model/ParamSpec
   V3, around an early tone stack). Volume is the power stage's drive, ±12 dB around the model's noon (Volume 0 is
   quieter, not silent): on Blues, Heavy and Bass it takes the power stage 5 to 9 dB past clipping at 10 and adds
   distortion (Blues 9 to 28 % THD from noon, Heavy 34 to 44, Bass 26 to 32), on the others it stays at or under it,
-  as Live's manual says. Each model's trim level-matches it at the defaults: a −12 dBFS sine
-  comes out at its own RMS (−15 dBFS) on every model.
+  as Live's manual says. Each model's trim level-matches it at the defaults: a −12 dBFS sine comes out at its own RMS
+  (−15 dBFS) on every model.
 - **Smoothing**: control-rate work happens per chunk of up to 16 samples (`kChunk`), on a grid counted from the
   meters' 256-sample windows (so a window always ends with a chunk). The six dials glide (one-poles of 20 ms); while
   anything moves, every gain, bias and filter coefficient (the one-poles', the tone stack's) and the sag's amount
