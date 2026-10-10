@@ -2,14 +2,14 @@
 // Reverb, Limiter, Chorus-Ensemble, Phaser-Flanger, Spectral Compressor, Gate)
 // with the rest of the application, what each device's own tests leave out: a
 // project with one, every parameter away from its default and one automated,
-// saved and opened again as it was (in the model and the engine); presets of
-// them, as new devices and loaded into devices; in a rack's chain (rendering as
-// on the track, their latency the rack's); their latency compensated against a
-// dry track to the sample (after opening the project, and as it changes, too);
-// undo and redo reaching the engine; the sidechained ones keyed by another track
-// through the editor (and once the project is opened again); and switched off
-// and on again without a click or anything they held before. Each test runs
-// once per device, a row per kind.
+// saved and opened again as it was (in the model and the engine, and as it
+// sounds); presets of them, as new devices and loaded into devices; in a rack's
+// chain (rendering as on the track, their latency the rack's); their latency
+// compensated against a dry track to the sample (after opening the project, and
+// as it changes, too); undo and redo reaching the engine; the sidechained ones
+// keyed by another track through the editor (and once the project is opened
+// again); and switched off and on again without a click or anything they held
+// before. Each test runs once per device, a row per kind.
 
 #include "SessionFixture.h"
 #include "TestSupport.h"
@@ -86,6 +86,17 @@ QString automatedParam(const QString& kind) {
 QMap<QString, double> latencyOn(const QString& kind) {
     if (kind == u"saturator") return {{QStringLiteral("hq"), 1.0}};
     if (kind == u"limiter" || kind == u"gate") return {{QStringLiteral("lookahead"), 2.0}};
+    return {};
+}
+
+// Settings with which each device changes what the tests play it (a tone at
+// 0.3, noise at 0.5), so that a render with it tells it was there: the
+// Saturator driven, the Limiter pushed over its ceiling, the Gate shut, 12 dB
+// down. The others do at their defaults.
+QMap<QString, double> audible(const QString& kind) {
+    if (kind == u"saturator") return {{QStringLiteral("drive"), 12.0}};
+    if (kind == u"limiter") return {{QStringLiteral("gain"), 12.0}};
+    if (kind == u"gate") return {{QStringLiteral("threshold"), 0.0}, {QStringLiteral("floor"), -12.0}};
     return {};
 }
 
@@ -266,16 +277,22 @@ private Q_SLOTS:
     void init() { QSettings().clear(); }
 
     // Every parameter away from its default (lists and switches too), one automated:
-    // the project file brings them all back, to the model and to the engine.
+    // the project file brings them all back, to the model and to the engine, and
+    // the device sounds as it did.
     void aProjectOpensAsItWasSaved_data() { kindRows(kEffects); }
     void aProjectOpensAsItWasSaved() {
         QFETCH(QString, kind);
         Effects f;
         Session& s = f.s();
-        const QString track = f.editor().addAudioTrack();
+        std::vector<float> noise = silence(4.0);
+        addNoise(noise, 0.0, 4.0, 0.25f, 5);
+        const QString track = f.track(noise);
         const QString device = f.editor().addDevice(track, kind);
         QVERIFY(!device.isEmpty());
-        const QMap<QString, double> values = allAway(kind);
+        QMap<QString, double> values = allAway(kind);
+        // (Erosion's noise is each device's own, seeded by the order devices are made in: the one
+        // the opened project makes would wobble otherwise. Its sine alone, which any Erosion plays alike.)
+        if (kind == u"erosion") values.insert(QStringLiteral("blend"), 0.0);
         QCOMPARE(values.size(), static_cast<int>(infos(kind).size()));
         for (const sub::ParamInfo& info : infos(kind)) {
             const QString id = QString::fromStdString(info.id);
@@ -289,13 +306,18 @@ private Q_SLOTS:
         const Envelope envelope{{0.0, 0.2, 0.0}, {4.0, 0.8, 0.5}};
         f.editor().setEnvelope(track, key, envelope);
         QVERIFY(f.bridge().isAutomated(track, key));
+        f.bridge().pollPlugins();  // (the meter timer's: a new latency realigns the tracks)
+        const std::vector<float> sounded = f.beats(4);
         const QJsonObject saved = deviceToJson(f.project().device(track, device));
         const QString path = f.dir.path(kind + QStringLiteral(".gilproj"));
+        QVERIFY(f.waitForSignals());  // (the bridge's own decoding done before the project goes)
         QVERIFY(s.saveProjectAs(path));
 
         s.newProject();
         QVERIFY(f.project().tracks().empty());
         QVERIFY(s.openProject(path));
+        QVERIFY(f.waitForSignals());
+        f.bridge().pollPlugins();
         const Device* opened = f.project().findDevice(track, device);
         QVERIFY(opened);
         QCOMPARE(opened->kind, kind);
@@ -303,6 +325,8 @@ private Q_SLOTS:
         QVERIFY2(f.differ(track, device, values).isEmpty(), qPrintable(f.differ(track, device, values)));
         QCOMPARE(f.project().envelope(track, key), envelope);
         QVERIFY(f.bridge().isAutomated(track, key));
+        const double apart = maxDifference(f.beats(4), sounded);
+        QVERIFY2(apart < 1e-6, qPrintable(QStringLiteral("%1 apart").arg(apart)));
     }
 
     // Saved as a preset, every parameter comes back: as a new device, and loaded
@@ -350,12 +374,14 @@ private Q_SLOTS:
         const QString track = f.track(noise);
         const std::vector<float> raw = f.beats(1);
         const QString device = f.editor().addDevice(track, kind);
+        f.setParams(track, device, audible(kind));
         f.setParams(track, device, latencyOn(kind));
         f.bridge().pollPlugins();  // (the meter timer's: a new latency realigns the tracks)
         const int latency = f.bridge().deviceLatency(track, device);
         QCOMPARE(latency > 0, kLatent.contains(kind));
         const std::vector<float> plain = f.beats(1);
         QVERIFY(peakIn(plain) > 0.01);
+        QVERIFY2(maxDifference(plain, raw) > 0.01, "the device is heard");
         QCOMPARE(maxDifference(f.beats(1), plain), 0.0);  // (renders repeat exactly)
 
         const QString rack = f.editor().groupDevices(track, {device});
@@ -538,11 +564,16 @@ private Q_SLOTS:
         checkKeyed(QStringLiteral("opened"));
         if (QTest::currentTestFailed()) return;
 
+        // Its own input (over the threshold throughout) opens the Gate and squashes the others, in both halves.
         f.editor().setDeviceSidechain(heard, device, std::nullopt);
         QVERIFY(!f.engine.processorSidechain(f.processor(heard, device)));
         const std::vector<float> own = f.beats(2);
-        QVERIFY2(std::abs(first(own) / second(own) - 1.0) < 0.2,
-                 qPrintable(QStringLiteral("%1 then %2").arg(first(own)).arg(second(own))));
+        const QString levels = QStringLiteral("%1 then %2 of %3").arg(first(own)).arg(second(own)).arg(input);
+        if (gate) {
+            QVERIFY2(first(own) > 0.7 * input && second(own) > 0.7 * input, qPrintable(levels));
+        } else {
+            QVERIFY2(first(own) < 0.4 * input && second(own) < 0.4 * input, qPrintable(levels));
+        }
     }
 
     // Switched off and on again by its automation (as by hand while playing), a
@@ -562,7 +593,9 @@ private Q_SLOTS:
         const QString track = f.track(sound);
         const std::vector<float> raw = f.beats(4);
         const QString device = f.editor().addDevice(track, kind);
+        f.setParams(track, device, audible(kind));
         const std::vector<float> on = f.beats(4);
+        const size_t latency = static_cast<size_t>(f.bridge().deviceLatency(track, device));
 
         // On, off at beat 1, on again at 2.
         const QString key = automation::deviceOnKey(device);
@@ -572,16 +605,22 @@ private Q_SLOTS:
         f.play(track, later);
         const std::vector<float> unheard = f.beats(4);
 
-        // Off in the sound: a fade between the device's sound and its input, no sharper than either.
-        const size_t from = frameAt(1.0) - 480, to = frameAt(1.0) + 960;
+        // Off in the sound: a fade between the device's sound and its input, no sharper than either, then
+        // its input. The switch is heard where the device's sound comes out (its lane is as late as its
+        // parameters', the latency before it): a latent device's, its latency before the beat.
+        const size_t off = frameAt(1.0) - latency;
+        const size_t from = off - 480, to = off + 960;
+        QVERIFY2(maxDifference(on, raw, from, to) > 0.01, "the device changes the tone");
+        QVERIFY2(maxDifference(switched, on, frameAt(0.5), from) < 1e-6, "on until then");
         const double steepest = std::max(maxStep(on, from, to), maxStep(raw, from, to));
         QVERIFY2(maxStep(switched, from, to) <= 1.25 * steepest + 0.005,
                  qPrintable(QStringLiteral("a step of %1, at most %2 without the switch")
                                 .arg(maxStep(switched, from, to))
                                 .arg(steepest)));
+        const double passed = maxDifference(switched, raw, off + 480, frameAt(1.5));
+        QVERIFY2(passed < 1e-6, qPrintable(QStringLiteral("off, %1 from its input").arg(passed)));
         // On at beat 2, in silence: nothing (until the second tone, as early as the latency lets the
         // device's filters or frames reach it); then as if the first tone had never been.
-        const size_t latency = static_cast<size_t>(f.bridge().deviceLatency(track, device));
         const double left = peakIn(switched, frameAt(1.5) + 48, frameAt(3.0) - latency);
         QVERIFY2(left == 0.0, qPrintable(QStringLiteral("%1 after the tone").arg(left)));
         const double apart = maxDifference(switched, unheard, frameAt(2.0), frameAt(4.0));
