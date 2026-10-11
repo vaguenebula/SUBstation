@@ -15,7 +15,9 @@
 // published), trailing their last positions, and they light up, fading as the
 // reflections do; in silence they settle at rest. Spin's amount eases in and
 // out as it is switched. It repaints only while a particle moves or the light
-// fades: nothing while nothing plays.
+// fades: nothing while nothing plays. (The swing's easing runs, painted, until
+// no particle is 0.2 px from where it ends, and then ends there: it never rests
+// with a way still to go, creeping on below a repaint to paint again later.)
 
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
@@ -88,8 +90,11 @@ protected:
 private:
     // One tick of animation, `seconds` after the last.
     void advance(double seconds);
-    QPointF positionOf(int k) const;
+    // Where reflection k's particle is drawn, Spin's swing at `swing` (its amount as drawn, 0..1).
+    QPointF positionOf(int k, double swing) const;
     void place();
+    // Whether every particle drawn is within kMoved (0.2 px) of where the swing's easing leaves it.
+    bool swingSettled() const;
     void dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers);
 
     // The parameters, as sync() read them.

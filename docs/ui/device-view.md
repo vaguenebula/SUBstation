@@ -953,7 +953,9 @@ The editors:
     settings change, they orbit as Spin swings them, at the phase the device publishes (display `spin`; the pans are
     the engine's own law, `reverbSpinPan`), trailing their last six positions (started again only when the particles'
     homes move: Size, Shape, Density, Stereo), and light up, fading over a third of a second as the reflections do; in
-    silence they ease back to rest. Switching Spin eases its swing in or out. The first row sits under the captions'
+    silence they ease back to rest. Switching Spin eases its swing in or out. A swing's easing is painted until no
+    particle is 0.2 px from where it ends, and then ends there: the pad never rests with a way still to go, to wake in
+    silence and paint the creep once it adds up. The first row sits under the captions'
     strip by the most a particle reaches (the loudest's radius with its glow lit, and Spin's 3 px bob at 100 %), so no
     particle ever touches the captions; L and R, in the bottom corners, are drawn over the particles, so the last
     reflection swung to a side at a high Spin passes under the letter. At the top right, when the tail starts after the

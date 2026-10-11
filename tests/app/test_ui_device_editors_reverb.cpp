@@ -17,6 +17,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
 
@@ -923,10 +924,20 @@ private Q_SLOTS:
                                         .arg(pad->animating())
                                         .arg(s.spin->animating())));
         QCOMPARE(s.decay->tailLevel(), ReverbDecayGraph::kMeterFloorDb);
-        QVERIFY(s.spin->amountShown() < 0.05);  // (in silence the reflections settle at rest)
+        QCOMPARE(s.spin->amountShown(), 0.0);  // (in silence the reflections settle at rest, all the way)
         QCOMPARE(s.spin->flash(), 0.0);
         QCOMPARE(s.filter->glow(), 0.0);
-        refreshes(5);
+        // And it stays at rest: no tick asks for a repaint again (none at all, the display clock's own between
+        // these too: a tick that moves anything says so).
+        const QSignalSpy decayTicks(s.decay, &ReverbDecayGraph::levelsChanged);
+        const QSignalSpy filterTicks(pad, &ReverbFilterPad::levelsChanged);
+        const QSignalSpy spinTicks(s.spin, &ReverbSpinPad::levelsChanged);
+        refreshes(25);
+        QVERIFY2(decayTicks.isEmpty() && filterTicks.isEmpty() && spinTicks.isEmpty(),
+                 qPrintable(QStringLiteral("decay %1 filter %2 spin %3")
+                                .arg(decayTicks.count())
+                                .arg(filterTicks.count())
+                                .arg(spinTicks.count())));
         QVERIFY(!s.decay->animating() && !pad->animating() && !s.spin->animating());
     }
 

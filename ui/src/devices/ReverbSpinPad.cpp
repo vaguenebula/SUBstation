@@ -140,19 +140,30 @@ void ReverbSpinPad::geometryChange(const QRectF& newGeometry, const QRectF& oldG
     }
 }
 
-QPointF ReverbSpinPad::positionOf(int k) const {
+QPointF ReverbSpinPad::positionOf(int k, double swing) const {
     const QRectF r = plot();
     const std::size_t i = std::size_t(k);
-    const double amount = amount_.value * presence_.value;
-    const double pan = std::clamp(sub::app::reverbSpinPan(k, amount, drawPhase_) * width_, -1.0, 1.0);
+    const double pan = std::clamp(sub::app::reverbSpinPan(k, swing, drawPhase_) * width_, -1.0, 1.0);
     const double x = r.center().x() + (r.width() / 2 - 6.0) * pan;
     const double top = r.top() + kRowTop, bottom = r.bottom() - kRowBottom;
-    const double bob = amount * kBob * std::sin(2.0 * kPi * (drawPhase_ + double(k) / kTaps));
+    const double bob = swing * kBob * std::sin(2.0 * kPi * (drawPhase_ + double(k) / kTaps));
     return QPointF(x, top + row_[i] * std::max(0.0, bottom - top) + bob);
 }
 
 void ReverbSpinPad::place() {
-    for (int k = 0; k < kTaps; ++k) at_[std::size_t(k)] = positionOf(k);
+    for (int k = 0; k < kTaps; ++k) at_[std::size_t(k)] = positionOf(k, amountShown());
+}
+
+bool ReverbSpinPad::swingSettled() const {
+    const double now = amountShown(), end = amount_.target * presence_.target;
+    for (int k = 0; k < kTaps; ++k) {
+        if (!particleShown(k))
+            continue;
+        const QPointF left = positionOf(k, end) - positionOf(k, now);
+        if (std::hypot(left.x(), left.y()) >= kMoved)
+            return false;
+    }
+    return true;
 }
 
 // --- Displays and animation -------------------------------------------------------------
@@ -199,6 +210,17 @@ void ReverbSpinPad::advance(double seconds) {
     linger_ = std::max(0.0, linger_ - seconds);
     presence_.target = flash_.value > kSounding || linger_ > 0.0 ? 1.0 : 0.0;
     presence_.step(easeFraction(seconds, kPresenceSeconds), 1e-4);
+    // The swing eases until no particle is kMoved from where it ends, then ends there, and moves all the while:
+    // an easing's last steps are each less than kMoved, and one left to creep on unpainted would rest with a way
+    // still to go, then wake to paint the creep once it added up (again and again, for seconds of silence).
+    if (amount_.value != amount_.target || presence_.value != presence_.target) {
+        if (swingSettled()) {
+            amount_.snap(amount_.target);
+            presence_.snap(presence_.target);
+        } else {
+            moving = true;
+        }
+    }
     place();
     for (std::size_t k = 0; k < at_.size(); ++k) {
         if (radius_[k] <= 0.0)
