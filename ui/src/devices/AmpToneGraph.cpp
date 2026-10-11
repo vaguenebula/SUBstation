@@ -332,15 +332,15 @@ void AmpToneGraph::hoverLeaveEvent(QHoverEvent*) {
 void AmpToneGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::kMeterBg);
+    p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::meterBg());
     drawDecadeGrid(p, r, frequencyAxis());
     const QFont font = figureFont();
     for (const double db : kFigureDbs) {  // the dB lines, their figures in the gutter
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y),
-                   db == 0.0 ? withAlpha(Theme::kGridBar, 220) : withAlpha(Theme::kGridBeat, 200));
+                   db == 0.0 ? withAlpha(Theme::gridBar(), 220) : withAlpha(Theme::gridBeat(), 200));
         p.drawText(QRectF(r.right() + 1, y - 6, gutter_ - 3, 12), Qt::AlignRight | Qt::AlignVCenter, figureText(db),
-                   Theme::kTextDim, font);
+                   Theme::textDim(), font);
     }
 
     std::vector<QPointF> curve;
@@ -350,12 +350,12 @@ void AmpToneGraph::paint(SgPainter& p) {
     if (curve.size() >= 2) {
         p.save();
         p.setClipRect(r);
-        p.fillToBaseline(curve.data(), int(curve.size()), yOf(0.0), withAlpha(Theme::kAccent, 34));
-        drawGlowPolyline(p, curve, Theme::kAccent, 1.5);
+        p.fillToBaseline(curve.data(), int(curve.size()), yOf(0.0), withAlpha(Theme::accent(), 34));
+        drawGlowPolyline(p, curve, Theme::accent(), 1.5);
         p.restore();
     }
     p.drawText(QRectF(r.left() + 4, r.top() + 2, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Tone"),
-               Theme::kTextDim, font);
+               Theme::textDim(), font);
 
     // The handles, their letters over them (under them near the top) with their parameters'
     // automation dots; the dragged one filled, what it sets beside it instead of its letter.
@@ -364,13 +364,13 @@ void AmpToneGraph::paint(SgPainter& p) {
         const QPointF at = handlePos(i);
         const double radius = radius_[size_t(i)].value;
         const bool dragged = i == dragging_;
-        p.fillEllipse(at, radius, radius, dragged ? Theme::kAccent : Theme::kMeterBg);
-        p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), Theme::kAccent, 1.5);
+        p.fillEllipse(at, radius, radius, dragged ? Theme::accent() : Theme::meterBg());
+        p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), Theme::accent(), 1.5);
         if (dragged)
             continue;
         const bool below = at.y() - r.top() < 12.0 + radius;
         const QRectF letter(at.x() - 8, below ? at.y() + radius + 1 : at.y() - radius - 11, 16, 10);
-        p.drawText(letter, Qt::AlignCenter, QString::fromLatin1(kHandleList[size_t(i)].letter), Theme::kText,
+        p.drawText(letter, Qt::AlignCenter, QString::fromLatin1(kHandleList[size_t(i)].letter), Theme::text(),
                    letterFont);
         drawAutomationDot(p, automation_[size_t(i)], QPointF(at.x() + 7.5, letter.center().y()));
     }
@@ -382,9 +382,9 @@ void AmpToneGraph::paint(SgPainter& p) {
         const double gap = radius_[size_t(dragging_)].value + 5;
         const double x = at.x() + gap + w <= r.right() ? at.x() + gap : at.x() - gap - w;
         const QRectF box(x, std::clamp(at.y() - h / 2, r.top() + 1, r.bottom() - h - 1), w, h);
-        p.fillRoundedRect(box, 3, 3, withAlpha(Theme::kMeterBg, 220));
-        p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, withAlpha(Theme::kAccent, 120));
-        p.drawText(box, Qt::AlignCenter, text, Theme::kText, font);
+        p.fillRoundedRect(box, 3, 3, withAlpha(Theme::meterBg(), 220));
+        p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, withAlpha(Theme::accent(), 120));
+        p.drawText(box, Qt::AlignCenter, text, Theme::text(), font);
     }
 }
 

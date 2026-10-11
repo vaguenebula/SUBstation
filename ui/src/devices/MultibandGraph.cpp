@@ -62,15 +62,15 @@ double extreme(const std::vector<float>& values) {
 // What a side does to the level, by its ratio: the colour of its block (none at 1:1).
 QColor sideColor(int side, double ratio) {
     if (ratio == 1.0)
-        return Theme::kTextDim;
+        return Theme::textDim();
     const bool down = side == MultibandGraph::Above ? ratio > 1.0 : ratio < 1.0;
-    return down ? Theme::kAccent : kBoost;
+    return down ? Theme::accent() : kBoost;
 }
 
 // A rounded label behind `text`, `rect` its box.
 void pill(SgPainter& p, const QRectF& rect, const QString& text, const QColor& color, const QFont& font,
           int alpha = 210) {
-    p.fillRoundedRect(rect, 3, 3, withAlpha(Theme::kMeterBg, alpha));
+    p.fillRoundedRect(rect, 3, 3, withAlpha(Theme::meterBg(), alpha));
     p.drawText(rect, Qt::AlignCenter, text, color, font);
 }
 
@@ -584,7 +584,7 @@ void MultibandGraph::paint(SgPainter& p) {
         const bool edge = db == -80;  // (at the lanes' left edge: from it)
         const QRectF rect = edge ? QRectF(top.left() + 1, 0, 40, kHeaderHeight) : QRectF(x - 20, 0, 40, kHeaderHeight);
         p.drawText(rect, (edge ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignVCenter, typeset(QString::number(db)),
-                   Theme::kTextDim, font7);
+                   Theme::textDim(), font7);
     }
     for (const int band : {High, Mid, Low})
         paintLane(p, band);
@@ -601,10 +601,10 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
 
     p.save();
     p.setOpacity(view.opacity.value);
-    p.fillRoundedRect(l, 3, 3, Theme::kMeterBg);
+    p.fillRoundedRect(l, 3, 3, Theme::meterBg());
     for (int db = -70; db <= 0; db += 10)  // the grid, 0 dB brighter
         p.fillRect(QRectF(std::round(xOfDb(db)), l.top() + 1, 1, l.height() - 2),
-                   withAlpha(Theme::kGridBeat, db == 0 ? 160 : 70));
+                   withAlpha(Theme::gridBeat(), db == 0 ? 160 : 70));
 
     // The regions: tinted by what they do, hatched as densely as their ratio is far from 1:1.
     const QRectF inner = l.adjusted(1, 1, -1, -1);
@@ -619,7 +619,7 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         const double light = view.blockLight[side].value;
         if (ratio == 1.0) {  // doing nothing: only an outline while it is under the mouse
             if (light > 0.01)
-                p.drawRect(block.adjusted(0.5, 0.5, -0.5, -0.5), withAlpha(Theme::kTextDim, int(60 * light)));
+                p.drawRect(block.adjusted(0.5, 0.5, -0.5, -0.5), withAlpha(Theme::textDim(), int(60 * light)));
             continue;
         }
         const QColor color = sideColor(side, ratio);
@@ -637,7 +637,7 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
             }
         }
     }
-    p.drawRoundedRect(l.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, withAlpha(Theme::kGridBeat, 150));
+    p.drawRoundedRect(l.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, withAlpha(Theme::gridBeat(), 150));
 
     // The level after the dynamics (thick), the change between it and the level before (thin).
     const double outDb = view.out.level, inDb = view.in.level, gain = view.gain.value;
@@ -649,14 +649,14 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         const double meterEnd = std::min(outX, fromX);
         const double yellow = xOfDb(-12.0), red = xOfDb(-3.0);
         if (meterEnd > left) {
-            p.fillRect(QRectF(left, barTop, std::min(meterEnd, yellow) - left, barHeight), Theme::kMeterLow);
+            p.fillRect(QRectF(left, barTop, std::min(meterEnd, yellow) - left, barHeight), Theme::meterLow());
             if (meterEnd > yellow)
-                p.fillRect(QRectF(yellow, barTop, std::min(meterEnd, red) - yellow, barHeight), Theme::kMeterMid);
+                p.fillRect(QRectF(yellow, barTop, std::min(meterEnd, red) - yellow, barHeight), Theme::meterMid());
             if (meterEnd > red)
-                p.fillRect(QRectF(red, barTop, meterEnd - red, barHeight), Theme::kMeterHigh);
+                p.fillRect(QRectF(red, barTop, meterEnd - red, barHeight), Theme::meterHigh());
         }
         if (std::abs(gain) >= 0.05 && std::abs(fromX - outX) >= 0.5) {
-            const QColor color = gain < 0.0 ? Theme::kAccent : kBoost;
+            const QColor color = gain < 0.0 ? Theme::accent() : kBoost;
             const int alpha = int(std::min(220.0, 60.0 + 160.0 * std::abs(gain) / 12.0));
             const double x0 = std::max(left, std::min(outX, fromX)), x1 = std::max(outX, fromX);
             p.fillRect(QRectF(x0, barTop, x1 - x0, barHeight), withAlpha(color, alpha));
@@ -665,15 +665,15 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         if (view.out.peak > kFloorDb) {
             const double px = xOfDb(view.out.peak);
             p.fillRect(QRectF(std::max(left, px - 1.5), barTop, 1.5, barHeight),
-                       view.out.peak >= 0.0 ? Theme::kMeterHigh : Theme::kText);
+                       view.out.peak >= 0.0 ? Theme::meterHigh() : Theme::text());
         }
         if (inDb > kFloorDb)
-            p.fillRect(QRectF(left, ym + 8.0, xOfDb(inDb) - left, 2.0), withAlpha(Theme::kText, 150));
+            p.fillRect(QRectF(left, ym + 8.0, xOfDb(inDb) - left, 2.0), withAlpha(Theme::text(), 150));
         // Where the static curve is taking it (leading while attack or release catch up).
         if (const std::optional<double> target = targetMarkerDb(band)) {
             const double tx = xOfDb(*target);
             const QPointF tip[3] = {{tx - 2.5, ym - 11.0}, {tx + 2.5, ym - 11.0}, {tx, ym - 7.0}};
-            p.drawPolygon(tip, 3, withAlpha(Theme::kText, 200), 1.0);
+            p.drawPolygon(tip, 3, withAlpha(Theme::text(), 200), 1.0);
         }
     }
 
@@ -685,35 +685,35 @@ void MultibandGraph::paintLane(SgPainter& p, int band) const {
         if (glow > 0.01)
             drawGlowPolyline(p, {QPointF(x, l.top() + 2), QPointF(x, l.bottom() - 2)},
                              withAlpha(color, int(140 * glow)), 2.0);
-        const QColor line = mixColor(color, Theme::kText, 0.5 * light);
+        const QColor line = mixColor(color, Theme::text(), 0.5 * light);
         const double w = 2.0 + light;
         p.fillRect(QRectF(x - w / 2, l.top() + 1, w, l.height() - 2), line);
         const QRectF grip(x - 2.0 - light / 2, ym - 6.0, 4.0 + light, 12.0);
-        p.fillRoundedRect(grip, 1.5, 1.5, mixColor(color, Theme::kText, 0.35 + 0.45 * light));
-        p.drawRoundedRect(grip, 1.5, 1.5, withAlpha(Theme::kMeterBg, 200), 1.0);
+        p.fillRoundedRect(grip, 1.5, 1.5, mixColor(color, Theme::text(), 0.35 + 0.45 * light));
+        p.drawRoundedRect(grip, 1.5, 1.5, withAlpha(Theme::meterBg(), 200), 1.0);
     }
 
     // Under the mouse: a hairline at that level (under the figures).
     const std::optional<double> hairline = hoverLine(band);
     if (hairline)
-        p.fillRect(QRectF(std::round(*hairline), l.top() + 1, 1, l.height() - 2), withAlpha(Theme::kText, 110));
+        p.fillRect(QRectF(std::round(*hairline), l.top() + 1, 1, l.height() - 2), withAlpha(Theme::text(), 110));
 
     // The gain change in figures, while the band sounds (or is still letting go).
     if (const QString text = gainText(band); !text.isEmpty()) {
-        const QColor color = std::abs(gain) < 0.05 ? Theme::kTextDim : (gain < 0 ? Theme::kAccent : kBoost);
+        const QColor color = std::abs(gain) < 0.05 ? Theme::textDim() : (gain < 0 ? Theme::accent() : kBoost);
         pill(p, gainLabelRect(band), text, color, font7);
     }
 
     // And the static curve at the hairline's level.
     if (hairline)
-        pill(p, hoverLabelRect(band), hoverText(band), Theme::kText, font7, 230);
+        pill(p, hoverLabelRect(band), hoverText(band), Theme::text(), font7, 230);
     p.restore();
 
     // A band switched off: the Mid band takes it.
     if (const double off = offLabelOpacity(band); off > 0.01) {
         p.save();
         p.setOpacity(off);
-        pill(p, offLabelRect(band), kOffLabel, Theme::kTextDim, uiFont(8), 230);
+        pill(p, offLabelRect(band), kOffLabel, Theme::textDim(), uiFont(8), 230);
         p.restore();
     }
 }
@@ -805,9 +805,9 @@ void MultibandGraph::paintBubble(SgPainter& p) const {
     if (!drag_)
         return;
     const QRectF rect = bubbleRect();
-    p.fillRoundedRect(rect, 3, 3, Theme::kPanelAlt);
-    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, Theme::kGridBar);
-    p.drawText(rect, Qt::AlignCenter, bubbleText(), Theme::kText, uiFont(8));
+    p.fillRoundedRect(rect, 3, 3, Theme::panelAlt());
+    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3, Theme::gridBar());
+    p.drawText(rect, Qt::AlignCenter, bubbleText(), Theme::text(), uiFont(8));
 }
 
 }  // namespace sub::ui

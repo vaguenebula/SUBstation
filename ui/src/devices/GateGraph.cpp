@@ -51,17 +51,17 @@ double meterY(double db, const QRectF& rect) { return dbToY(db, rect, GateGraph:
 // How far the gate turns down what comes in: down from the top by as many dB (to the floor's depth
 // when shut, the whole well at a silent floor), so it reads against the figures as the In meter does.
 void drawGateMeter(SgPainter& p, const QRectF& rect, double reductionDb) {
-    p.fillRect(rect, Theme::kPanel);
+    p.fillRect(rect, Theme::panel());
     const double bottom = meterY(-std::max(0.0, reductionDb), rect);
     if (bottom > rect.top() + 0.01) {
         QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
-        gradient.setColorAt(0, withAlpha(Theme::kAccent, 150));
-        gradient.setColorAt(1, Theme::kAccent);
+        gradient.setColorAt(0, withAlpha(Theme::accent(), 150));
+        gradient.setColorAt(1, Theme::accent());
         p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), bottom - rect.top()), gradient);
     }
     for (int db = -12; db > GateGraph::kFloorDb; db -= 12)
         p.drawLine(QPointF(rect.left(), meterY(db, rect)), QPointF(rect.right(), meterY(db, rect)),
-                   withAlpha(Theme::kMeterBg, 145));
+                   withAlpha(Theme::meterBg(), 145));
 }
 
 }  // namespace
@@ -543,8 +543,8 @@ void GateGraph::hoverLeaveEvent(QHoverEvent*) {
 void GateGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const double w = width(), h = height();
-    p.fillRoundedRect(QRectF(0, 0, w, h), 4, 4, Theme::kMeterBg);
-    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 4, 4, withAlpha(Theme::kGridBeat, 150), 1);
+    p.fillRoundedRect(QRectF(0, 0, w, h), 4, 4, Theme::meterBg());
+    p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 4, 4, withAlpha(Theme::gridBeat(), 150), 1);
     const QRectF r = plot();
     const QFont small = textFont();
 
@@ -552,9 +552,9 @@ void GateGraph::paint(SgPainter& p) {
     // dot's halo on the plot's edge), in a column as wide as the widest figure.
     for (int db = 0; db >= -60; db -= 12) {
         const double y = yOf(db);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBar, db == 0 ? 150 : 70));
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::gridBar(), db == 0 ? 150 : 70));
         p.drawText(QRectF(r.right() + 6, y - 6, figuresWidth_, 12),
-                   Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, QString::number(db), Theme::kTextDim, small);
+                   Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, QString::number(db), Theme::textDim(), small);
     }
 
     // The history, newest at the right edge, in columns of whole buckets of values (aligned to the
@@ -609,12 +609,12 @@ void GateGraph::paint(SgPainter& p) {
                 ++j;
             if (step > 0)
                 p.fillBand(x0 + i * dx, dx, shadeTops_.data() + i, bottoms_.data() + i, j - i,
-                           withAlpha(Theme::kSoloOn, int(std::lround(kShadeAlpha * step / 8.0))));
+                           withAlpha(Theme::soloOn(), int(std::lround(kShadeAlpha * step / 8.0))));
             i = j;
         }
         drawGlowPolyline(p, outline_, QColor(255, 255, 255, 200), 1.1);
         if (showKey_)
-            p.drawPolyline(keyPoints_.data(), count, withAlpha(Theme::kPlayOn, 170), 1.0);
+            p.drawPolyline(keyPoints_.data(), count, withAlpha(Theme::playOn(), 170), 1.0);
         p.restore();
     }
 
@@ -623,15 +623,15 @@ void GateGraph::paint(SgPainter& p) {
     const double hoverReturn = hoverReturn_.value, hoverThreshold = hoverThreshold_.value;
     if (returnY > thresholdY + 0.5)
         p.fillRect(QRectF(r.left(), thresholdY, r.width(), returnY - thresholdY),
-                   withAlpha(Theme::kAccent, int(std::lround(12 + 12 * hoverReturn))));
-    drawDashedPolyline(p, {QPointF(r.left(), returnY), QPointF(r.right(), returnY)}, Theme::kAccent, 1.0 + hoverReturn);
-    p.fillRect(QRectF(r.left(), returnY - 3.5, 4, 7), Theme::kAccent);
+                   withAlpha(Theme::accent(), int(std::lround(12 + 12 * hoverReturn))));
+    drawDashedPolyline(p, {QPointF(r.left(), returnY), QPointF(r.right(), returnY)}, Theme::accent(), 1.0 + hoverReturn);
+    p.fillRect(QRectF(r.left(), returnY - 3.5, 4, 7), Theme::accent());
 
     // The threshold: a glowing blue line, its tab at the right.
-    drawGlowPolyline(p, {QPointF(r.left(), thresholdY), QPointF(r.right(), thresholdY)}, Theme::kSoloOn,
+    drawGlowPolyline(p, {QPointF(r.left(), thresholdY), QPointF(r.right(), thresholdY)}, Theme::soloOn(),
                      1.5 + hoverThreshold);
     const QPointF tab[3] = {{r.right(), thresholdY - 4.5}, {r.right(), thresholdY + 4.5}, {r.right() - 6, thresholdY}};
-    p.fillPolygon(tab, 3, Theme::kSoloOn);
+    p.fillPolygon(tab, 3, Theme::soloOn());
 
     // The newest key level: a dot on the right edge, falling quickly rather than jumping, blue while the
     // key's level now (not the falling dot's) is at or above the threshold, its halo as open as the
@@ -639,8 +639,8 @@ void GateGraph::paint(SgPainter& p) {
     const double ledEase = std::clamp(led_.value, 0.0, 1.0);
     if (keyMeter_.level > kFloorDb + 0.5) {
         const QPointF dot(r.right(), yOf(keyMeter_.level));
-        p.fillEllipse(dot, 6, 6, withAlpha(Theme::kSoloOn, int(std::lround(50 * ledEase))));
-        p.fillEllipse(dot, 2.5, 2.5, keyAbove() ? Theme::kSoloOn : Theme::kTextDim);
+        p.fillEllipse(dot, 6, 6, withAlpha(Theme::soloOn(), int(std::lround(50 * ledEase))));
+        p.fillEllipse(dot, 2.5, 2.5, keyAbove() ? Theme::soloOn() : Theme::textDim());
     }
     if (ping_ >= 0.0) {  // (inside the plot: it would run over the figures)
         const double t = std::clamp(ping_ / kPingSeconds, 0.0, 1.0), eased = 1.0 - (1.0 - t) * (1.0 - t);
@@ -649,7 +649,7 @@ void GateGraph::paint(SgPainter& p) {
         p.save();
         p.setClipRect(r);
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius),
-                      withAlpha(Theme::kSoloOn, int(std::lround(180 * (1.0 - eased)))), 1.2);
+                      withAlpha(Theme::soloOn(), int(std::lround(180 * (1.0 - eased)))), 1.2);
         p.restore();
     }
 
@@ -659,21 +659,21 @@ void GateGraph::paint(SgPainter& p) {
     const QString state = idle_ ? QStringLiteral("Idle") : open ? QStringLiteral("Open") : QStringLiteral("Closed");
     const QPointF led = r.topLeft() + QPointF(9, 9);
     p.fillRoundedRect(QRectF(r.left() + 2, r.top() + 2, 20 + SgPainter::textWidth(state, small), 14), 3, 3,
-                      withAlpha(Theme::kMeterBg, 170));
+                      withAlpha(Theme::meterBg(), 170));
     if (ledEase > 0.01)
         p.fillEllipse(led, 3.5 + 4 * ledEase, 3.5 + 4 * ledEase,
-                      withAlpha(Theme::kSoloOn, int(std::lround(70 * ledEase))));
-    p.fillEllipse(led, 3.5, 3.5, mixColor(Theme::kTextDisabled, Theme::kSoloOn, ledEase));
+                      withAlpha(Theme::soloOn(), int(std::lround(70 * ledEase))));
+    p.fillEllipse(led, 3.5, 3.5, mixColor(Theme::textDisabled(), Theme::soloOn(), ledEase));
     p.drawText(QRectF(led.x() + 7, led.y() - 7, 50, 14), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip, state,
-               idle_ ? Theme::kTextDisabled : open ? Theme::kText : Theme::kTextDim, small);
+               idle_ ? Theme::textDisabled() : open ? Theme::text() : Theme::textDim(), small);
     if (listening_) {  // (pulsing while sound comes, on a backing of its own: the 0 dB line runs under it)
         const QString listening = QStringLiteral("Listening to the key");
         const double alpha = 0.55 + 0.45 * std::sin(2 * kPi * pulse_ / kPulseSeconds);
         const double width = SgPainter::textWidth(listening, small) + 12;
         const QRectF box(r.center().x() - width / 2, r.top() + 2, width, 14);
-        p.fillRoundedRect(box, 3, 3, withAlpha(Theme::kMeterBg, 200));
+        p.fillRoundedRect(box, 3, 3, withAlpha(Theme::meterBg(), 200));
         p.drawText(box, Qt::AlignCenter, listening,
-                   idle_ ? Theme::kTextDisabled : withAlpha(Theme::kAccent, int(std::lround(255 * alpha))), small);
+                   idle_ ? Theme::textDisabled() : withAlpha(Theme::accent(), int(std::lround(255 * alpha))), small);
     }
 
     // The lines' values while hovered or dragged, over everything else.
@@ -685,24 +685,24 @@ void GateGraph::paint(SgPainter& p) {
         const QRectF box(right ? r.right() - 10 - width : r.left() + 8, top, width, 12);
         p.save();
         p.setOpacity(opacity);
-        p.fillRoundedRect(box, 2, 2, withAlpha(Theme::kMeterBg, 220));
+        p.fillRoundedRect(box, 2, 2, withAlpha(Theme::meterBg(), 220));
         p.drawText(box, Qt::AlignCenter, text, color, small);
         p.restore();
     };
-    tag(thresholdY, hoverThreshold, true, sub::app::formatValue(thresholdDb_, QStringLiteral("dB")), Theme::kSoloOn);
+    tag(thresholdY, hoverThreshold, true, sub::app::formatValue(thresholdDb_, QStringLiteral("dB")), Theme::soloOn());
     tag(returnY, hoverReturn, false,
-        QStringLiteral("Return %1").arg(sub::app::formatValue(returnDb_, QStringLiteral("dB"))), Theme::kAccent);
+        QStringLiteral("Return %1").arg(sub::app::formatValue(returnDb_, QStringLiteral("dB"))), Theme::accent());
 
     // The meters, captioned above: the input's level (red above 0 dB, over the well's top), and how
     // far the gate turns it down.
     const QRectF inRect = inMeter(), gateRect = gateMeter();
     for (const auto& [box, caption] :
          {std::pair{inCaption(), QStringLiteral("In")}, std::pair{gateCaption(), QStringLiteral("Gate")}})
-        p.drawText(box.adjusted(-1, 0, 1, 0), Qt::AlignCenter, caption, Theme::kTextDim, small);  // (a pixel spare)
+        p.drawText(box.adjusted(-1, 0, 1, 0), Qt::AlignCenter, caption, Theme::textDim(), small);  // (a pixel spare)
     drawLevelMeter(p, inRect, inMeter_.level, inMeter_.peak, kFloorDb, 0.0, MeterWell::Panel);
     if (inMeter_.level > 0.0) {
         const double top = yOf(std::min(inMeter_.level, kCeilingDb));
-        p.fillRect(QRectF(inRect.left(), top, inRect.width(), inRect.top() - top), Theme::kMeterHigh);
+        p.fillRect(QRectF(inRect.left(), top, inRect.width(), inRect.top() - top), Theme::meterHigh());
     }
     drawGateMeter(p, gateRect, reduction_.value);
 }

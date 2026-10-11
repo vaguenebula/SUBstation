@@ -199,14 +199,14 @@ void GateKeyGraph::wheelEvent(QWheelEvent* event) {
 
 void GateKeyGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
-    p.fillRoundedRect(QRectF(0, 0, width(), height()), 3, 3, Theme::kMeterBg);
+    p.fillRoundedRect(QRectF(0, 0, width(), height()), 3, 3, Theme::meterBg());
     const QRectF r = plot();
     drawDecadeGrid(p, r, frequencyAxis());
     const double zero = yOf(0.0);
-    p.drawLine(QPointF(r.left(), zero), QPointF(r.right(), zero), withAlpha(Theme::kGridBar, 160));
+    p.drawLine(QPointF(r.left(), zero), QPointF(r.right(), zero), withAlpha(Theme::gridBar(), 160));
 
     const double on = std::clamp(activeEase_.value, 0.0, 1.0);
-    const QColor color = mixColor(Theme::kTextDisabled, Theme::kAccent, on);
+    const QColor color = mixColor(Theme::textDisabled(), Theme::accent(), on);
     points_.resize(frequencies_.size());
     for (std::size_t i = 0; i < frequencies_.size(); ++i)
         points_[i] = QPointF(xOf(frequencies_[i]), yOf(response_[i]));
@@ -215,8 +215,8 @@ void GateKeyGraph::paint(SgPainter& p) {
         p.setClipRect(r);
         if (on > 0.01) {  // under the curve: the band that keys the gate
             QLinearGradient fill(r.topLeft(), r.bottomLeft());
-            fill.setColorAt(0, withAlpha(Theme::kAccent, int(std::lround(70 * on))));
-            fill.setColorAt(1, withAlpha(Theme::kAccent, int(std::lround(12 * on))));
+            fill.setColorAt(0, withAlpha(Theme::accent(), int(std::lround(70 * on))));
+            fill.setColorAt(1, withAlpha(Theme::accent(), int(std::lround(12 * on))));
             p.fillToBaseline(points_.data(), int(points_.size()), r.bottom(), fill);
         }
         drawGlowPolyline(p, points_, color, 1.3);
@@ -229,13 +229,13 @@ void GateKeyGraph::paint(SgPainter& p) {
     if (hover > 0.01)
         p.drawEllipse(QRectF(at.x() - 6.5, at.y() - 6.5, 13, 13), withAlpha(color, int(std::lround(200 * hover))), 1.2);
     p.fillEllipse(at, 4, 4, color);
-    p.fillEllipse(at, 1.6, 1.6, Theme::kMeterBg);
+    p.fillEllipse(at, 1.6, 1.6, Theme::meterBg());
 
     if (on < 0.99) {
         p.save();
         p.setOpacity(1.0 - on);
         p.drawText(QRectF(r.right() - 64, r.top() + 2, 60, 12), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
-                   QStringLiteral("EQ off"), Theme::kTextDim, uiFont(7));
+                   QStringLiteral("EQ off"), Theme::textDim(), uiFont(7));
         p.restore();
     }
 }

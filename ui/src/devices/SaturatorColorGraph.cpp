@@ -334,12 +334,12 @@ void SaturatorColorGraph::hoverLeaveEvent(QHoverEvent*) {
 void SaturatorColorGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
     drawDecadeGrid(p, r, frequencyAxis());
     for (const double db : {-24.0, -12.0, 12.0, 24.0})
-        p.drawLine(QPointF(r.left(), yOfDb(db)), QPointF(r.right(), yOfDb(db)), Theme::kGridSub);
+        p.drawLine(QPointF(r.left(), yOfDb(db)), QPointF(r.right(), yOfDb(db)), Theme::gridSub());
     const double zero = yOfDb(0.0);
-    p.drawLine(QPointF(r.left(), zero), QPointF(r.right(), zero), Theme::kGridBar);
+    p.drawLine(QPointF(r.left(), zero), QPointF(r.right(), zero), Theme::gridBar());
 
     p.save();
     p.setClipRect(r);
@@ -356,24 +356,24 @@ void SaturatorColorGraph::paint(SgPainter& p) {
         std::vector<QPointF> shape(n);
         for (std::size_t i = 0; i < n; ++i)
             shape[i] = QPointF(xAt(i), spectrumY(inCols_[i]));
-        p.fillToBaseline(shape.data(), int(n), r.bottom(), withAlpha(Theme::kTextDim, 56));
+        p.fillToBaseline(shape.data(), int(n), r.bottom(), withAlpha(Theme::textDim(), 56));
     }
     if (outLive_ && outCols_.size() == n && n >= 2) {
         std::vector<QPointF> line(n);
         for (std::size_t i = 0; i < n; ++i)
             line[i] = QPointF(xAt(i), spectrumY(outCols_[i]));
-        p.drawPolyline(line.data(), int(n), withAlpha(Theme::kScopeLine, 120), 1.0);
+        p.drawPolyline(line.data(), int(n), withAlpha(Theme::scopeLine(), 120), 1.0);
     }
 
     // The EQ: lit while Color is on, grey while off.
     const double on = onEased_.value;
-    const QColor color = mixColor(Theme::kTextDisabled, Theme::kAccent, on);
+    const QColor color = mixColor(Theme::textDisabled(), Theme::accent(), on);
     if (curveDb_.size() == n && n >= 2) {
         std::vector<QPointF> curve(n);
         for (std::size_t i = 0; i < n; ++i)
             curve[i] = QPointF(xAt(i), yOfDb(curveDb_[i]));
         if (on > 0.01)
-            p.fillToBaseline(curve.data(), int(n), zero, withAlpha(Theme::kAccent, int(28 * on)));
+            p.fillToBaseline(curve.data(), int(n), zero, withAlpha(Theme::accent(), int(28 * on)));
         if (on > 0.5)
             drawGlowPolyline(p, curve, color, 1.5);
         else
@@ -382,7 +382,7 @@ void SaturatorColorGraph::paint(SgPainter& p) {
     p.restore();
 
     // The handles: Amt Lo's on the shelf, the peak's at its top.
-    const QColor ring = on > 0.5 ? Theme::kAccent : Theme::kTextDim;
+    const QColor ring = on > 0.5 ? Theme::accent() : Theme::textDim();
     for (const Handle handle : {Handle::Base, Handle::Peak}) {
         const QPointF at = handle == Handle::Base ? baseHandle() : peakHandle();
         const bool lit = hovered_ == handle || handle_ == handle;
@@ -390,7 +390,7 @@ void SaturatorColorGraph::paint(SgPainter& p) {
             p.fillEllipse(at, 9, 9, withAlpha(ring, 60));
             p.fillEllipse(at, 4.5, 4.5, ring);
         } else {
-            p.fillEllipse(at, 4.5, 4.5, Theme::kMeterBg);
+            p.fillEllipse(at, 4.5, 4.5, Theme::meterBg());
         }
         p.drawEllipse(QRectF(at.x() - 4.5, at.y() - 4.5, 9, 9), ring, 1.5);
     }
@@ -402,11 +402,11 @@ void SaturatorColorGraph::paint(SgPainter& p) {
     const double outWidth = SgPainter::textWidth(out, font);
     const double legendWidth = SgPainter::textWidth(in, font) + kLegendGap + outWidth;
     const QRectF corner(r.right() - 3 - legendWidth, r.bottom() - 13, legendWidth, 12);
-    p.fillRoundedRect(corner.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
-    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, out, withAlpha(Theme::kScopeLine, 200),
+    p.fillRoundedRect(corner.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::meterBg(), 200));
+    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, out, withAlpha(Theme::scopeLine(), 200),
                font);
     p.drawText(corner.adjusted(0, 0, -outWidth - kLegendGap, 0), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
-               in, Theme::kTextDim, font);
+               in, Theme::textDim(), font);
 }
 
 }  // namespace sub::ui

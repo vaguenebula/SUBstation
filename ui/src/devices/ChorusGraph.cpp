@@ -309,9 +309,9 @@ void ChorusGraph::mouseUngrabEvent() {
 
 QColor ChorusGraph::voiceColour(const ChorusLayout& layout, int channel, int voice) const {
     if (mix_ <= 0.0)
-        return scaledAlpha(Theme::kTextDisabled, dim_.value);  // none of it heard
-    QColor colour = mixColor(channel == 0 ? Theme::kScopeLine : kRightColour, Theme::kText, 0.22 * voice);
-    colour = mixColor(colour, Theme::kMeterHigh, 0.45 * std::clamp(warmth_ / 100.0, 0.0, 1.0));
+        return scaledAlpha(Theme::textDisabled(), dim_.value);  // none of it heard
+    QColor colour = mixColor(channel == 0 ? Theme::scopeLine() : kRightColour, Theme::text(), 0.22 * voice);
+    colour = mixColor(colour, Theme::meterHigh(), 0.45 * std::clamp(warmth_ / 100.0, 0.0, 1.0));
     double alpha = (0.55 + 0.45 * glow_.value) * dim_.value;
     if (channel == 1 && layout.mode != kVibrato)
         alpha *= 0.45 + 0.55 * std::min(1.0, std::max(0.0, width_) / 100.0);  // narrow: towards mono
@@ -372,7 +372,7 @@ void ChorusGraph::drawDots(SgPainter& p, const ChorusLayout& layout, double alph
             p.fillEllipse(at, 3.0, 3.0, colour);
             const double rim = std::clamp((glow - 0.3) / 0.5, 0.0, 1.0) * shown;
             if (rim > 0.0)
-                p.drawEllipse(QRectF(at.x() - 3.0, at.y() - 3.0, 6.0, 6.0), scaledAlpha(Theme::kText, rim), 1.0);
+                p.drawEllipse(QRectF(at.x() - 3.0, at.y() - 3.0, 6.0, 6.0), scaledAlpha(Theme::text(), rim), 1.0);
         }
     }
 }
@@ -380,7 +380,7 @@ void ChorusGraph::drawDots(SgPainter& p, const ChorusLayout& layout, double alph
 void ChorusGraph::drawAxis(SgPainter& p) {
     const QRectF r = plot();
     const double yLow = yOf(axisLow_.value), yHigh = yOf(axisHigh_.value);
-    const QColor line = withAlpha(Theme::kGridBeat, 160);
+    const QColor line = withAlpha(Theme::gridBeat(), 160);
     p.drawLine(QPointF(r.left(), yHigh), QPointF(r.right(), yHigh), line);
     p.drawLine(QPointF(r.left(), yLow), QPointF(r.right(), yLow), line);
     // Each layout's centre, faded with it (one where they meet; a fading layout's may lie outside the plot).
@@ -403,10 +403,10 @@ void ChorusGraph::drawAxis(SgPainter& p) {
         if (drawn)
             continue;
         const std::vector<QPointF> centre{QPointF(r.left(), y), QPointF(nowX(), y)};
-        drawDashedPolyline(p, centre, scaledAlpha(Theme::kGridBar, alpha), 1.0);
+        drawDashedPolyline(p, centre, scaledAlpha(Theme::gridBar(), alpha), 1.0);
     }
     p.restore();
-    p.drawLine(QPointF(nowX(), r.top() + 3), QPointF(nowX(), r.bottom() - 3), Theme::kScopeAxis);
+    p.drawLine(QPointF(nowX(), r.top() + 3), QPointF(nowX(), r.bottom() - 3), Theme::scopeAxis());
 }
 
 void ChorusGraph::drawFigures(SgPainter& p) {
@@ -451,14 +451,14 @@ void ChorusGraph::drawFigures(SgPainter& p) {
         const double alpha = std::clamp(2.0 * f.alpha - 1.0, 0.0, 1.0);
         if (alpha > 0.0)
             p.drawText(QRectF(r.left() + 3, f.above ? f.y - 1.0 - height : f.y + 1.0, r.width() / 2, height),
-                       Qt::AlignLeft | Qt::AlignVCenter, f.text, scaledAlpha(Theme::kTextDim, alpha), font);
+                       Qt::AlignLeft | Qt::AlignVCenter, f.text, scaledAlpha(Theme::textDim(), alpha), font);
     }
 }
 
 void ChorusGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
     drawAxis(p);
 
     // The layouts fading out under the current one, each with its dots.
@@ -472,20 +472,20 @@ void ChorusGraph::paint(SgPainter& p) {
 
     // The oldest end fades into the ground, and the axis' figures stand there.
     QLinearGradient fade(QPointF(r.left(), 0), QPointF(r.left() + kFadeWidth, 0));
-    fade.setColorAt(0, withAlpha(Theme::kMeterBg, 235));
-    fade.setColorAt(1, withAlpha(Theme::kMeterBg, 0));
+    fade.setColorAt(0, withAlpha(Theme::meterBg(), 235));
+    fade.setColorAt(1, withAlpha(Theme::meterBg(), 0));
     p.fillRect(QRectF(r.left(), r.top(), kFadeWidth, r.height()), fade);
     drawFigures(p);
 
     // The header: what the axis is, and the largest detune (while dragging: the Rate and the Amount).
     const QFont font = uiFont(7);
-    const QColor text = frozen_ ? Theme::kTextDim : Theme::kText;
+    const QColor text = frozen_ ? Theme::textDim() : Theme::text();
     p.drawText(QRectF(r.left() + 3, 1, r.width() / 2, kHeader - 1), Qt::AlignLeft | Qt::AlignVCenter,
-               QStringLiteral("Delay (ms)"), Theme::kTextDim, font);
+               QStringLiteral("Delay (ms)"), Theme::textDim(), font);
     if (!gesture_.isEmpty()) {
         const QString dragged = sub::app::formatValue(rate_, QStringLiteral("Hz")) + QStringLiteral("  ·  ") +
                                 sub::app::formatValue(amount_, QStringLiteral("%"));
-        p.drawText(QRectF(r.left(), 1, r.width(), kHeader - 1), Qt::AlignCenter, dragged, Theme::kText, font);
+        p.drawText(QRectF(r.left(), 1, r.width(), kHeader - 1), Qt::AlignCenter, dragged, Theme::text(), font);
     }
     p.drawText(QRectF(r.left(), 1, r.width() - 3, kHeader - 1), Qt::AlignRight | Qt::AlignVCenter, readout_, text,
                font);

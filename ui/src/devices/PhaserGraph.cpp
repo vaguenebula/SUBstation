@@ -611,7 +611,7 @@ void PhaserGraph::dragTo(const QPointF& pos) {
 
 void PhaserGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
     paintResponse(p);
     paintStrip(p);
 }
@@ -624,13 +624,13 @@ void PhaserGraph::paintResponse(SgPainter& p) {
     for (const int db : {12, 0, -12, -24}) {
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y),
-                   db == 0 ? Theme::kGridBar : withAlpha(Theme::kGridBeat, 160));
+                   db == 0 ? Theme::gridBar() : withAlpha(Theme::gridBeat(), 160));
         p.drawText(QRectF(r.left() + 3, y + 1, r.width() / 4, lineHeight), Qt::AlignLeft | Qt::AlignTop,
-                   db > 0 ? QStringLiteral("+%1").arg(db) : QString::number(db), Theme::kTextDim, font);
+                   db > 0 ? QStringLiteral("+%1").arg(db) : QString::number(db), Theme::textDim(), font);
     }
 
     const bool heard = mix_ > 0.0;
-    const QColor color = heard ? Theme::kScopeLine : Theme::kTextDisabled;
+    const QColor color = heard ? Theme::scopeLine() : Theme::textDisabled();
     const std::vector<QPointF>& line = leftLayout_.line;
     const double column = r.width() / double(std::max<qsizetype>(1, left_.top.size()));
     p.save();
@@ -638,8 +638,8 @@ void PhaserGraph::paintResponse(SgPainter& p) {
     // Under the curve, a glow fading downwards.
     if (line.size() >= 2) {
         QLinearGradient gradient(r.topLeft(), r.bottomLeft());
-        gradient.setColorAt(0, withAlpha(heard ? Theme::kAccent : Theme::kTextDisabled, 70));
-        gradient.setColorAt(1, withAlpha(heard ? Theme::kAccent : Theme::kTextDisabled, 6));
+        gradient.setColorAt(0, withAlpha(heard ? Theme::accent() : Theme::textDisabled(), 70));
+        gradient.setColorAt(1, withAlpha(heard ? Theme::accent() : Theme::textDisabled(), 6));
         p.fillToBaseline(line.data(), int(line.size()), r.bottom(), gradient);
     }
     // A comb finer than the eye can follow: a band between its peaks and its notches.
@@ -647,28 +647,28 @@ void PhaserGraph::paintResponse(SgPainter& p) {
         p.fillBand(band.x, column, band.tops.data(), band.bottoms.data(), int(band.tops.size()), withAlpha(color, 64));
     if (oldFade_.value > 0.0 && oldLayout_.line.size() >= 2)
         p.drawPolyline(oldLayout_.line.data(), int(oldLayout_.line.size()),
-                       withAlpha(Theme::kTextDim, int(200 * oldFade_.value)), 1.0);
+                       withAlpha(Theme::textDim(), int(200 * oldFade_.value)), 1.0);
     if (rightLayout_.line.size() >= 2)
         p.drawPolyline(rightLayout_.line.data(), int(rightLayout_.line.size()),
-                       withAlpha(Theme::kFrozen, heard ? 120 : 50), 1.0);
+                       withAlpha(Theme::frozen(), heard ? 120 : 50), 1.0);
     drawGlowPolyline(p, line, color, 1.6);
     p.restore();
 
     // The notches along the bottom, as bright as they are deep; the Phaser's centre dashed.
     if (mode_ == 0) {
         const double x = xOf(std::clamp(sweepLeft(), kLow, kHigh));
-        drawDashedPolyline(p, {QPointF(x, r.top()), QPointF(x, r.bottom())}, withAlpha(Theme::kAccent, 60), 1.0);
+        drawDashedPolyline(p, {QPointF(x, r.top()), QPointF(x, r.bottom())}, withAlpha(Theme::accent(), 60), 1.0);
     }
     for (size_t i = 0; i < markers_.size(); ++i) {
         const double x = xOf(markers_[i]);
         const QPointF tip[3] = {{x - 3, r.bottom() - 5}, {x + 3, r.bottom() - 5}, {x, r.bottom()}};
-        p.fillPolygon(tip, 3, withAlpha(heard ? Theme::kAccent : Theme::kTextDim, int(255 * markerAlpha_[i])));
+        p.fillPolygon(tip, 3, withAlpha(heard ? Theme::accent() : Theme::textDim(), int(255 * markerAlpha_[i])));
     }
 
     // The envelope's level at the left edge.
     if (envOn_ && envBar_.value > 0.0) {
         const double h = envBar_.value * r.height();
-        p.fillRect(QRectF(r.left(), r.bottom() - h, 3, h), withAlpha(Theme::kAccent, int(90 + 130 * envBar_.value)));
+        p.fillRect(QRectF(r.left(), r.bottom() - h, 3, h), withAlpha(Theme::accent(), int(90 + 130 * envBar_.value)));
     }
 
     // In and Out.
@@ -684,21 +684,21 @@ void PhaserGraph::paintResponse(SgPainter& p) {
     if (mode_ == 0)
         title += notches_ == 1 ? QStringLiteral(" \u00B7 1 notch") : QStringLiteral(" \u00B7 %1 notches").arg(notches_);
     p.drawText(QRectF(r.left() + 3, 1, r.width() / 2, kHeader - 2), Qt::AlignLeft | Qt::AlignVCenter, title,
-               Theme::kTextDim, font);
+               Theme::textDim(), font);
     const QString now = mode_ == 0 ? sub::app::formatValue(sweepLeft(), QStringLiteral("Hz"))
                                    : sub::app::formatValue(sweepLeft(), QStringLiteral("ms"));
     p.drawText(QRectF(r.center().x(), 1, width() - 4 - r.center().x(), kHeader - 2), Qt::AlignRight | Qt::AlignVCenter,
-               now, live_ ? Theme::kText : Theme::kTextDim, font);
+               now, live_ ? Theme::text() : Theme::textDim(), font);
 }
 
 void PhaserGraph::paintStrip(SgPainter& p) {
     const QRectF s = strip();
     const QRectF r = lane();
     const QFont font = uiFont(7);
-    p.fillRect(s, Theme::kPanel);
-    p.drawLine(QPointF(s.left(), s.top()), QPointF(s.right(), s.top()), Theme::kBorder);
+    p.fillRect(s, Theme::panel());
+    p.drawLine(QPointF(s.left(), s.top()), QPointF(s.right(), s.top()), Theme::border());
     const double mid = r.center().y();
-    p.drawLine(QPointF(r.left(), mid), QPointF(r.right(), mid), withAlpha(Theme::kText, 26));
+    p.drawLine(QPointF(r.left(), mid), QPointF(r.right(), mid), withAlpha(Theme::text(), 26));
     const auto xAt = [&r](double phase) { return r.left() + phase * r.width(); };
     const auto yAt = [&r, mid](double v) { return mid - std::clamp(v, -1.0, 1.0) * r.height() / 2; };
     const int count = int(shape_.size());
@@ -712,11 +712,11 @@ void PhaserGraph::paintStrip(SgPainter& p) {
     static const QStringList kNames = sub::app::phaserWaveLabels();
     const QRectF line(s.left() + 5, s.top() + 1, s.width() - 16, 11);
     p.drawText(line.adjusted(0, 0, -line.width() / 2, 0), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip,
-               kNames.value(wave_), Theme::kTextDim, font);
+               kNames.value(wave_), Theme::textDim(), font);
     if (lfo2Mix_ > 0.0)
         p.drawText(line.adjusted(line.width() / 2, 0, 0, 0), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
                    QStringLiteral("LFO 2 %1").arg(sub::app::formatValue(lfo2Mix_, QStringLiteral("%"))),
-                   Theme::kTextDim, font);
+                   Theme::textDim(), font);
 
     p.save();
     p.setClipRect(s.adjusted(0, 1, 0, 0));
@@ -733,8 +733,8 @@ void PhaserGraph::paintStrip(SgPainter& p) {
             if (i >= split)
                 ahead.push_back(at);
         }
-        p.drawPolyline(ahead.data(), int(ahead.size()), Theme::kTextDim, 1.2);
-        p.drawPolyline(done.data(), int(done.size()), withAlpha(Theme::kAccent, 150), 1.2);
+        p.drawPolyline(ahead.data(), int(ahead.size()), Theme::textDim(), 1.2);
+        p.drawPolyline(done.data(), int(done.size()), withAlpha(Theme::accent(), 150), 1.2);
         // The comet's tail: the way the dot came over the last ticks, brighter towards it (a fast LFO's
         // at most kTrailSpan of a cycle, however far it went).
         if (trailCount_ > 1) {
@@ -748,14 +748,14 @@ void PhaserGraph::paintStrip(SgPainter& p) {
                     phase -= std::floor(phase);
                     const QPointF at(xAt(phase), shapeY(phase));
                     if (k > 0 && at.x() >= from.x())  // (not across the cycle's end)
-                        p.drawLine(from, at, withAlpha(Theme::kAccent, int(190 * t * opacity)), 3.0, Qt::RoundCap);
+                        p.drawLine(from, at, withAlpha(Theme::accent(), int(190 * t * opacity)), 3.0, Qt::RoundCap);
                     from = at;
                 }
             }
         }
         // The right LFO's dot.
         p.fillEllipse(QPointF(xAt(lfoPhaseRight_), shapeY(lfoPhaseRight_)), 2.5, 2.5,
-                      withAlpha(Theme::kFrozen, int(230 * opacity)));
+                      withAlpha(Theme::frozen(), int(230 * opacity)));
         dot = QPointF(xAt(lfoPhase_), yAt(lfoValue_));
     } else {
         // The values as they came, newest at the right; before any, four cycles of the shape, dim.
@@ -767,26 +767,26 @@ void PhaserGraph::paintStrip(SgPainter& p) {
                 const float v = trace_[size_t((traceNext_ - 1 - k + kTrace) % kTrace)];
                 points.emplace_back(r.right() - k * step, yAt(v));
             }
-            p.drawPolyline(points.data(), int(points.size()), withAlpha(Theme::kAccent, 170), 1.2);
+            p.drawPolyline(points.data(), int(points.size()), withAlpha(Theme::accent(), 170), 1.2);
         } else if (count >= 2) {
             const double step = r.width() / (count - 1);
             for (int i = 0; i < count; ++i) points.emplace_back(r.left() + i * step, yAt(shape_[size_t(i)]));
-            p.drawPolyline(points.data(), int(points.size()), Theme::kTextDim, 1.2);
+            p.drawPolyline(points.data(), int(points.size()), Theme::textDim(), 1.2);
         }
         dot = QPointF(r.right(), yAt(lfoValue_));
     }
-    p.fillEllipse(dot, 9, 9, withAlpha(Theme::kAccent, int(25 * opacity)));
-    p.fillEllipse(dot, 6, 6, withAlpha(Theme::kAccent, int(60 * opacity)));
-    p.fillEllipse(dot, 3.5, 3.5, withAlpha(Theme::kAccent, int(255 * std::max(opacity, 0.5))));
+    p.fillEllipse(dot, 9, 9, withAlpha(Theme::accent(), int(25 * opacity)));
+    p.fillEllipse(dot, 6, 6, withAlpha(Theme::accent(), int(60 * opacity)));
+    p.fillEllipse(dot, 3.5, 3.5, withAlpha(Theme::accent(), int(255 * std::max(opacity, 0.5))));
     p.restore();
 
     // The modulation the sweep follows (both LFOs and the envelope), from the middle: a full swing
     // of one (Amount 100 %) reaches the lane's edge.
     const double x = s.right() - 6;
     const double reach = std::clamp(modulation_, -1.0, 1.0) * r.height() / 2;
-    p.fillRect(QRectF(x, r.top(), 3, r.height()), withAlpha(Theme::kMeterBg, 200));
+    p.fillRect(QRectF(x, r.top(), 3, r.height()), withAlpha(Theme::meterBg(), 200));
     if (std::abs(reach) > 0.25)
-        p.fillRect(QRectF(x, std::min(mid, mid - reach), 3, std::abs(reach)), withAlpha(Theme::kAccent, 210));
+        p.fillRect(QRectF(x, std::min(mid, mid - reach), 3, std::abs(reach)), withAlpha(Theme::accent(), 210));
 }
 
 }  // namespace sub::ui
