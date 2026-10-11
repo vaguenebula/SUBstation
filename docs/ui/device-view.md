@@ -331,10 +331,10 @@ readonly property var editors: ({
   `implicitWidth` is the body's width (Compressor 658, Gate 568, or 837 with its sidechain section, Limiter 610,
   Multiband Dynamics 834, Spectral Compressor 936, Saturator 770, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
   534, Phaser-Flanger 732, or 906 with More open, Reverb 1023, Disperser 544, EQ 580, or 756 with its band controls,
-  Sidechain 720, Sampler 760); it may change. The new devices' widths are the default font's as the tests' host has
-  it (Inter standing in for Segoe UI): their parts are as wide as their texts need, so they follow the font. It gets
-  the body's whole height and grows its graphs into it (6 px from the top and the bottom), while its knobs stay at the
-  top; `implicitHeight` is the least it needs.
+  Sidechain 720, Sampler 760); it may change. All but the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and
+  Sampler's are their widths in the default font as the tests' host has it (Inter standing in for Segoe UI): their parts
+  are as wide as their texts need, so they follow the font. It gets the body's whole height and grows its graphs into it
+  (6 px from the top and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs.
 - Optional: `pages` (read) and `page` (read/write) for pages of knobs, and `pageNames` (the title bar's tabs instead of
   its arrows); `menuActions` (a list of `Action`s the
   device's menu starts with); the signal `sidechainMenuRequested()` (the frame shows the sidechain menu).
@@ -608,9 +608,9 @@ The editors:
   Stereo Link over Dry/Wet, Output and the Delta button); the knobs in cells as wide as their widest caption or
   readout ("Stereo Link"; every readout's widest form, "-#.# dB/oct", each "#" the font's widest figure, measured by a
   hidden `Text`, so a last glyph's overhang counts), 64 px at least; the Focus column as wide as its widest value (the
-  widest of its forms with the font's widest figures, measured with a `FontMetrics`: the font's hinted advances, as
-  the box draws it; "20.00 kHz" in Inter) with 11 px either side, 2 px clear of the automation dot, or as its
-  captions, and Delta as its text; and between them a
+  widest of its forms with the font's widest figures, measured with a `FontMetrics` in the font's hinted advances, as
+  the box draws it, which Windows' hinting can make wider than Qt Quick text's: "20.00 kHz" in Inter) with 11 px either
+  side, 2 px clear of the automation dot, or as its captions, and Delta as its text; and between them a
   [SpectralGraph](../../ui/src/devices/SpectralGraph.h) (376 px, its own implicit width), the sections parted by
   `EditorDivider`s. It is 936 px under the default font (938 in DejaVu Sans). Tilt and Output are bipolar (symmetric
   about 0); Below is dimmed (0.55, still settable) while Upward is 1:1, when it does nothing.
