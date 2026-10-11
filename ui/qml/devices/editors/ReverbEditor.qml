@@ -46,9 +46,10 @@ Item {
     readonly property real canvasHeight: height - 54
     readonly property real boxY: height - 24
     readonly property real dim: 0.55
-    // A box's text this far in from either side at its widest: 1.5 px clear of the automation dot (drawn 3.5 to
-    // 8.5 px in from its left).
-    readonly property real boxMargin: 10
+    // A box's text this far in from either side at its widest: where the automation dot (drawn 3.5 to 8.5 px in from
+    // its left) ends, so the dot never reaches a value. (ParamBox's own width, its text and 16 px, puts the text
+    // half a pixel into the dot.)
+    readonly property real boxMargin: 8.5
     // A knob's column: as wide as the widest caption or readout a knob shows (the house's 52 px at least).
     readonly property real cell: Math.max(52, Math.ceil(knobTexts.implicitWidth))
     // Chorus's column: a knob's, or as wide as its switch (the Amount knob's title) needs; an even width, so the
@@ -151,7 +152,7 @@ Item {
         formatter: v => param ? param.format(v) : ""
         parser: text => param ? param.parse(text) : null
         defaultValue: param ? param.defaultValue : 0
-        width: Math.ceil(boxFont.advance(sampleText)) + 2 * editor.boxMargin
+        width: Math.ceil(boxFont.advance(sampleText) + 2 * editor.boxMargin)  // (on whole pixels)
         height: 18
         y: editor.boxY
         Behavior on opacity {

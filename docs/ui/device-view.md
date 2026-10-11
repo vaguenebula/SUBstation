@@ -329,10 +329,10 @@ readonly property var editors: ({
 - `required property string trackId` and `deviceId`.
 - It is the device's body: the frame around it (the border, the title bar, the menu) is the panel's. Its
   `implicitWidth` is the body's width (Compressor 658, Gate 566, or 833 with its sidechain section, Limiter 610,
-  534, Phaser-Flanger 732, or 906 with More open, Reverb 1031, Disperser 544, EQ 580, or 756 with its band controls,
-  Sidechain 720, Sampler 760; the Spectral Compressor's and the Reverb's under the default font: they follow the font);
-  it may change. It gets the body's whole height and grows its graphs into it (6 px from the top and the bottom), while
-  its knobs stay at the top; `implicitHeight` is the least it needs.
+  534, Phaser-Flanger 732, or 906 with More open, Reverb 1007, Disperser 544, EQ 580, or 756 with its band controls,
+  Sidechain 720, Sampler 760); it may change. It gets the body's whole height and grows its graphs into it (6 px
+  from the top and the bottom), while its knobs stay at the top; `implicitHeight` is the least it needs. The
+  Spectral Compressor's and the Reverb's widths are under the default font: they follow the font.
   Multiband Dynamics 834, Spectral Compressor 936, Saturator 771, Amp 642, Erosion 532, Delay 532, Chorus-Ensemble
   Sidechain 720, Sampler 760); it may change. The Limiter's and Multiband Dynamics' are their widths in the default
   (they follow the font), Delay 532, Chorus-Ensemble 534, Phaser-Flanger 732, or 906 with More open, Reverb 995,
@@ -999,16 +999,18 @@ The editors:
   the knob, so it lies on top: the mouse there lights the switch and shows its tooltip, not the knob's. Everything with
   text is as wide as the font makes it. Each box is its widest text (its sample text: the widest of the forms its
   values take, patterns such as "1d.dd kHz" with each "d" the font's widest digit, as figures may be proportional:
-  "14.44 kHz" in Inter) with 10 px either side (`boxMargin`), so the automation dot (3.5 to 8.5 px in) stays clear of
-  every value; each list its longest name and the arrow (`FontMetrics` over the names: Density's "Sparse"), and
+  "14.44 kHz" in Inter) with 8.5 px either side (`boxMargin`), so the text starts where the automation dot (3.5 to
+  8.5 px in) ends, clear of it at every value (ParamBox's own width, the text and 16 px, puts the text half a pixel
+  into the dot); each list its longest name and the arrow (`FontMetrics` over the names: Density's "Sparse"), and
   Density's and Smooth's their captions; each knob's column its widest caption or readout (every readout's widest
   form, the font's widest figures, measured by a hidden `Text`), 52 px at least, Chorus's its switch too (on an even
   width, so the switch and the dial share their centre); the Lo and Hi switches 40 px or their text; the Freeze, Flat
   and Cut column the widest of them (Freeze, with its snowflake). The pads and the graph span the boxes under them,
   or the switches over them, or their own captions (their implicit widths) where those need more (the last box then
-  under their right edge), and each section follows the one before, so the width is worked out: 1031 px under the
-  default font (the tests' host's Inter), 1052 in DejaVu Sans (995 before the boxes kept the dot clear, 890 before
-  they were measured). What a switch leaves unused dims (opacity 0.55, over 120 ms) but stays editable, as in Live:
+  under their right edge), and each section follows the one before, so the width is worked out and follows the font:
+  1007 px under the default font (the tests' host's Inter; 995 before the boxes kept the dot clear, each a pixel or
+  two narrower, and 890 before they were measured), 1028 in DejaVu Sans, 986 in Liberation Sans, 976 in FreeSans.
+  What a switch leaves unused dims (opacity 0.55, over 120 ms) but stays editable, as in Live:
   the input's boxes while both cuts are off, Spin's boxes while it is off, the type and the Hi boxes while Hi is off
   (Hi's gain also while the type is Low-pass, which has none), the Lo boxes while Lo is off, Flat and Cut while Freeze
   is off (they only act frozen), Chorus's knobs while it is off. `implicitHeight` is 148 in the tests' host (whose body

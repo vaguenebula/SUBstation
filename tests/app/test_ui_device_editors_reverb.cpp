@@ -58,9 +58,8 @@ const QList<std::pair<const char*, const char*>> kControls = {
     {"chorusAmountKnob", "chorus_amount"}, {"chorusRateKnob", "chorus_rate"}, {"reflectKnob", "reflect"},
     {"diffuseKnob", "diffuse"},      {"mixKnob", "mix"}};
 const QStringList kCanvases = {QStringLiteral("filterPad"), QStringLiteral("spinPad"), QStringLiteral("decayGraph")};
-// A value box's automation dot reaches this far in from its left (ValueBoxItem: 2.5 px round at 6 px), and its text
-// keeps this far clear of it.
-constexpr double kDotRight = 8.5, kDotClearance = 1.5;
+// A value box's automation dot reaches this far in from its left (ValueBoxItem: 2.5 px round at 6 px).
+constexpr double kDotRight = 8.5;
 // The knobs of each row, left to right.
 const QList<const char*> kFirstRow = {"shapeKnob",     "sizeKnob",         "stereoKnob",  "decayKnob",
                                       "diffusionKnob", "chorusAmountKnob", "reflectKnob", "mixKnob"};
@@ -284,10 +283,10 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
     }
 
     // Every box as wide as the widest text its parameter takes (over its whole range, whatever the font's
-    // figures) with the automation dot clear of it (every value's text, centred, kDotClearance or more past the
-    // dot), and no wider (its widest text with every figure the font's widest no more than half a pixel further
-    // in); every list as wide as its longest name with the arrow, and its caption (or a knob's column), and no
-    // wider; every switch as wide as its text (and icon); the knobs the house's 34 px.
+    // figures) with the automation dot clear of it (every value's text, centred, starting where the dot ends or
+    // further in, and its ink too), and no wider (its widest text with every figure the font's widest no more than
+    // half a pixel further in); every list as wide as its longest name with the arrow, and its caption (or a knob's
+    // column), and no wider; every switch as wide as its text (and icon); the knobs the house's 34 px.
     void checkWidths(QQuickItem* view) {
         const double cell = control(view, "shapeKnob")->width();
         for (const auto& [name, id] : kControls) {
@@ -300,20 +299,22 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                 double nearest = item->width(), widened = 0.0;
                 QString text;
                 for (const double v : valuesOf(p)) {
-                    const double advance = metrics.horizontalAdvance(p->format(v));
-                    if ((item->width() - advance) / 2 < nearest) {
-                        nearest = (item->width() - advance) / 2;
-                        text = p->format(v);
+                    const QString shown = p->format(v);
+                    const double left = (item->width() - metrics.horizontalAdvance(shown)) / 2 +
+                                        std::min(0.0, metrics.boundingRect(shown).left());
+                    if (left < nearest) {
+                        nearest = left;
+                        text = shown;
                     }
                     widened = std::max(widened, metrics.horizontalAdvance(::widened(p->format(v), metrics)));
                 }
-                QVERIFY2(nearest >= kDotRight + kDotClearance - 1e-6,
+                QVERIFY2(nearest >= kDotRight - 1e-6,
                          qPrintable(QStringLiteral("%1 %2 px: \"%3\" %4 px in")
                                         .arg(QString::fromLatin1(name))
                                         .arg(item->width())
                                         .arg(text)
                                         .arg(nearest)));
-                QVERIFY2((item->width() - widened) / 2 <= kDotRight + kDotClearance + 0.5 + 1e-6,
+                QVERIFY2((item->width() - widened) / 2 <= kDotRight + 0.5 + 1e-6,
                          qPrintable(QStringLiteral("%1 %2 px for %3").arg(QString::fromLatin1(name)).arg(item->width())
                                         .arg(widened)));
             } else if (kind.endsWith("Choice")) {

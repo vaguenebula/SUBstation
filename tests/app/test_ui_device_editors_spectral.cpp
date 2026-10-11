@@ -416,8 +416,8 @@ private Q_SLOTS:
         QVERIFY(!badge->property("lit").toBool());
 
         // Every name and value reads whole, the widest too: each knob at the value whose text is widest over its
-        // range ("-6.0 dB/oct", "-72.0 dB"); the cells as wide as the widest of those (every figure the font's
-        // widest) or the names need ("Stereo Link"), 64 px at least, and no wider.
+        // range in the font (which value that is depends on the font's figures); the cells as wide as the widest of
+        // those (every figure the font's widest) or the names need, 64 px at least, and no wider.
         QCOMPARE(formatValue(-1.5, QStringLiteral("dB/oct")), QStringLiteral("-1.5 dB/oct"));
         QCOMPARE(formatValue(0.0, QStringLiteral("dB/oct")), QStringLiteral("0.0 dB/oct"));
         const int before = undo()->index();
