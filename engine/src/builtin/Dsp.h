@@ -1,8 +1,9 @@
 #pragma once
 // DSP the built-in devices share: a state-variable filter section, 4-point
-// interpolation, a peak follower, flushing tiny values, the instruments'
-// envelopes, and rendering a block between its note events. All inline: they
-// run per sample.
+// interpolation, a peak follower, flushing tiny values, an S-curve, the
+// instruments' envelopes, and rendering a block between its note events. All
+// inline: they run per sample. More (delay lines, LFOs, biquads, crossovers,
+// glides, oversampling) is in DspBlocks.h.
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,11 @@
 #include "Processor.h"
 
 namespace sub::dsp {
+
+// A recursive filter's state, zero once it is too small to hear, so silence
+// never runs into denormals.
+inline double flushTiny(double state) noexcept { return std::abs(state) < 1e-20 ? 0.0 : state; }
+inline float flushTiny(float state) noexcept { return std::abs(state) < 1e-20f ? 0.f : state; }
 
 // --- State-variable filter ----------------------------------------------------------------
 // A TPT state-variable filter section (Zavalishin/Simper), stable at any cutoff
@@ -38,6 +44,10 @@ struct Svf {
     float ic1 = 0.f, ic2 = 0.f;
 
     void reset() noexcept { ic1 = ic2 = 0.f; }
+    void flush() noexcept {
+        ic1 = flushTiny(ic1);
+        ic2 = flushTiny(ic2);
+    }
     Outputs tick(const SvfCoefficients& c, float x) noexcept {
         const float v3 = x - ic2;
         const float v1 = c.a1 * ic1 + c.a2 * v3;
@@ -64,9 +74,10 @@ inline float followPeak(float envelope, float input, float release) noexcept {
     return input >= envelope ? input : input + release * (envelope - input);
 }
 
-// A recursive filter's state, zero once it is too small to hear, so silence
-// never runs into denormals.
-inline double flushTiny(double state) noexcept { return std::abs(state) < 1e-20 ? 0.0 : state; }
+// An S-curve from 0 at t = 0 to 1 at t = 1, flat at both ends (smoothstep, t² (3 - 2t)):
+// crossfades and switches with no corner to click. `t` in 0..1.
+inline float sCurve(float t) noexcept { return t * t * (3.f - 2.f * t); }
+inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
 
 // --- The instruments' envelopes -----------------------------------------------------------
 // Times in ms, made into steps and coefficients per sample (`samplesPerMs`).

@@ -40,26 +40,26 @@ class GalleryCanvas : public sub::ui::SgCanvas {
 protected:
     void paint(SgPainter& p) override {
         const double w = width(), h = height();
-        p.fillRect(QRectF(0, 0, w, h), Theme::kEmptyArea);
+        p.fillRect(QRectF(0, 0, w, h), Theme::emptyArea());
         const QFont font = sub::ui::uiFont(8);
         // Two lanes, the second selected.
         const double laneH = 70;
         for (int lane = 0; lane < 2; ++lane)
-            p.fillRect(QRectF(0, lane * (laneH + 1), w * 0.62, laneH), lane ? Theme::kLaneSelected : Theme::kLane);
+            p.fillRect(QRectF(0, lane * (laneH + 1), w * 0.62, laneH), lane ? Theme::laneSelected() : Theme::lane());
         // The grid: bars every 96 px, beats every 24, sixteenths every 6.
         for (double x = 0; x < w * 0.62; x += 6) {
             const int i = int(std::lround(x / 6));
-            const QColor color = i % 16 == 0 ? Theme::kGridBar : (i % 4 == 0 ? Theme::kGridBeat : Theme::kGridSub);
+            const QColor color = i % 16 == 0 ? Theme::gridBar() : (i % 4 == 0 ? Theme::gridBeat() : Theme::gridSub());
             p.drawLine(QPointF(x, 0), QPointF(x, 2 * laneH), color, 1.0, Qt::FlatCap);
         }
-        p.fillRect(QRectF(96, 0, 192, 2 * laneH + 1), Theme::kLoopRegion);
+        p.fillRect(QRectF(96, 0, 192, 2 * laneH + 1), Theme::loopRegion());
         // An audio clip with its waveform.
         const QColor track(0x4f, 0x9d, 0xde);
         const QRectF clip(30, 1, 250, laneH - 2);
         p.fillRect(clip, track.darker(160));
         p.fillRect(QRectF(clip.left(), clip.top(), clip.width(), 16), track);
         p.drawText(QRectF(clip.left() + 4, clip.top(), clip.width() - 8, 16), Qt::AlignLeft | Qt::AlignVCenter,
-                   QStringLiteral("Drums.wav"), Theme::kAccentText, font);
+                   QStringLiteral("Drums.wav"), Theme::accentText(), font);
         const int columns = int(clip.width());
         std::vector<float> top(static_cast<size_t>(columns)), bottom(static_cast<size_t>(columns));
         const double mid = clip.top() + 16 + (clip.height() - 16) / 2, half = (clip.height() - 18) / 2;
@@ -69,7 +69,7 @@ protected:
             top[size_t(i)] = float(mid - a * half);
             bottom[size_t(i)] = float(mid + a * half * 0.9);
         }
-        p.fillColumns(clip.left(), 1.0, top.data(), bottom.data(), columns, Theme::kWaveform, 1.0);
+        p.fillColumns(clip.left(), 1.0, top.data(), bottom.data(), columns, Theme::waveform(), 1.0);
         p.drawRect(clip, track.lighter(130));
         // A MIDI clip with notes, in the second lane.
         const QRectF midi(300, laneH + 2, 160, laneH - 2);
@@ -77,25 +77,25 @@ protected:
         p.fillRect(midi, green.darker(170));
         p.fillRect(QRectF(midi.left(), midi.top(), midi.width(), 16), green);
         p.drawText(QRectF(midi.left() + 4, midi.top(), midi.width() - 8, 16), Qt::AlignLeft | Qt::AlignVCenter,
-                   QStringLiteral("Bass"), Theme::kAccentText, font);
+                   QStringLiteral("Bass"), Theme::accentText(), font);
         for (int n = 0; n < 12; ++n)
-            p.fillRect(QRectF(midi.left() + 4 + n * 13, midi.top() + 20 + (n * 7 % 40), 10, 3), Theme::kWaveform);
+            p.fillRect(QRectF(midi.left() + 4 + n * 13, midi.top() + 20 + (n * 7 % 40), 10, 3), Theme::waveform());
         // An envelope over the first lane, antialiased, with its breakpoints.
         p.save();
         p.setAntialiasing(true);
         const QPointF envelope[] = {{0, 50}, {80, 50}, {140, 12}, {220, 40}, {300, 25}, {420, 60}, {560, 30}};
         p.fillToBaseline(envelope, 7, laneH, QColor(255, 166, 43, 30));
-        p.drawPolyline(envelope, 7, Theme::kAccent, 1.5);
+        p.drawPolyline(envelope, 7, Theme::accent(), 1.5);
         for (const QPointF& point : envelope)
-            p.fillEllipse(point, 3, 3, Theme::kAccent);
+            p.fillEllipse(point, 3, 3, Theme::accent());
         p.restore();
         // A time selection, the insert marker, the playhead.
-        p.fillRect(QRectF(330, 0, 96, 2 * laneH + 1), Theme::kSelection);
-        p.drawLine(QPointF(200, 0), QPointF(200, 2 * laneH), Theme::kPlayhead, 1.0);
+        p.fillRect(QRectF(330, 0, 96, 2 * laneH + 1), Theme::selection());
+        p.drawLine(QPointF(200, 0), QPointF(200, 2 * laneH), Theme::playhead(), 1.0);
         p.save();
         p.setAntialiasing(true);
         const QPointF marker[] = {{140, 0}, {148, 0}, {144, 6}};
-        p.fillPolygon(marker, 3, Theme::kInsertMarker);
+        p.fillPolygon(marker, 3, Theme::insertMarker());
         p.restore();
 
         // A piano roll's corner: keys, rows, notes with names.
@@ -106,18 +106,18 @@ protected:
         for (int row = 0; row < 15; ++row) {
             const int pitch = 72 - row;
             const bool black = QList<int>{1, 3, 6, 8, 10}.contains(pitch % 12);
-            p.fillRect(QRectF(0, row * rowH, 40, rowH), black ? Theme::kKeyBlack : Theme::kKeyWhite);
-            p.fillRect(QRectF(40, row * rowH, w, rowH), black ? Theme::kBlackKeyRow : Theme::kLane);
-            p.drawLine(QPointF(40, row * rowH), QPointF(w, row * rowH), Theme::kGridSub, 1.0, Qt::FlatCap);
+            p.fillRect(QRectF(0, row * rowH, 40, rowH), black ? Theme::keyBlack() : Theme::keyWhite());
+            p.fillRect(QRectF(40, row * rowH, w, rowH), black ? Theme::blackKeyRow() : Theme::lane());
+            p.drawLine(QPointF(40, row * rowH), QPointF(w, row * rowH), Theme::gridSub(), 1.0, Qt::FlatCap);
             if (pitch % 12 == 0)
                 p.drawText(QRectF(2, row * rowH, 36, rowH), Qt::AlignRight | Qt::AlignVCenter,
-                           QStringLiteral("C%1").arg(pitch / 12 - 2), Theme::kKeyLabel, font);
+                           QStringLiteral("C%1").arg(pitch / 12 - 2), Theme::keyLabel(), font);
         }
         const int notes[][3] = {{0, 3, 40}, {48, 5, 30}, {80, 7, 50}, {140, 2, 36}, {180, 10, 60}};
         for (const auto& note : notes) {
             const QRectF r(44 + note[0], note[1] * rowH + 1, note[2], rowH - 1);
             p.fillRect(r, green);
-            p.drawRect(r.adjusted(0, 0, -1, -1), Theme::kSelectionOutline);
+            p.drawRect(r.adjusted(0, 0, -1, -1), Theme::selectionOutline());
         }
         p.restore();
 
@@ -125,11 +125,11 @@ protected:
         p.save();
         p.translate(0, 2 * laneH + 10);
         const QRectF eq(0, 0, w, h - 2 * laneH - 10);
-        p.fillRect(eq, Theme::kMeterBg);
+        p.fillRect(eq, Theme::meterBg());
         for (int i = 1; i < 8; ++i)
-            p.drawLine(QPointF(eq.width() * i / 8, 0), QPointF(eq.width() * i / 8, eq.height()), Theme::kGridSub, 1.0,
+            p.drawLine(QPointF(eq.width() * i / 8, 0), QPointF(eq.width() * i / 8, eq.height()), Theme::gridSub(), 1.0,
                        Qt::FlatCap);
-        p.drawLine(QPointF(0, eq.height() / 2), QPointF(eq.width(), eq.height() / 2), Theme::kGridBeat, 1.0,
+        p.drawLine(QPointF(0, eq.height() / 2), QPointF(eq.width(), eq.height() / 2), Theme::gridBeat(), 1.0,
                    Qt::FlatCap);
         std::vector<QPointF> curve;
         for (int x = 0; x <= int(eq.width()); x += 2) {
@@ -139,11 +139,11 @@ protected:
         }
         p.setAntialiasing(true);
         p.fillToBaseline(curve.data(), int(curve.size()), eq.height() / 2, QColor(255, 166, 43, 40));
-        p.drawPolyline(curve.data(), int(curve.size()), Theme::kScopeLine, 2.0);
-        p.fillEllipse(QPointF(eq.width() * 0.3, eq.height() / 2 - 22), 5, 5, Theme::kAccent);
-        p.drawEllipse(QRectF(eq.width() * 0.7 - 5, eq.height() / 2 + 14 - 5, 10, 10), Theme::kText, 1.5);
+        p.drawPolyline(curve.data(), int(curve.size()), Theme::scopeLine(), 2.0);
+        p.fillEllipse(QPointF(eq.width() * 0.3, eq.height() / 2 - 22), 5, 5, Theme::accent());
+        p.drawEllipse(QRectF(eq.width() * 0.7 - 5, eq.height() / 2 + 14 - 5, 10, 10), Theme::text(), 1.5);
         p.drawText(QRectF(6, 4, 200, 14), Qt::AlignLeft | Qt::AlignTop, QStringLiteral("1.00 kHz  +6.0 dB  Q 0.71"),
-                   Theme::kText, font);
+                   Theme::text(), font);
         p.restore();
     }
 };
@@ -230,7 +230,7 @@ private Q_SLOTS:
         QVERIFY(warnings.isEmpty());
         const QImage image = window->grabWindow();
         save(image, QStringLiteral("gallery.png"));
-        QVERIFY(near(image.pixel(2, 2), Theme::kWindow));
+        QVERIFY(near(image.pixel(2, 2), Theme::window()));
 
         QMetaObject::invokeMethod(window, "openPopups");
         QTest::qWait(300);
@@ -238,7 +238,7 @@ private Q_SLOTS:
         const QImage popups = window->grabWindow();
         save(popups, QStringLiteral("gallery-popups.png"));
         const qreal dpr = window->effectiveDevicePixelRatio();
-        QVERIFY(near(popups.pixel(int(650 * dpr), int(450 * dpr)), Theme::kWindow));  // the dialog's body
+        QVERIFY(near(popups.pixel(int(650 * dpr), int(450 * dpr)), Theme::window()));  // the dialog's body
     }
 };
 

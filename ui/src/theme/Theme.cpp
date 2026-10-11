@@ -2,8 +2,14 @@
 
 #include "input/Shortcuts.h"
 
+#include <QGuiApplication>
+#include <QJSEngine>
 #include <QKeySequence>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QSettings>
 #include <QVariant>
+#include <QWindow>
 
 namespace sub::ui {
 
@@ -21,7 +27,98 @@ QFont monoFont(qreal pointSize) {
     return font;
 }
 
-Theme::Theme(QObject* parent) : QObject(parent) {}
+namespace {
+
+const NamedPalette* current = nullptr;  // the theme (null: Default)
+
+const NamedPalette* find(const QString& name) {
+    for (const NamedPalette& palette : palettes())
+        if (palette.name.compare(name, Qt::CaseInsensitive) == 0)
+            return &palette;
+    return nullptr;
+}
+
+// An item and everything in it drawn again, what they work out in
+// updatePolish() worked out again first (the arrangement's envelopes' looks).
+void repaint(QQuickItem* item) {
+    item->polish();
+    if (item->flags() & QQuickItem::ItemHasContents)
+        item->update();
+    for (QQuickItem* child : item->childItems())
+        repaint(child);
+}
+
+}  // namespace
+
+Theme* Theme::instance() {
+    static Theme* theme = new Theme;  // for the process's life, as QML's singletons are
+    return theme;
+}
+
+Theme* Theme::create(QQmlEngine*, QJSEngine*) {
+    Theme* theme = instance();
+    QJSEngine::setObjectOwnership(theme, QJSEngine::CppOwnership);  // shared by every engine
+    return theme;
+}
+
+QString Theme::name() { return current ? current->name : palettes().front().name; }
+
+const Palette& Theme::colors() { return current ? current->colors : palettes().front().colors; }
+
+QStringList Theme::names() {
+    QStringList result;
+    for (const NamedPalette& palette : palettes())
+        result << palette.name;
+    return result;
+}
+
+void Theme::setName(const QString& name) {
+    if (!apply(name))
+        apply(palettes().front().name);
+    QSettings().setValue(QLatin1String(kSettingsKey), Theme::name());
+}
+
+bool Theme::apply(const QString& name) {
+    const NamedPalette* palette = find(name);
+    if (!palette)
+        return false;
+    if (palette == &palettes().front())
+        palette = nullptr;
+    if (palette == current)
+        return true;
+    current = palette;
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        QGuiApplication::setPalette(qtPalette());
+        for (QWindow* window : QGuiApplication::allWindows())
+            if (auto* quick = qobject_cast<QQuickWindow*>(window))
+                repaint(quick->contentItem());
+    }
+    Q_EMIT instance()->changed();
+    return true;
+}
+
+QString Theme::savedName() {
+    const NamedPalette* palette = find(QSettings().value(QLatin1String(kSettingsKey)).toString());
+    return palette ? palette->name : palettes().front().name;
+}
+
+QPalette Theme::qtPalette() {
+    QPalette palette;
+    const std::pair<QPalette::ColorRole, QColor> roles[] = {
+        {QPalette::Window, window()},          {QPalette::WindowText, text()},
+        {QPalette::Base, panel()},             {QPalette::AlternateBase, panelAlt()},
+        {QPalette::Text, text()},              {QPalette::Button, surface()},
+        {QPalette::ButtonText, text()},        {QPalette::Highlight, accent()},
+        {QPalette::HighlightedText, accentText()}, {QPalette::ToolTipBase, panelAlt()},
+        {QPalette::ToolTipText, text()},       {QPalette::PlaceholderText, textDim()},
+        {QPalette::Link, accent()},
+    };
+    for (const auto& [role, color] : roles)
+        palette.setColor(role, color);
+    for (QPalette::ColorRole role : {QPalette::Text, QPalette::ButtonText, QPalette::WindowText})
+        palette.setColor(QPalette::Disabled, role, textDisabled());
+    return palette;
+}
 
 QFont Theme::font() const { return sub::ui::uiFont(); }
 
@@ -76,31 +173,31 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
     pressed = pressed && enabled;
     ButtonLook look;
     // QPushButton { background: SURFACE; border: 1px solid BORDER; border-radius: 3px; padding: 4px 12px; }
-    look.background = kSurface;
-    look.text = kText;
+    look.background = surface();
+    look.text = text();
     if (hovered)
-        look.background = kSurfaceHover;  // :hover
+        look.background = surfaceHover();  // :hover
     if (pressed)
-        look.background = kPanel;  // :pressed
+        look.background = panel();  // :pressed
     if (!enabled)
-        look.text = kTextDisabled;  // :disabled
+        look.text = textDisabled();  // :disabled
     if (checked) {                  // :checked
-        look.background = kAccent;
-        look.text = kAccentText;
+        look.background = accent();
+        look.text = accentText();
     }
     if (role == QLatin1String("activator") && checked) {
-        look.background = kActivatorOn;
-        look.text = kAccentText;
+        look.background = activatorOn();
+        look.text = accentText();
     } else if (role == QLatin1String("solo") && checked) {
-        look.background = kSoloOn;
-        look.text = kAccentText;
+        look.background = soloOn();
+        look.text = accentText();
     } else if (role == QLatin1String("play") && checked) {
-        look.background = kPlayOn;
+        look.background = playOn();
     } else if ((role == QLatin1String("record") || role == QLatin1String("arm")) && checked) {
-        look.background = kRecordOn;
-        look.text = kAccentText;
+        look.background = recordOn();
+        look.text = accentText();
     } else if (role == QLatin1String("re-enable") && checked) {
-        look.background = kAccent;
+        look.background = accent();
     }
     if (role == QLatin1String("record") || role == QLatin1String("re-enable") || role == QLatin1String("tool")) {
         look.paddingH = look.paddingV = 2;
@@ -125,7 +222,7 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
         look.paddingH = look.paddingV = 0;
         look.border = 0;
         look.background = Qt::transparent;
-        look.text = hovered ? kText : kTextDim;
+        look.text = hovered ? text() : textDim();
     } else if (role == QLatin1String("small")) {
         look.paddingH = 6;
         look.paddingV = 0;
@@ -135,18 +232,18 @@ Theme::ButtonLook Theme::buttonLook(const QString& role, bool hovered, bool pres
         look.border = 0;
         look.radius = 2;
         look.background = Qt::transparent;
-        look.text = kTextDim;
+        look.text = textDim();
         if (hovered) {
-            look.background = kDeviceHeaderHover;
-            look.text = kText;
+            look.background = deviceHeaderHover();
+            look.text = text();
         }
         if (checked) {
-            look.background = kAccent;
-            look.text = kAccentText;
+            look.background = accent();
+            look.text = accentText();
         }
         if (!enabled) {
             look.background = Qt::transparent;
-            look.text = kTextDisabled;
+            look.text = textDisabled();
         }
     }
     return look;
@@ -163,9 +260,9 @@ QVariantMap Theme::buttonStyle(const QString& role, bool hovered, bool pressed, 
 
 QColor Theme::automationDotColor(const QString& state) {
     if (state == QLatin1String("on"))
-        return kAutomationOn;
+        return automationOn();
     if (state == QLatin1String("off"))
-        return kAutomationOff;
+        return automationOff();
     return {};
 }
 

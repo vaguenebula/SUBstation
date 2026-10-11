@@ -51,7 +51,7 @@ void ChordLane::paint(SgPainter& p) {
         const double width = x1 - left - 2;
         if (width >= kMinLabelWidth) {
             p.drawText(QRectF(left, 0, width, h), Qt::AlignVCenter | Qt::AlignLeft,
-                       SgPainter::elidedText(chord.name, font, width), Theme::kText, font);
+                       SgPainter::elidedText(chord.name, font, width), Theme::text(), font);
         }
     }
 }

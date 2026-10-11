@@ -110,7 +110,7 @@ const app::Clip* PianoRoll::clipAt(int index) const {
 }
 
 QColor PianoRoll::colorOf(int index) const {
-    return clipAt(index) ? QColor(project()->track(clips_[index].trackId).color) : Theme::kAccent;
+    return clipAt(index) ? QColor(project()->track(clips_[index].trackId).color) : Theme::accent();
 }
 
 bool PianoRoll::showsTrack(const QString& trackId) const {

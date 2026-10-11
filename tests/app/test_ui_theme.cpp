@@ -1,6 +1,7 @@
-// The theme: every colour of the Python UI's theme with its value, the
-// stylesheet's button rules, the icons (each drawn, in its colour, its states,
-// the disabled variant) and the image provider that serves them to QML.
+// The theme: every colour of the Python UI's theme with its value (the
+// Default theme), the other themes and switching to them, the stylesheet's
+// button rules, the icons (each drawn, in its colour, its states, the disabled
+// variant) and the image provider that serves them to QML.
 
 #include <QGuiApplication>
 #include <QImage>
@@ -11,10 +12,13 @@
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSettings>
+#include <QSignalSpy>
 #include <QTest>
 
 #include <memory>
 
+#include "TestSupport.h"
 #include "Ui.h"
 #include "theme/Icons.h"
 #include "theme/Theme.h"
@@ -63,6 +67,8 @@ class TestUiTheme : public QObject {
     Q_OBJECT
 
 private Q_SLOTS:
+    void initTestCase() { sub::app::test::prepareApplication(); }  // (the theme chosen is a setting)
+
     void colorsAreTheme() {
         // The Python UI's theme constants, value for value.
         const QList<std::pair<const char*, QColor>> expected = {
@@ -92,37 +98,114 @@ private Q_SLOTS:
             // A track header's volume and pan fill: the accent, see-through.
             {"volumeFill", QColor(255, 166, 43, 110)},
         };
-        Theme theme;
+        Theme& theme = *Theme::instance();
         for (const auto& [name, color] : expected) {
             const QVariant value = theme.property(name);
             QVERIFY2(value.isValid(), name);
             QCOMPARE(value.value<QColor>().rgba(), color.rgba());
         }
-        QCOMPARE(Theme::kLane.rgba(), QColor("#2b2b2b").rgba());
-        QCOMPARE(Theme::kSelection.alpha(), 72);
+        QCOMPARE(Theme::name(), QStringLiteral("Default"));
+        QCOMPARE(Theme::lane().rgba(), QColor("#2b2b2b").rgba());
+        QCOMPARE(Theme::selection().alpha(), 72);
         QCOMPARE(theme.property("monoFontFamily").toString(), QStringLiteral("Consolas"));
         const QFont font = theme.uiFont(11, true);
         QCOMPARE(font.family(), QStringLiteral("Segoe UI"));
         QCOMPARE(font.pointSizeF(), 11.0);
         QVERIFY(font.bold());
         QCOMPARE(sub::ui::uiFont().pointSizeF(), 9.0);
-        // Every colour property is constant and readable from QML's side.
+        // Every colour property is readable from QML's side, and follows a new theme.
         int colors = 0;
         for (int i = theme.metaObject()->propertyOffset(); i < theme.metaObject()->propertyCount(); ++i) {
             const QMetaProperty property = theme.metaObject()->property(i);
-            QVERIFY(property.isConstant());
-            if (property.metaType().id() == QMetaType::QColor)
-                ++colors;
+            if (property.metaType().id() != QMetaType::QColor)
+                continue;
+            ++colors;
+            QVERIFY(!property.isConstant());
+            QCOMPARE(property.notifySignal().name(), QByteArray("changed"));
         }
-        QCOMPARE(colors, int(expected.size()) + 4);  // and the stylesheet's own four
+        QCOMPARE(colors, int(sizeof(sub::ui::Palette) / sizeof(QColor)));  // the palette, all of it
+    }
+
+    // Look and Feel's themes: each has every colour; one applied changes them
+    // all at once (and says so), the application's palette and the icons'
+    // default colours with them; it is kept only when chosen.
+    void themes() {
+        const QStringList names = {QStringLiteral("Default"), QStringLiteral("Disableton"),
+                                   QStringLiteral("Flashbang"), QStringLiteral("Gay")};
+        QCOMPARE(Theme::names(), names);
+        QCOMPARE(Theme::instance()->property("names").toStringList(), names);
+        QSignalSpy changed(Theme::instance(), &Theme::changed);
+        const auto lightness = [](const QColor& color) { return color.toHsl().lightness(); };
+        for (const QString& name : names.mid(1) + names.mid(0, 1)) {  // Default (current already) last
+            QVERIFY(Theme::apply(name));
+            QCOMPARE(Theme::name(), name);
+            QCOMPARE(Theme::instance()->property("name").toString(), name);
+            for (int i = Theme::staticMetaObject.propertyOffset(); i < Theme::staticMetaObject.propertyCount(); ++i) {
+                const QMetaProperty property = Theme::staticMetaObject.property(i);
+                if (property.metaType().id() == QMetaType::QColor)
+                    QVERIFY2(property.read(Theme::instance()).value<QColor>().isValid(),
+                             qPrintable(name + QLatin1Char(' ') + QLatin1String(property.name())));
+            }
+            // Text reads on what it's on.
+            QVERIFY2(std::abs(lightness(Theme::text()) - lightness(Theme::window())) > 100, qPrintable(name));
+            QVERIFY2(std::abs(lightness(Theme::accentText()) - lightness(Theme::accent())) > 80, qPrintable(name));
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Window), Theme::window());
+            QCOMPARE(QGuiApplication::palette().color(QPalette::Text), Theme::text());
+            QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32)).rgb(), Theme::text().rgb());
+            QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32, Qt::red, false, true)).rgb(),
+                     Theme::textDisabled().rgb());
+            // Another theme's icons are other pictures to QML's cache.
+            QCOMPARE(Icons::url(QStringLiteral("play")).contains(QStringLiteral("theme=")), name != names.front());
+        }
+        QCOMPARE(changed.size(), names.size());
+        // Only Flashbang is light.
+        for (const QString& name : names) {
+            Theme::apply(name);
+            QCOMPARE(lightness(Theme::window()) > 128, name == QStringLiteral("Flashbang"));
+        }
+        // Disableton is Ableton Live's default theme.
+        Theme::apply(QStringLiteral("disableton"));  // (any case)
+        QCOMPARE(Theme::name(), QStringLiteral("Disableton"));
+        QCOMPARE(Theme::window(), QColor("#363636"));
+        QCOMPARE(Theme::panel(), QColor("#2a2a2a"));
+        QCOMPARE(Theme::surface(), QColor("#1e1e1e"));
+        QCOMPARE(Theme::text(), QColor("#b5b5b5"));
+        QCOMPARE(Theme::textDim(), QColor("#757575"));
+        QCOMPARE(Theme::accent(), QColor("#ffad56"));
+        QCOMPARE(Theme::deviceHeaderSelected(), QColor("#637e86"));
+        QCOMPARE(Theme::knob(), QColor("#03c3d5"));
+        // An unknown theme changes nothing.
+        changed.clear();
+        QVERIFY(!Theme::apply(QStringLiteral("Vaporwave")));
+        QCOMPARE(Theme::name(), QStringLiteral("Disableton"));
+        QCOMPARE(changed.size(), 0);
+
+        // Chosen (Look and Feel, QML's Theme.name): applied and kept; applied
+        // alone, not. The app icon keeps its colours in any theme.
+        QSettings().remove(QLatin1String(Theme::kSettingsKey));
+        QCOMPARE(Theme::savedName(), QStringLiteral("Default"));
+        QVERIFY(Theme::instance()->setProperty("name", QStringLiteral("Gay")));
+        QCOMPARE(Theme::name(), QStringLiteral("Gay"));
+        QCOMPARE(QSettings().value(QLatin1String(Theme::kSettingsKey)).toString(), QStringLiteral("Gay"));
+        QCOMPARE(Theme::savedName(), QStringLiteral("Gay"));
+        const QImage app = Icons::image(QStringLiteral("app_icon"), 64);
+        QCOMPARE(app.pixelColor(8, 32).rgb(), QColor("#2c2c2c").rgb());
+        Theme::apply(QStringLiteral("Flashbang"));
+        QCOMPARE(Theme::savedName(), QStringLiteral("Gay"));
+        QSettings().setValue(QLatin1String(Theme::kSettingsKey), QStringLiteral("Gone"));
+        QCOMPARE(Theme::savedName(), QStringLiteral("Default"));
+        Theme::instance()->setName(QStringLiteral("Default"));
+        QCOMPARE(Theme::name(), QStringLiteral("Default"));
+        QCOMPARE(QSettings().value(QLatin1String(Theme::kSettingsKey)).toString(), QStringLiteral("Default"));
+        QSettings().remove(QLatin1String(Theme::kSettingsKey));
     }
 
     // A track header's In, Auto and Off: small, the one chosen in the accent.
     void monitorButtons() {
         const auto look = [](bool checked) { return Theme::buttonLook(QStringLiteral("monitor"), false, false, checked, true); };
-        QCOMPARE(look(false).background, Theme::kSurface);
-        QCOMPARE(look(true).background, Theme::kAccent);
-        QCOMPARE(look(true).text, Theme::kAccentText);
+        QCOMPARE(look(false).background, Theme::surface());
+        QCOMPARE(look(true).background, Theme::accent());
+        QCOMPARE(look(true).text, Theme::accentText());
         QCOMPARE(look(false).paddingH, 0);
         QCOMPARE(look(false).pointSize, 8.0);
     }
@@ -133,50 +216,50 @@ private Q_SLOTS:
             return Theme::buttonLook(QString::fromLatin1(role), hovered, pressed, checked, enabled);
         };
         L plain = look("", false, false, false, true);
-        QCOMPARE(plain.background, Theme::kSurface);
-        QCOMPARE(plain.text, Theme::kText);
+        QCOMPARE(plain.background, Theme::surface());
+        QCOMPARE(plain.text, Theme::text());
         QCOMPARE(plain.border, 1);
         QCOMPARE(plain.radius, 3);
         QCOMPARE(plain.paddingH, 12);
-        QCOMPARE(look("", true, false, false, true).background, Theme::kSurfaceHover);
-        QCOMPARE(look("", true, true, false, true).background, Theme::kPanel);       // pressed over hover
-        QCOMPARE(look("", true, true, true, true).background, Theme::kAccent);       // checked over both
-        QCOMPARE(look("", false, false, true, true).text, Theme::kAccentText);
-        QCOMPARE(look("", false, false, false, false).text, Theme::kTextDisabled);
-        QCOMPARE(look("activator", false, false, true, true).background, Theme::kActivatorOn);
+        QCOMPARE(look("", true, false, false, true).background, Theme::surfaceHover());
+        QCOMPARE(look("", true, true, false, true).background, Theme::panel());       // pressed over hover
+        QCOMPARE(look("", true, true, true, true).background, Theme::accent());       // checked over both
+        QCOMPARE(look("", false, false, true, true).text, Theme::accentText());
+        QCOMPARE(look("", false, false, false, false).text, Theme::textDisabled());
+        QCOMPARE(look("activator", false, false, true, true).background, Theme::activatorOn());
         QCOMPARE(look("activator", false, false, false, true).weight, int(QFont::DemiBold));
         QCOMPARE(look("activator", false, false, false, true).pointSize, 8.0);
-        QCOMPARE(look("solo", true, false, true, true).background, Theme::kSoloOn);
+        QCOMPARE(look("solo", true, false, true, true).background, Theme::soloOn());
         const L play = look("play", false, false, true, true);
-        QCOMPARE(play.background, Theme::kPlayOn);
-        QCOMPARE(play.text, Theme::kAccentText);
-        QCOMPARE(look("record", false, false, true, true).background, Theme::kRecordOn);
+        QCOMPARE(play.background, Theme::playOn());
+        QCOMPARE(play.text, Theme::accentText());
+        QCOMPARE(look("record", false, false, true, true).background, Theme::recordOn());
         QCOMPARE(look("record", false, false, false, true).minWidth, 26);
         QCOMPARE(look("record", false, false, false, true).minHeight, 22);
         const L arm = look("arm", false, false, true, true);
-        QCOMPARE(arm.background, Theme::kRecordOn);
+        QCOMPARE(arm.background, Theme::recordOn());
         QCOMPARE(arm.radius, 2);  // (a box, as solo's)
-        QCOMPARE(look("re-enable", false, false, true, true).background, Theme::kAccent);
+        QCOMPARE(look("re-enable", false, false, true, true).background, Theme::accent());
         QCOMPARE(look("tool", false, false, false, true).paddingH, 2);
         // Flat: never a background; dim, but TEXT under the mouse.
         const L flat = look("flat", true, true, true, true);
         QCOMPARE(flat.background.alpha(), 0);
-        QCOMPARE(flat.text, Theme::kText);
+        QCOMPARE(flat.text, Theme::text());
         QCOMPARE(flat.border, 0);
-        QCOMPARE(look("flat", false, false, true, true).text, Theme::kTextDim);
+        QCOMPARE(look("flat", false, false, true, true).text, Theme::textDim());
         QCOMPARE(look("small", false, false, false, true).paddingH, 6);
         QCOMPARE(look("small", false, false, false, true).pointSize, 8.0);
         // Device header: transparent; a light wash under the mouse; ACCENT checked; dim disabled.
         QCOMPARE(look("device-header", false, false, false, true).background.alpha(), 0);
-        QCOMPARE(look("device-header", true, false, false, true).background, Theme::kDeviceHeaderHover);
-        QCOMPARE(look("device-header", true, false, true, true).background, Theme::kAccent);
+        QCOMPARE(look("device-header", true, false, false, true).background, Theme::deviceHeaderHover());
+        QCOMPARE(look("device-header", true, false, true, true).background, Theme::accent());
         const L headerOff = look("device-header", false, false, true, false);
         QCOMPARE(headerOff.background.alpha(), 0);
-        QCOMPARE(headerOff.text, Theme::kTextDisabled);
+        QCOMPARE(headerOff.text, Theme::textDisabled());
         // For QML: the same as a map.
-        Theme theme;
+        Theme& theme = *Theme::instance();
         const QVariantMap map = theme.buttonStyle(QStringLiteral("solo"), false, false, true, true);
-        QCOMPARE(map.value(QStringLiteral("background")).value<QColor>(), Theme::kSoloOn);
+        QCOMPARE(map.value(QStringLiteral("background")).value<QColor>(), Theme::soloOn());
         QCOMPARE(map.value(QStringLiteral("radius")).toInt(), 2);
     }
 
@@ -184,13 +267,13 @@ private Q_SLOTS:
         QCOMPARE(Theme::withoutMnemonics(QStringLiteral("&File")), QStringLiteral("File"));
         QCOMPARE(Theme::withoutMnemonics(QStringLiteral("Save &As\u2026")), QStringLiteral("Save As\u2026"));
         QCOMPARE(Theme::withoutMnemonics(QStringLiteral("Rock && Roll")), QStringLiteral("Rock & Roll"));
-        Theme theme;
+        Theme& theme = *Theme::instance();
         QCOMPARE(theme.shortcutText(QStringLiteral("Ctrl+Shift+S")), QStringLiteral("Ctrl+Shift+S"));
         QCOMPARE(theme.shortcutText(int(QKeySequence::Copy)),
                  QKeySequence(QKeySequence::Copy).toString(QKeySequence::NativeText));
         QCOMPARE(theme.shortcutText(QVariant()), QString());
-        QCOMPARE(theme.automationColor(QStringLiteral("on")), Theme::kAutomationOn);
-        QCOMPARE(theme.automationColor(QStringLiteral("off")), Theme::kAutomationOff);
+        QCOMPARE(theme.automationColor(QStringLiteral("on")), Theme::automationOn());
+        QCOMPARE(theme.automationColor(QStringLiteral("off")), Theme::automationOff());
         QCOMPARE(theme.automationColor(QString()).alpha(), 0);
     }
 
@@ -227,18 +310,18 @@ private Q_SLOTS:
 
     void iconColors() {
         // Their own colours by default.
-        QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32)).rgb(), Theme::kText.rgb());
-        QCOMPARE(strongest(Icons::image(QStringLiteral("folder"), 32)).rgb(), Theme::kTextDim.rgb());
-        QCOMPARE(strongest(Icons::image(QStringLiteral("record"), 32)).rgb(), QColor("#ff5a4d").rgb());
-        QCOMPARE(strongest(Icons::image(QStringLiteral("snowflake"), 32)).rgb(), Theme::kFrozen.rgb());
-        QCOMPARE(Icons::defaultColor(QStringLiteral("search")), Theme::kTextDim);
+        QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32)).rgb(), Theme::text().rgb());
+        QCOMPARE(strongest(Icons::image(QStringLiteral("folder"), 32)).rgb(), Theme::textDim().rgb());
+        QCOMPARE(strongest(Icons::image(QStringLiteral("record"), 32)).rgb(), Theme::recordOn().rgb());
+        QCOMPARE(strongest(Icons::image(QStringLiteral("snowflake"), 32)).rgb(), Theme::frozen().rgb());
+        QCOMPARE(Icons::defaultColor(QStringLiteral("search")), Theme::textDim());
         // Asked for, or disabled.
         QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32, Qt::red)).rgb(), QColor(Qt::red).rgb());
         QCOMPARE(strongest(Icons::image(QStringLiteral("play"), 32, Qt::red, false, true)).rgb(),
-                 Theme::kTextDisabled.rgb());
+                 Theme::textDisabled().rgb());
         // The app icon keeps its colours.
         const QImage app = Icons::image(QStringLiteral("app_icon"), 64, QColor(), false, true);
-        QCOMPARE(app.pixelColor(8, 32).rgb(), Theme::kPanelAlt.rgb());
+        QCOMPARE(app.pixelColor(8, 32).rgb(), Theme::panelAlt().rgb());
     }
 
     void iconStates() {
@@ -270,7 +353,7 @@ private Q_SLOTS:
         QCOMPARE(strongest(image).rgb(), QColor(Qt::red).rgb());
         image = provider.requestImage(QStringLiteral("play?color=00ff00&mode=disabled"), &size, QSize());
         QCOMPARE(size, QSize(64, 64));  // no size asked: the drawing grid's
-        QCOMPARE(strongest(image).rgb(), Theme::kTextDisabled.rgb());
+        QCOMPARE(strongest(image).rgb(), Theme::textDisabled().rgb());
         image = provider.requestImage(QStringLiteral("play?color=blue"), &size, QSize(0, 16));
         QCOMPARE(size, QSize(16, 16));
         QCOMPARE(strongest(image).rgb(), QColor(Qt::blue).rgb());

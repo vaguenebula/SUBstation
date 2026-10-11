@@ -40,7 +40,7 @@ void drawAutomationDot(SgPainter& p, const QString& state, const QPointF& at) {
     p.restore();
 }
 
-KnobItem::KnobItem(QQuickItem* parent) : SgCanvas(parent), color_(Theme::kAccent) {
+KnobItem::KnobItem(QQuickItem* parent) : SgCanvas(parent) {
     setAcceptedMouseButtons(Qt::LeftButton);
     setImplicitSize(28, 28);  // at least 22 x 22, as the Python UI's knob
     updateText();
@@ -237,21 +237,21 @@ void KnobItem::paint(SgPainter& p) {
     if (side <= 0)
         return;
     const QRectF rect((width() - side) / 2, (height() - side) / 2, side, side);
-    p.drawArc(rect, kStartAngle - kSpan, kSpan, Theme::kSurfaceHover, 3, Qt::FlatCap);
+    p.drawArc(rect, kStartAngle - kSpan, kSpan, Theme::knobTrack(), 3, Qt::FlatCap);
 
     const double origin = bipolar_ ? 0.5 : 0.0;
     const double frac = fraction(value_);
     const double start = kStartAngle - origin * kSpan;
     const double sweep = -(frac - origin) * kSpan;
     if (std::abs(sweep) > 0.5)
-        p.drawArc(rect, start, sweep, color_, 3, Qt::FlatCap);
+        p.drawArc(rect, start, sweep, color(), 3, Qt::FlatCap);
 
     const double angle = (kStartAngle - frac * kSpan) * kPi / 180.0;
     const QPointF center = rect.center();
     const double radius = side / 2 - 2;
     const QPointF tip(center.x() + std::cos(angle) * radius, center.y() - std::sin(angle) * radius);
     const QPointF inner(center.x() + std::cos(angle) * radius * 0.3, center.y() - std::sin(angle) * radius * 0.3);
-    p.drawLine(inner, tip, Theme::kText, 2, Qt::RoundCap);
+    p.drawLine(inner, tip, Theme::text(), 2, Qt::RoundCap);
     drawAutomationDot(p, automation_, QPointF(width() - 3.5, 3.5));
 }
 

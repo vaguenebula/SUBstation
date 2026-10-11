@@ -4,6 +4,7 @@
 // while checked.
 
 #include "sg/SgCanvas.h"
+#include "theme/Theme.h"
 
 #include <QColor>
 #include <QtQml/qqmlregistration.h>
@@ -23,7 +24,8 @@ public:
 
     int kind() const { return kind_; }
     void setKind(int kind);
-    QColor color() const { return color_; }
+    // The theme's accent unless set.
+    QColor color() const { return color_.isValid() ? color_ : Theme::accent(); }
     void setColor(const QColor& color);
     bool checked() const { return checked_; }
     void setChecked(bool checked);

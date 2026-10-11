@@ -265,7 +265,7 @@ std::optional<QRectF> NoteGrid::rubberBand() const { return gesture_ ? gesture_-
 
 void NoteGrid::paint(SgPainter& p) {
     const QRectF visible = p.rect();
-    p.fillRect(visible, Theme::kLane);
+    p.fillRect(visible, Theme::lane());
     PianoRoll* roll = this->roll();
     if (!roll) return;
     const timeline::Timeline& view = roll->view();
@@ -273,22 +273,22 @@ void NoteGrid::paint(SgPainter& p) {
     for (int pitch = roll->pitchAt(visible.bottom()); pitch <= roll->pitchAt(visible.top()); ++pitch) {
         const double top = roll->pitchTop(pitch);
         if (notes::isBlackKey(pitch))
-            p.fillRect(QRectF(visible.left(), top, visible.width(), height), Theme::kBlackKeyRow);
+            p.fillRect(QRectF(visible.left(), top, visible.width(), height), Theme::blackKeyRow());
         if (pitch % 12 == 0 || pitch % 12 == 5) {  // octave (B|C) and E|F lines
             p.fillRect(QRectF(visible.left(), top + height - 1, visible.width(), 1),
-                       pitch % 12 == 0 ? Theme::kGridBar : Theme::kGridSub);
+                       pitch % 12 == 0 ? Theme::gridBar() : Theme::gridSub());
         }
     }
     const double bottom = std::min(visible.bottom(), roll->pitchTop(0) + height);
     timeline::drawGrid(p, view, visible.left(), visible.right(), visible.top(), bottom);
     if (bottom < visible.bottom())
-        p.fillRect(QRectF(visible.left(), bottom, visible.width(), visible.bottom() - bottom), Theme::kEmptyArea);
+        p.fillRect(QRectF(visible.left(), bottom, visible.width(), visible.bottom() - bottom), Theme::emptyArea());
     if (roll->hasClip()) {
         // Dimmed outside the parts the clips play; with several, a line at each one's ends.
         const std::vector<PianoRoll::Span> lit = roll->windows();
         for (const auto& [from, to] : outside(lit, view.xToBeat(visible.left()), view.xToBeat(visible.right() + 1))) {
             const double x0 = view.beatToX(from), x1 = view.beatToX(to);
-            p.fillRect(QRectF(x0, visible.top(), x1 - x0, visible.height()), Theme::kOutsideClip);
+            p.fillRect(QRectF(x0, visible.top(), x1 - x0, visible.height()), Theme::outsideClip());
         }
         if (roll->clipCount() > 1) {
             for (int i = 0; i < roll->clipCount(); ++i) {
@@ -303,7 +303,7 @@ void NoteGrid::paint(SgPainter& p) {
         // The stretch of time a rubber band selected, under the notes.
         if (const auto& span = roll->selectedSpan()) {
             const double x0 = view.beatToX(span->first), x1 = view.beatToX(span->second);
-            p.fillRect(QRectF(x0, visible.top(), x1 - x0, bottom - visible.top()), Theme::kSelection);
+            p.fillRect(QRectF(x0, visible.top(), x1 - x0, bottom - visible.top()), Theme::selection());
         }
         std::vector<QColor> colors;
         std::vector<std::pair<double, double>> played;  // each clip's window, in its content beats
@@ -327,36 +327,36 @@ void NoteGrid::paint(SgPainter& p) {
     }
 
     if (const auto band = rubberBand()) {
-        p.fillRect(*band, Theme::kRubberBand);
-        p.drawRect(*band, Theme::kAccent, 1);
+        p.fillRect(*band, Theme::rubberBand());
+        p.drawRect(*band, Theme::accent(), 1);
     }
     if (const auto start = roll->startBeat())
-        p.fillRect(QRectF(app::roundHalfEven(view.beatToX(*start)), 0, 1, this->height()), Theme::kInsertMarker);
+        p.fillRect(QRectF(app::roundHalfEven(view.beatToX(*start)), 0, 1, this->height()), Theme::insertMarker());
     // Where Ctrl+V pastes: dashed, unlike the start marker and the playhead.
     if (const auto paste = roll->pasteBeat()) {
         const double x = app::roundHalfEven(view.beatToX(*paste));
         for (double y = visible.top() - std::fmod(visible.top(), kPasteDash * 2); y < visible.bottom(); y += kPasteDash * 2)
-            p.fillRect(QRectF(x, y, 1, kPasteDash), Theme::kPasteMarker);
+            p.fillRect(QRectF(x, y, 1, kPasteDash), Theme::pasteMarker());
     }
 }
 
 void NoteGrid::drawNote(SgPainter& p, const Note& note, const QRectF& rect, const QColor& trackColor,
                         const QFont& font, bool selected, bool playing, bool outOfKey, bool dim) const {
     // Out of the song's key: halfway to red. Deactivated: grey.
-    const QColor color = note.muted ? Theme::kDeactivatedClip
-                         : outOfKey ? QColor((trackColor.red() + Theme::kOutOfKey.red()) / 2,
-                                             (trackColor.green() + Theme::kOutOfKey.green()) / 2,
-                                             (trackColor.blue() + Theme::kOutOfKey.blue()) / 2)
+    const QColor color = note.muted ? Theme::deactivatedClip()
+                         : outOfKey ? QColor((trackColor.red() + Theme::outOfKey().red()) / 2,
+                                             (trackColor.green() + Theme::outOfKey().green()) / 2,
+                                             (trackColor.blue() + Theme::outOfKey().blue()) / 2)
                                     : trackColor;
     // Brighter for louder notes, as in Ableton; faint outside the part the clip plays.
     QColor fill = selected ? color.lighter(135) : color;
     fill.setAlphaF(static_cast<float>((0.35 + 0.65 * note.velocity / 127) * (playing ? 1.0 : 0.5) * (dim ? 0.55 : 1.0)));
     const QRectF box = rect.adjusted(0.5, 0.5, -0.5, -0.5);
     p.fillRect(box, fill);
-    p.drawRect(box, selected ? Theme::kSelectionOutline : color.darker(220), 1);
+    p.drawRect(box, selected ? Theme::selectionOutline() : color.darker(220), 1);
     if (rect.width() >= 30 && rect.height() >= 10) {
         p.drawText(box.adjusted(3, 0, -2, 0), Qt::AlignVCenter | Qt::AlignLeft, notes::noteName(note.pitch),
-                   Theme::kAccentText, font);
+                   Theme::accentText(), font);
     }
 }
 

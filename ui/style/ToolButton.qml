@@ -10,7 +10,9 @@ T.ToolButton {
     property string iconName: ""
     property var iconColor: undefined
     property real iconSize: Theme.iconSize
-    readonly property var look: Theme.buttonStyle("tool", hovered, down, checked || highlighted, enabled)
+    // (Theme.name, never empty: looked up again in a new theme.)
+    readonly property var look: Theme.name ? Theme.buttonStyle("tool", hovered, down, checked || highlighted, enabled)
+                                           : ({})
 
     focusPolicy: Qt.NoFocus
     hoverEnabled: true

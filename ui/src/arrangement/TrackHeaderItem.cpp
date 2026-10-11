@@ -311,14 +311,16 @@ QString TrackHeaderItem::outputChannelToolTip() const {
 
 QColor TrackHeaderItem::barColor() const {
     if (isMaster()) return QColor(app::kMasterColor);
-    return track() ? QColor(track()->color) : QColor(Theme::kSurface);
+    return track() ? QColor(track()->color) : QColor(Theme::surface());
 }
 
 QColor TrackHeaderItem::barText() const {
-    // Dark on a light bar, light on a dark one, as Ableton writes them.
+    // Dark on a light bar, light on a dark one, as Ableton writes them: the
+    // bar is the track's colour, whatever the theme, so its text is too.
     const QColor bar = barColor();
     const double luma = 0.299 * bar.redF() + 0.587 * bar.greenF() + 0.114 * bar.blueF();
-    return luma > 0.45 ? Theme::kAccentText : Theme::kText;
+    const Palette& fixed = palettes().front().colors;
+    return luma > 0.45 ? fixed.accentText : fixed.text;
 }
 
 QVariantList TrackHeaderItem::lanes() const {
@@ -1268,7 +1270,7 @@ MenuEntries TrackHeaderItem::deviceMenu(int lane) {
         MenuEntry& entry = menu.add(group.name, [this, lane, key] { chooseLane(lane, key); });
         entry.checkable = true;
         entry.checked = group.id == current;
-        if (anyAutomated) entry.dot = kEnvelope;
+        if (anyAutomated) entry.dot = Theme::automationOn();
     }
     return menu;
 }
@@ -1286,7 +1288,7 @@ MenuEntries TrackHeaderItem::paramMenu(int lane) {
             MenuEntry& entry = menu.add(spec.name, [this, lane, chosen] { chooseLane(lane, chosen); });
             entry.checkable = true;
             entry.checked = spec.key == key;
-            if (automated.contains(spec.key)) entry.dot = kEnvelope;
+            if (automated.contains(spec.key)) entry.dot = Theme::automationOn();
         }
     }
     if (menu.isEmpty()) menu.add(QStringLiteral("No parameters")).enabled = false;
@@ -1301,7 +1303,7 @@ namespace {
 // choosers'): the header's, tinted with its colour, as Ableton shades it.
 QColor shade(const QColor& color) {
     constexpr double kTint = 0.16;
-    const QColor ground = Theme::kPanelAlt;
+    const QColor ground = Theme::panelAlt();
     return QColor::fromRgbF(ground.redF() + kTint * (color.redF() - ground.redF()),
                             ground.greenF() + kTint * (color.greenF() - ground.greenF()),
                             ground.blueF() + kTint * (color.blueF() - ground.blueF()));
@@ -1313,7 +1315,7 @@ void TrackHeaderItem::paint(SgPainter& p) {
     const app::Track* t = track();
     const double w = width(), h = height();
     const bool isSelected = selected();
-    p.fillRect(QRectF(0, 0, w, h), isSelected ? Theme::kLaneSelected : Theme::kPanelAlt);
+    p.fillRect(QRectF(0, 0, w, h), isSelected ? Theme::laneSelected() : Theme::panelAlt());
     if (!t) return;
     const double main = row_.mainHeight;
     const bool strip = isReturn() || isMaster();  // (no fold button, no bands)
@@ -1332,11 +1334,11 @@ void TrackHeaderItem::paint(SgPainter& p) {
     for (const LaneRow& lane : row_.lanes) {
         const double top = lane.top - rowTop_;
         p.fillRect(QRectF(left, top, right - left, lane.height), shade(color));
-        p.fillRect(QRectF(0, top, w, 1), Theme::kGridBar);
+        p.fillRect(QRectF(0, top, w, 1), Theme::gridBar());
     }
     // The columns' edges.
-    p.fillRect(QRectF(right, 0, 1, h), Theme::kBorder);
-    if (ioLeft_ > 0 && mixerLeft_ > ioLeft_) p.fillRect(QRectF(mixerLeft_ - 1, 0, 1, h), Theme::kBorder);
+    p.fillRect(QRectF(right, 0, 1, h), Theme::border());
+    if (ioLeft_ > 0 && mixerLeft_ > ioLeft_) p.fillRect(QRectF(mixerLeft_ - 1, 0, 1, h), Theme::border());
     const QColor ink = barText();
     const QColor dimInk = QColor::fromRgbF(0.5 * (ink.redF() + color.redF()), 0.5 * (ink.greenF() + color.greenF()),
                                            0.5 * (ink.blueF() + color.blueF()));
@@ -1375,8 +1377,8 @@ void TrackHeaderItem::paint(SgPainter& p) {
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft, SgPainter::elidedText(name, font, nameRect.width()),
                    mute() ? dimInk : ink, font);
     }
-    p.fillRect(QRectF(0, h - 1, w, 1), Theme::kBorder);
-    p.fillRect(QRectF(0, 0, 1, h), Theme::kBorder);
+    p.fillRect(QRectF(0, h - 1, w, 1), Theme::border());
+    p.fillRect(QRectF(0, 0, 1, h), Theme::border());
 }
 
 // --- Mouse ---------------------------------------------------------------------------------------------------

@@ -6,6 +6,8 @@
 // way. Runs on a display (xvfb here), like the other UI tests.
 
 #include <QDir>
+#include <QHash>
+#include <QImage>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -26,8 +28,10 @@
 #include "session/ArrangementActions.h"
 #include "session/Selection.h"
 #include "session/Session.h"
+#include "theme/Theme.h"
 
 using namespace sub::app;
+using sub::ui::Theme;
 
 namespace {
 
@@ -192,6 +196,38 @@ private Q_SLOTS:
         QTRY_VERIFY(!item(QStringLiteral("clipView"))->isVisible());
 
         session().undoStack()->setClean();  // (no question when the window goes)
+    }
+
+    // Look and Feel's themes apply to the whole window at once: what QML
+    // colours (the transport bar, a button's look) and what the C++ items draw
+    // (the ruler).
+    void themesRepaintTheWindow() {
+        QQuickItem* bar = item(QStringLiteral("transportBar"));
+        QQuickItem* ruler = item(QStringLiteral("ruler"));
+        QQuickItem* play = item(QStringLiteral("play"));
+        QVERIFY(bar && ruler && play);
+        const auto mostCommon = [this](QQuickItem* part) {
+            const QImage image = window_->grabWindow();
+            const QRect rect = QRectF(part->mapToScene(QPointF(0, 0)) * image.devicePixelRatio(),
+                                      part->size() * image.devicePixelRatio()).toRect() & image.rect();
+            QHash<QRgb, int> counts;
+            for (int y = rect.top(); y <= rect.bottom(); ++y)
+                for (int x = rect.left(); x <= rect.right(); ++x)
+                    ++counts[image.pixel(x, y)];
+            QRgb best = 0;
+            for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+                if (it.value() > counts.value(best)) best = it.key();
+            return QColor::fromRgb(best);
+        };
+        for (const QString& name : Theme::names()) {
+            Theme::apply(name);
+            QTRY_COMPARE(mostCommon(bar), Theme::panel());
+            QTRY_COMPARE(mostCommon(ruler), Theme::panel());
+            QCOMPARE(play->property("look").toMap().value(QStringLiteral("background")).value<QColor>(), Theme::surface());
+            test::screenshot(window_, QStringLiteral("app-theme-") + name.toLower());
+        }
+        Theme::apply(Theme::names().front());
+        QTRY_COMPARE(mostCommon(ruler), Theme::panel());
     }
 };
 

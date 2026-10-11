@@ -18,7 +18,7 @@ T.ScrollIndicator {
         implicitWidth: 4
         implicitHeight: 4
         radius: 2
-        color: Theme.surfaceHover
+        color: Theme.scrollHandle
         visible: control.size < 1.0
         opacity: control.active ? 1.0 : 0.0
 

@@ -80,14 +80,14 @@ void BusLane::updatePolish() {
 
 void BusLane::paint(SgPainter& p) {
     const QRectF visible = p.rect();
-    p.fillRect(visible, Theme::kLane);
+    p.fillRect(visible, Theme::lane());
     if (!ready()) return;
     const timeline::Timeline& view = arrangement()->view();
     timeline::drawGrid(p, view, visible.left(), visible.right(), 1, height());
     timeline::drawLoopRegion(p, view, visible.left(), visible.right(), 1, height());
-    p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), Theme::kBorder);
+    p.fillRect(QRectF(visible.left(), 0, visible.width(), 1), Theme::border());
     for (const LaneRow& lane : rows_.lanes)
-        p.fillRect(QRectF(visible.left(), lane.top - 1, visible.width(), 1), Theme::kGridBar);
+        p.fillRect(QRectF(visible.left(), lane.top - 1, visible.width(), 1), Theme::gridBar());
     const app::Project& project = *session()->project();
     const app::Selection& selection = *session()->selection();
     for (size_t i = 0; i < areas_.size() && i < looks_.size(); ++i) {
@@ -95,7 +95,7 @@ void BusLane::paint(SgPainter& p) {
         envelopes::drawArea(p, view, selection, area, project.envelope(area.owner, area.key), looks_[i], visible,
                             hoverPoint_, false, gesture_ != nullptr);
     }
-    envelopes::drawRange(p, view, selection, areas_, Theme::kSelection);
+    envelopes::drawRange(p, view, selection, areas_, Theme::selection());
     envelopes::drawReadout(p, width(), gesture_ ? gesture_->readout() : std::nullopt);
 }
 

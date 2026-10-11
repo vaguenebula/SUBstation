@@ -2,15 +2,17 @@
 
 // Small vector icons drawn with QPainter, so they stay crisp at any size and
 // device pixel ratio. Each is drawn on a 64 x 64 grid, scaled to the size asked
-// for, in its colour (or in Theme::kTextDisabled for the disabled variant). QML
+// for, in its colour (or in Theme::textDisabled() for the disabled variant). QML
 // gets them through the image provider:
 //
-//   image://icons/<name>[?color=%23rrggbb][&state=on|off][&mode=disabled]
+//   image://icons/<name>[?color=%23rrggbb][&state=on|off][&mode=disabled][&theme=<name>]
 //
-// (Icons.url() builds that.) `state` picks the On or Off picture of the icons
-// that have both: lock_envelopes (on: closed, automation stays put) and fold
-// (on: folded, pointing right; off: open, pointing down). Without `color`
-// each icon has its own default.
+// (Icons.url() builds that; `theme`, there in every theme but Default, keeps
+// one theme's pictures apart from another's in QML's image cache.) `state`
+// picks the On or Off picture of the icons that have both: lock_envelopes (on:
+// closed, automation stays put) and fold (on: folded, pointing right; off:
+// open, pointing down). Without `color` each icon has its own default, the
+// current theme's.
 //
 // Names: play, stop, record, metronome, loop, follow, re_enable_automation,
 // lock_envelopes, headphones, folder, waveform, plugin, preset, plugin_window,
@@ -42,7 +44,7 @@ public:
 
     static QStringList names();
     static bool has(const QString& name);
-    // The icon's own colour: the one it has without `color`.
+    // The icon's own colour: the one it has without `color` (the current theme's).
     static QColor defaultColor(const QString& name);
     // `name` drawn on a transparent square `pixels` wide: in `color` (the
     // default when invalid), its On or Off picture, or the disabled variant.

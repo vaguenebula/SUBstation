@@ -1,0 +1,188 @@
+#pragma once
+
+// The Chorus-Ensemble's display: each voice's delay as it moves, in step with
+// the sound. Time runs right to left: the column 10 px in from the right edge is
+// now, where a dot rides each voice's delay; the left edge is `windowCycles` of
+// the modulation ago (one cycle at slow rates, up to eight at fast ones, so a
+// fast rate shows tight cycles instead of strobing). The delay axis runs up over
+// the layout's range at Amount 100 (12 % more each side), fixed per layout, so
+// turning the Amount visibly grows the swing; the centre is dashed (in Auto it
+// rises and falls with the Amount). Left voices are orange, right ones blue,
+// each voice of a side a little lighter; Warmth tints them towards red, Feedback
+// thickens them (not in Vibrato, which has none), a narrow Width fades the right
+// side towards the left.
+//
+// Every delay is worked out by the engine's own maths (sub::app::chorusDelayMs,
+// the application layer's wrapper of ChorusDesign.h), from the LFO's phase the
+// engine publishes (display `phase`): an estimate that runs on at the rate each
+// display tick and is pulled towards the engine's newest value (snapping to the
+// first after a while without any), so the traces scroll smoothly at the
+// display's rate while the dots move as the delays do. The wet's level (display
+// `level`), through meter ballistics, makes the traces and the dots glow as
+// sound passes.
+// Mode, Taps, Time, Amount, Shape and Offset changes ease (the old voices, their
+// dots and their axis' figures fading out as the new fade in, as the engine
+// cross-fades them); the device off or nothing rendering, the traces stop and
+// dim; silent, they rest where they are (a change while resting reshapes them in
+// place). Nothing repaints once everything has settled and no sound passes.
+//
+// Drag up and down for the Rate (doubling every kRatePixels), or across for the
+// Amount (kAmountPixels for all of it): the first few pixels of a drag pick which,
+// and it sets only that one. Shift four times as finely: one undo step per drag.
+
+#include "audio/ChorusVoices.h"
+#include "devices/DeviceCanvas.h"
+#include "devices/EditorPaint.h"
+
+#include <QColor>
+#include <QPointF>
+#include <QRectF>
+#include <QString>
+#include <QtQml/qqmlregistration.h>
+
+#include <vector>
+
+namespace sub::ui {
+
+class ChorusGraph : public DeviceCanvas {
+    Q_OBJECT
+    QML_ELEMENT
+    Q_PROPERTY(double phase READ phase NOTIFY animated)  // the LFO's phase as drawn (0..1)
+    Q_PROPERTY(double glow READ glow NOTIFY animated)    // 0..1
+    Q_PROPERTY(bool frozen READ frozen NOTIFY animated)  // nothing rendering, or the device off
+    Q_PROPERTY(QString readout READ readout NOTIFY curveChanged)  // the largest detune: "±22 ct"
+
+public:
+    static constexpr int kMinimumWidth = 200;
+    static constexpr int kMinimumHeight = 80;
+    static constexpr double kHeader = 14.0;     // the header over the plot: its name and the readout
+    static constexpr double kNowInset = 10.0;   // the "now" column, this far in from the plot's right edge
+    static constexpr double kFadeWidth = 36.0;  // the traces' oldest end fades out over this, under the figures
+    static constexpr double kRatePixels = 40.0;     // dragged up this far, the Rate doubles
+    static constexpr double kAmountPixels = 150.0;  // dragged across this far, the Amount moves 100 %
+    static constexpr double kLockPixels = 3.0;      // a drag picks the Rate or the Amount once this far
+    static constexpr double kMargin = 0.12;       // the delay axis: the layout's range and 12 % of it each side
+    static constexpr double kSnapSeconds = 0.3;   // values after a gap this long (or the first): snap to them
+    static constexpr double kSilentDb = -80.0;    // the wet's level below which the traces rest
+    static constexpr double kGlowFloorDb = -48.0;  // the glow starts here and is full kGlowRangeDb higher
+    static constexpr double kGlowRangeDb = 42.0;
+    static constexpr QColor kRightColour{0x6f, 0xc8, 0xff};  // the right voices (cool blue)
+
+    explicit ChorusGraph(QQuickItem* parent = nullptr);
+
+    double phase() const;
+    double glow() const { return glow_.value; }
+    bool frozen() const { return frozen_; }
+    // Frozen, or no sound passing: the traces hold still.
+    bool resting() const { return resting_; }
+    QString readout() const { return readout_; }
+
+    double windowCycles() const { return window_.value; }  // LFO cycles across the graph (eased)
+    int voiceCount() const;                                // traces of the current layout: both sides'
+    // Voices a side in `mode` (0 Chorus, 1 Ensemble, 2 Vibrato) with the Taps and Time set, the engine's:
+    // what the editor's strip names outside Chorus mode.
+    Q_INVOKABLE int sideVoices(int mode) const;
+    sub::app::ChorusLayout layout() const { return layout_; }
+    double layoutFade() const { return layers_[0].alpha.value; }  // 0..1: the current layout fading in
+    double layoutAlpha(const sub::app::ChorusLayout& layout) const;  // how much a layout's voices show (0..1)
+    // Where a voice's dot is now: its delay, and the point.
+    double voiceDelayMs(int channel, int voice) const;
+    QPointF voiceDot(int channel, int voice) const;
+    // The current layout's, at the Amount shown.
+    double centreMs() const;
+    double swingMs() const;
+    double axisLowMs() const { return axisLow_.value; }  // the layout's range at Amount 100 (eased)
+    double axisHighMs() const { return axisHigh_.value; }
+    double peakDetuneCents() const { return detuneCents_; }
+
+    QRectF plot() const;
+    double nowX() const;
+    double yOf(double ms) const;
+    double xOfCycles(double cyclesAgo) const;
+
+Q_SIGNALS:
+    void animated();
+    void curveChanged();
+
+protected:
+    void sync() override;
+    void refreshDisplays() override;
+    void paint(SgPainter& painter) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseUngrabEvent() override;
+
+private:
+    // What a drag sets: picked by its first few pixels.
+    enum class DragAxis { None, Rate, Amount };
+    // The voices of a layout, drawn at an alpha of their own: the current one fading in, the ones before
+    // it fading out (each from where it was, so a change during a fade pops nothing).
+    struct Layer {
+        sub::app::ChorusLayout layout;
+        Eased alpha;
+    };
+    static constexpr int kLayers = 3;
+
+    int index(const QString& paramId) const;
+    // A drag goes on from its last position and values (at the press, and when Shift changes).
+    void startDrag(bool fine);
+    double delayMs(const sub::app::ChorusLayout& layout, int channel, int voice) const;
+    QColor voiceColour(const sub::app::ChorusLayout& layout, int channel, int voice) const;
+    void drawVoices(SgPainter& p, const sub::app::ChorusLayout& layout, double alpha);
+    void drawDots(SgPainter& p, const sub::app::ChorusLayout& layout, double alpha);
+    void drawAxis(SgPainter& p);
+    void drawFigures(SgPainter& p);
+
+    // The parameters, as they are now.
+    sub::app::ChorusLayout layout_;
+    Layer layers_[kLayers];  // [0]: layout_'s; the others fading out (alpha 0: unused)
+    double rate_ = 0.8;
+    double amount_ = 50.0;
+    double feedback_ = 0.0;
+    double width_ = 100.0;
+    double offset_ = 0.0;
+    double shape_ = 0.0;
+    double warmth_ = 0.0;
+    double mix_ = 50.0;
+    bool enabled_ = true;
+    double detuneCents_ = 0.0;
+    QString readout_;
+    bool synced_ = false;  // the first sync with a device snaps everything
+
+    // What eases each display tick.
+    Eased window_;       // LFO cycles across
+    Eased axisLow_;      // ms
+    Eased axisHigh_;
+    Eased amountShown_;  // %
+    Eased shapeShown_;   // %
+    Eased offsetShown_;  // degrees
+    Eased glow_;         // 0..1
+    Eased dim_;          // 1, or 0.6 frozen
+    MeterBallistics meter_;
+
+    // The LFO's phase: the estimate following the engine's values, and as drawn (cycles, 0..1; held while
+    // resting, so the traces don't jump when a change repaints them).
+    double estimate_ = 0.0;
+    double drawn_ = 0.0;
+    bool haveValues_ = false;
+    double sinceValues_ = 0.0;  // seconds of ticks since the last values
+    bool frozen_ = true;
+    bool resting_ = true;
+
+    // A drag: its merge key ("": none), where it started (or Shift last changed) and the values then, and
+    // where it was last and what that set (held to the ranges, not yet rounded).
+    QString gesture_;
+    DragAxis axis_ = DragAxis::None;
+    QPointF pressedAt_;
+    double pressedRate_ = 0.8;
+    double pressedAmount_ = 50.0;
+    bool fine_ = false;  // Shift held: a quarter as far
+    QPointF lastAt_;
+    double lastRate_ = 0.8;
+    double lastAmount_ = 50.0;
+
+    std::vector<QPointF> points_;  // paint()'s, reused per trace (render thread only)
+};
+
+}  // namespace sub::ui

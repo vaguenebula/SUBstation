@@ -71,7 +71,6 @@ FadeHandles arrangement::fadeHandles(const app::Clip& clip, const QRectF& rect, 
 
 namespace {
 
-constexpr QColor kDropFill{255, 166, 43, 70};
 constexpr QColor kFadeVeil{0, 0, 0, 80};          // over what a fade takes away
 constexpr QColor kFadeLine{255, 255, 255, 190};   // its curve
 constexpr QColor kFadeHandleFill{235, 235, 235};
@@ -79,11 +78,11 @@ constexpr QColor kFadeHandleEdge{20, 20, 20, 200};
 
 // The colour a clip is drawn in: its track's, or grey while it is deactivated.
 QColor clipColor(const QColor& trackColor, const app::Clip& clip) {
-    return clip.muted ? Theme::kDeactivatedClip : trackColor;
+    return clip.muted ? Theme::deactivatedClip() : trackColor;
 }
 
 // What a clip's waveform or notes are drawn in (faded while it is deactivated).
-QColor contentColor(const app::Clip& clip) { return clip.muted ? Theme::kDeactivatedContent : Theme::kWaveform; }
+QColor contentColor(const app::Clip& clip) { return clip.muted ? Theme::deactivatedContent() : Theme::waveform(); }
 
 // Ctrl+Shift (without Alt): drag a clip's body to slide its content.
 bool isSlipModifier(Qt::KeyboardModifiers modifiers) {
@@ -371,7 +370,7 @@ QHash<QString, QRectF> ArrangementLanes::selectedAreas(const app::TimeRange& ran
 
 void ArrangementLanes::paint(SgPainter& p) {
     const QRectF visible = p.rect();
-    p.fillRect(visible, Theme::kEmptyArea);
+    p.fillRect(visible, Theme::emptyArea());
     if (!ready()) return;
     const Arrangement& a = *arrangement();
     const timeline::Timeline& view = a.view();
@@ -384,7 +383,7 @@ void ArrangementLanes::paint(SgPainter& p) {
     const QStringList selectedTracks = selection.trackIds();
     for (int index : rows) {
         const Row& row = layout.rows()[static_cast<size_t>(index)];
-        const QColor color = selectedTracks.contains(row.trackId) ? Theme::kLaneSelected : Theme::kLane;
+        const QColor color = selectedTracks.contains(row.trackId) ? Theme::laneSelected() : Theme::lane();
         p.fillRect(QRectF(visible.left(), row.top - scroll, visible.width(), row.height()), color);
     }
     // The grid goes all the way down: below the tracks too, where selecting works on it as well.
@@ -408,7 +407,7 @@ void ArrangementLanes::paint(SgPainter& p) {
         const double y = row.top - scroll;
         const bool bars = row.bars;
         if (bars && tinted.contains(track->id))  // under its clips' bars, which stay as they are
-            p.fillRect(tinted.take(track->id), Theme::kSelection);
+            p.fillRect(tinted.take(track->id), Theme::selection());
         if (track->isGroup()) drawGroupSummary(p, track->id, y, row.mainHeight, track->folded, visible);
         const QColor trackColor(track->color);
         for (const app::Clip& clip : track->clips) {
@@ -422,10 +421,10 @@ void ArrangementLanes::paint(SgPainter& p) {
             frames.push_back({track->id, trackColor, clip, rect, selected, false, bars});
         }
         if (project.isFrozen(track->id))  // its clips play as frozen: tinted, as in Ableton
-            p.fillRect(QRectF(visible.left(), y, visible.width(), row.mainHeight - 1), Theme::kFrozenTint);
+            p.fillRect(QRectF(visible.left(), y, visible.width(), row.mainHeight - 1), Theme::frozenTint());
         for (const LaneRow& lane : row.lanes)  // automation lanes below the track
-            p.fillRect(QRectF(visible.left(), lane.top - scroll - 1, visible.width(), 1), Theme::kGridBar);
-        p.fillRect(QRectF(visible.left(), y + row.height() - 1, visible.width(), 1), Theme::kBorder);
+            p.fillRect(QRectF(visible.left(), lane.top - scroll - 1, visible.width(), 1), Theme::gridBar());
+        p.fillRect(QRectF(visible.left(), y + row.height() - 1, visible.width(), 1), Theme::border());
     }
 
     if (gesture) {
@@ -436,7 +435,7 @@ void ArrangementLanes::paint(SgPainter& p) {
             if (row.hidden) continue;
             const QRectF rect = clipRect(kept.clip, row.top - scroll, row.mainHeight);
             drawClip(p, kept.color, kept.clip, rect, visible, false, false, row.bars);
-            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::kFrozenTint);  // (as its row's clips are)
+            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::frozenTint());  // (as its row's clips are)
             frames.push_back({row.trackId, kept.color, kept.clip, rect, false, false, row.bars});
         }
         for (const GestureClip& ghost : gesture->ghosts()) {
@@ -445,7 +444,7 @@ void ArrangementLanes::paint(SgPainter& p) {
             if (row.hidden) continue;
             const QRectF rect = clipRect(ghost.clip, row.top - scroll, row.mainHeight);
             drawClip(p, ghost.color, ghost.clip, rect, visible, true, true, row.bars);
-            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::kFrozenTint);
+            if (project.isFrozen(row.trackId)) p.fillRect(rect, Theme::frozenTint());
             frames.push_back({row.trackId, ghost.color, ghost.clip, rect, true, true, row.bars});
         }
     }
@@ -460,11 +459,11 @@ void ArrangementLanes::paint(SgPainter& p) {
         p.drawText(visible, Qt::AlignCenter,
                    QStringLiteral("Drag audio files here from the browser\nor press Ctrl+T to create an audio "
                                   "track, Ctrl+Shift+T for a MIDI track"),
-                   Theme::kTextDim, uiFont(10));
+                   Theme::textDim(), uiFont(10));
     }
 
-    if (onLanes) envelopes::drawRange(p, view, selection, areas_, Theme::kSelection);  // on the automation lanes it covers
-    for (const QRectF& area : tinted) p.fillRect(area, Theme::kSelection);
+    if (onLanes) envelopes::drawRange(p, view, selection, areas_, Theme::selection());  // on the automation lanes it covers
+    for (const QRectF& area : tinted) p.fillRect(area, Theme::selection());
     // Over the tint, the clips' title bars (and outlines) as they were: selecting doesn't light them up.
     for (const Frame& frame : frames) {
         const auto area = tinted.constFind(frame.trackId);
@@ -481,7 +480,7 @@ void ArrangementLanes::paint(SgPainter& p) {
         if (const Row* row = layout.rowFor(selection.trackId())) {
             const double x = app::roundHalfEven(view.beatToX(selection.insertBeat()));
             if (row->height() > 1)
-                p.fillRect(QRectF(x, row->top - scroll, 1, row->height() - 1), Theme::kInsertMarker);
+                p.fillRect(QRectF(x, row->top - scroll, 1, row->height() - 1), Theme::insertMarker());
         }
     }
     envelopes::drawReadout(p, width(), gesture ? gesture->readout() : std::nullopt);
@@ -550,10 +549,10 @@ void ArrangementLanes::drawFades(SgPainter& p, const app::Clip& clip, const QRec
         for (const bool out : {false, true}) {
             if (const auto& dot = out ? at.outCurve : at.inCurve) {
                 p.fillEllipse(*dot, kFadeDot + 1, kFadeDot + 1, kFadeHandleEdge);
-                p.fillEllipse(*dot, kFadeDot, kFadeDot, lit(out, true) ? Theme::kAccent : kFadeHandleFill);
+                p.fillEllipse(*dot, kFadeDot, kFadeDot, lit(out, true) ? Theme::accent() : kFadeHandleFill);
             }
             const QRectF square = out ? at.out : at.in;
-            p.fillRect(square, lit(out, false) ? Theme::kAccent : kFadeHandleFill);
+            p.fillRect(square, lit(out, false) ? Theme::accent() : kFadeHandleFill);
             p.drawRect(square.adjusted(0.5, 0.5, -0.5, -0.5), kFadeHandleEdge, 1);
         }
     }
@@ -582,7 +581,7 @@ void ArrangementLanes::drawContent(SgPainter& p, const app::Clip& clip, const QR
         const QString error = bridge.loadError(clip.path);
         if (!error.isEmpty()) p.fillRect(body, QColor(200, 60, 60, 110));
         p.drawText(body.adjusted(4, 0, -2, 0), Qt::AlignVCenter | Qt::AlignLeft,
-                   error.isEmpty() ? QStringLiteral("Loading…") : QStringLiteral("Missing file"), Theme::kAccentText,
+                   error.isEmpty() ? QStringLiteral("Loading…") : QStringLiteral("Missing file"), Theme::accentText(),
                    uiFont(7.5));
     }
 }
@@ -600,13 +599,13 @@ void ArrangementLanes::drawClipFrame(SgPainter& p, const QColor& trackColor, con
         const QFont font = uiFont(7.5);
         const QRectF textRect = title.adjusted(4, 0, -3, 0);
         p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
-                   SgPainter::elidedText(clip.name, font, std::floor(textRect.width())), Theme::kAccentText, font);
+                   SgPainter::elidedText(clip.name, font, std::floor(textRect.width())), Theme::accentText(), font);
     }
-    const QColor outline = selected ? Theme::kSelectionOutline : color.darker(170);
+    const QColor outline = selected ? Theme::selectionOutline() : color.darker(170);
     p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), outline, 1);
     if (hoverEdge_ && hoverEdge_->first == clip.id && !ghost) {  // (Alt: a stretch, in the accent colour)
         const double x = hoverEdge_->second ? rect.left() : rect.right() - 2;
-        p.fillRect(QRectF(x, rect.top(), 2, rect.height()), hoverStretch_ ? Theme::kAccent : Theme::kSelectionOutline);
+        p.fillRect(QRectF(x, rect.top(), 2, rect.height()), hoverStretch_ ? Theme::accent() : Theme::selectionOutline());
     }
 }
 
@@ -643,7 +642,7 @@ void ArrangementLanes::drawGroupSummary(SgPainter& p, const QString& groupId, do
             if (x1 < visible.left()) continue;
             if (x0 > visible.right()) break;
             p.fillRect(QRectF(x0, top, std::max(1.0, x1 - x0), bottom - top),
-                       folded ? clipColor(trackColor, clip) : Theme::kGroupOutline);
+                       folded ? clipColor(trackColor, clip) : Theme::groupOutline());
         }
     }
     p.restore();
@@ -667,7 +666,7 @@ void ArrangementLanes::drawNotes(SgPainter& p, const app::Clip& clip, const QRec
         const double x0 = view.beatToX(n.start), x1 = view.beatToX(n.end);
         if (x1 >= visible.left() && x0 <= visible.right()) {
             p.fillRect(QRectF(x0, top + (high - n.note.pitch) * row, std::max(1.0, x1 - x0 - gap), std::max(1.0, row - gap)),
-                       n.note.muted ? Theme::kDeactivatedContent : contentColor(clip));
+                       n.note.muted ? Theme::deactivatedContent() : contentColor(clip));
         }
     }
 }
@@ -689,9 +688,11 @@ void ArrangementLanes::drawDropPreview(SgPainter& p) const {
     for (const DropPreview::Source& source : dropPreview_->sources) {
         const double width = source.duration * tempo / 60.0 * a.pxPerBeat();
         const QRectF rect(x, top + 1, std::max(2.0, width), height - 3);
-        p.fillRect(rect, kDropFill);
-        dashedRect(p, rect, Theme::kAccent);
-        p.drawText(rect.adjusted(4, 2, -2, 0), Qt::AlignTop | Qt::AlignLeft, source.name, Theme::kText, uiFont());
+        QColor fill = Theme::accent();
+        fill.setAlpha(70);
+        p.fillRect(rect, fill);
+        dashedRect(p, rect, Theme::accent());
+        p.drawText(rect.adjusted(4, 2, -2, 0), Qt::AlignTop | Qt::AlignLeft, source.name, Theme::text(), uiFont());
         x += width;
     }
 }

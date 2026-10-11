@@ -16,7 +16,7 @@ code is put together, [../README.md](../README.md).
 |---|---|
 | [arrangement.md](arrangement.md) | The timeline, clips and selecting, tracks and their headers, group tracks, folding, the master, the title bar and the transport bar, projects, undo and export |
 | [mixing.md](mixing.md) | Solo and mute, groups in the mix, return tracks and sends, sidechains, delay compensation, freezing and flattening |
-| [devices.md](devices.md) | The device view, the built-in devices (Synth, Sampler, Utility, Over The Top, Compressor, Delay, Disperser, EQ, Sidechain), racks, macros and presets, folding, cut/copy/paste |
+| [devices.md](devices.md) | The device view, the built-in devices (Synth, Sampler, Utility, Over The Top, Compressor, Gate, Limiter, Multiband Dynamics, Spectral Compressor, Saturator, Amp, Erosion, Delay, Chorus-Ensemble, Phaser-Flanger, Reverb, Disperser, EQ, Sidechain), racks, macros and presets, folding, cut/copy/paste |
 | [plugins.md](plugins.md) | VST3 plug-ins: finding them, using them, their editors and presets, projects, latency |
 | [audio-clips.md](audio-clips.md) | The clip view for audio clips: warping, warp modes, transpose and detune, clip gain and pan, reversing, tempo and key from file names |
 | [midi.md](midi.md) | MIDI clips, the piano roll and its note tools, MIDI input, the computer MIDI keyboard |
@@ -26,6 +26,7 @@ code is put together, [../README.md](../README.md).
 | [ableton-import.md](ableton-import.md) | Importing Ableton Live Sets: what comes across (tracks, clips, plug-ins and their settings, Live's own devices, Drum Racks, automation) and what doesn't |
 | [file-manager.md](file-manager.md) | The File Manager (the project's files, missing ones found, one replaced everywhere) and hot-swapping samples from the browser |
 | [audio-setup.md](audio-setup.md) | Preferences: ASIO and WASAPI (the *System* driver on Linux), sample rate, buffer size, audio threads, MIDI inputs, plug-in folders |
+| [look-and-feel.md](look-and-feel.md) | Preferences › Look and Feel: the themes (Default, Disableton, Flashbang, Gay) |
 | [shortcuts.md](shortcuts.md) | Every keyboard shortcut, and which keys reach a plug-in's editor |
 | [limitations.md](limitations.md) | What isn't implemented yet |
 
@@ -38,8 +39,10 @@ code is put together, [../README.md](../README.md).
 - Group tracks, return tracks and sends, sidechains, and delay compensation everywhere.
 - Freezing tracks, groups and returns (Ctrl+Shift+F), and flattening frozen tracks.
 - Built-in Synth and Sampler instruments (the Sampler with Simpler's Classic, 1-Shot and
-  Slice modes, warping, a filter and an LFO); Utility, Over The Top, Compressor, Delay,
-  Disperser, EQ and Sidechain effects; VST3 instruments and effects; racks with chains and macros.
+  Slice modes, warping, a filter and an LFO); Utility, Over The Top, Compressor, Gate,
+  Limiter, Multiband Dynamics, Spectral Compressor, Saturator, Amp, Erosion, Delay,
+  Chorus-Ensemble, Phaser-Flanger, Reverb, Disperser, EQ and Sidechain effects; VST3
+  instruments and effects; racks with chains and macros.
 - Warping and transposing audio, set up from the file name.
 - A File Manager that finds missing samples and replaces one everywhere it plays, and
   hot-swapping samples from the browser (similar sounds listed first) while the song plays.

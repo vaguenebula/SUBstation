@@ -480,14 +480,14 @@ void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
         for (const app::Vibrato& v : note.note.vibrato) {
             const double vx0 = view.beatToX(start + std::max(0.0, v.start));
             const double vx1 = view.beatToX(start + std::min(note.note.length, v.start + v.length));
-            if (vx1 > vx0) p.fillRect(QRectF(vx0, bottom, vx1 - vx0, 2), Theme::kAccent);
+            if (vx1 > vx0) p.fillRect(QRectF(vx0, bottom, vx1 - vx0, 2), Theme::accent());
         }
         for (int i = 0; i < static_cast<int>(note.note.bend.size()); ++i) {
             const app::BendPoint& point = note.note.bend[static_cast<size_t>(i)];
             if (point.time < 0.0 || point.time > note.note.length) continue;
             const QPointF at(view.beatToX(start + point.time), roll->bendY(note, point.semitones));
             const double radius = kPointRadius + (hovered(note, i) ? 1.0 : 0.0);
-            p.fillEllipse(at, radius, radius, roll->isBendSelected(note, i) ? Theme::kSelectionOutline : Theme::kLane);
+            p.fillEllipse(at, radius, radius, roll->isBendSelected(note, i) ? Theme::selectionOutline() : Theme::lane());
             p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), kCurve, 1.4);
         }
     });
@@ -502,7 +502,7 @@ void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
     // The stretch a vibrato or a slide is being drawn over.
     if (gesture_) {
         if (const auto area = gesture_->area()) {
-            QColor tint = Theme::kAccent;
+            QColor tint = Theme::accent();
             tint.setAlpha(40);
             p.fillRect(*area, tint);
         }
@@ -513,7 +513,7 @@ void NoteGrid::paintBends(SgPainter& p, const QRectF& visible) const {
             const QFont font = uiFont(8);
             const QRectF box(label->first.x() + 8, label->first.y() - 20, 6.5 * label->second.size() + 8, 15);
             p.fillRoundedRect(box, 3, 3, kLabelBack);
-            p.drawText(box, Qt::AlignCenter, label->second, Theme::kText, font);
+            p.drawText(box, Qt::AlignCenter, label->second, Theme::text(), font);
         }
     }
     p.restore();

@@ -109,17 +109,17 @@ void OscilloscopeItem::rebuild() {
 
 void OscilloscopeItem::paint(SgPainter& p) {
     const QRectF rect(0, 0, width(), height());
-    p.fillRect(rect, Theme::kMeterBg);
+    p.fillRect(rect, Theme::meterBg());
     const double mid = rect.center().y();
-    p.drawLine(QPointF(rect.left(), mid), QPointF(rect.right(), mid), Theme::kScopeAxis, 1.0);
-    p.drawRect(rect.adjusted(0, 0, -1, -1), Theme::kBorder, 1.0);
+    p.drawLine(QPointF(rect.left(), mid), QPointF(rect.right(), mid), Theme::scopeAxis(), 1.0);
+    p.drawRect(rect.adjusted(0, 0, -1, -1), Theme::border(), 1.0);
     if (trace_.size() < 2)
         return;
     p.setClipRect(rect.adjusted(1, 1, -1, -1));
     // The wide glow is soft anyway, so it skips antialiasing; the line keeps it.
-    p.drawPolyline(trace_.data(), int(trace_.size()), Theme::kScopeGlow, 3.0);
+    p.drawPolyline(trace_.data(), int(trace_.size()), Theme::scopeGlow(), 3.0);
     p.setAntialiasing(true);
-    p.drawPolyline(trace_.data(), int(trace_.size()), Theme::kScopeLine, 1.0);
+    p.drawPolyline(trace_.data(), int(trace_.size()), Theme::scopeLine(), 1.0);
 }
 
 }  // namespace sub::ui

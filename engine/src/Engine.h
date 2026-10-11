@@ -644,6 +644,9 @@ private:
         // and its copy of them each chunk, kept across snapshots.
         uint32_t midiSource = 0;
         std::shared_ptr<MidiFeed> midiFeed;
+        // Its latency (insertLatency) when the snapshot was last aligned: idle()
+        // realigns when it differs, whatever the processor's own idle() says.
+        int alignedLatency = 0;
     };
     // A strip's devices depth first (Routing.h's slots): each device of its main
     // chain, and after a rack the devices of its chains, chain by chain.

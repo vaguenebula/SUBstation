@@ -203,6 +203,9 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
 // Snapshot publishing
 
 void Engine::rebuildSnapshotLocked() {
+    for (auto& [id, entry] : processors_) {
+        if (!entry.rack) entry.alignedLatency = insertLatency(*entry.processor);
+    }
     dropGoneOutputSidechainsLocked();
     auto snap = std::make_shared<RenderSnapshot>();
     snap->sampleRate = sampleRate_;

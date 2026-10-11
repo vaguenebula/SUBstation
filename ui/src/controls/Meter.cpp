@@ -65,18 +65,18 @@ void Meter::mousePressEvent(QMouseEvent*) {
 
 void Meter::paint(SgPainter& p) {
     const QRectF rect(0, 0, width(), height());
-    p.fillRect(rect, Theme::kMeterBg);
+    p.fillRect(rect, Theme::meterBg());
     const double clipHeight = 3.0;
     const QRectF bars = rect.adjusted(1, clipHeight + 1, -1, -1);
     const double gap = 1.0;
     const double barWidth = (bars.width() - gap) / 2;
     const double zeroDb = 1.0 - (0.0 - kFloorDb) / (kCeilingDb - kFloorDb);
     QLinearGradient gradient(0, bars.bottom(), 0, bars.top());
-    gradient.setColorAt(0.0, Theme::kMeterLow);
-    gradient.setColorAt(std::max(0.0, 1.0 - zeroDb - 0.18), Theme::kMeterLow);
-    gradient.setColorAt(std::max(0.0, 1.0 - zeroDb - 0.05), Theme::kMeterMid);
-    gradient.setColorAt(1.0 - zeroDb, Theme::kMeterHigh);
-    gradient.setColorAt(1.0, Theme::kMeterHigh);
+    gradient.setColorAt(0.0, Theme::meterLow());
+    gradient.setColorAt(std::max(0.0, 1.0 - zeroDb - 0.18), Theme::meterLow());
+    gradient.setColorAt(std::max(0.0, 1.0 - zeroDb - 0.05), Theme::meterMid());
+    gradient.setColorAt(1.0 - zeroDb, Theme::meterHigh());
+    gradient.setColorAt(1.0, Theme::meterHigh());
     for (int i = 0; i < 2; ++i) {
         if (display_[i] <= 0.0)
             continue;
@@ -84,7 +84,7 @@ void Meter::paint(SgPainter& p) {
         p.fillRect(QRectF(bars.left() + i * (barWidth + gap), bars.bottom() - h, barWidth, h), gradient);
     }
     if (clipped_)
-        p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, clipHeight - 1), Theme::kMeterHigh);
+        p.fillRect(QRectF(rect.left() + 1, rect.top() + 1, rect.width() - 2, clipHeight - 1), Theme::meterHigh());
 }
 
 }  // namespace sub::ui

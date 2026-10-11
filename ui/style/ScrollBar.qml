@@ -24,7 +24,7 @@ T.ScrollBar {
         implicitWidth: Theme.scrollBarWidth - 4
         implicitHeight: Theme.scrollBarWidth - 4
         radius: 4
-        color: control.pressed || handleHover.hovered ? Theme.scrollHandleHover : Theme.surfaceHover
+        color: control.pressed || handleHover.hovered ? Theme.scrollHandleHover : Theme.scrollHandle
 
         HoverHandler {
             id: handleHover

@@ -147,9 +147,9 @@ void drawGrid(SgPainter& painter, const Timeline& view, double x0, double x1, do
     for (const GridLine& line : gridLines(view, x0 - 1, x1 + 1)) {
         QColor color;
         switch (line.kind) {
-            case LineKind::Bar: color = overClip ? kOverClipBar : Theme::kGridBar; break;
-            case LineKind::Beat: color = overClip ? kOverClipBeat : Theme::kGridBeat; break;
-            case LineKind::Sub: color = overClip ? kOverClipSub : Theme::kGridSub; break;
+            case LineKind::Bar: color = overClip ? kOverClipBar : Theme::gridBar(); break;
+            case LineKind::Beat: color = overClip ? kOverClipBeat : Theme::gridBeat(); break;
+            case LineKind::Sub: color = overClip ? kOverClipSub : Theme::gridSub(); break;
         }
         painter.fillRect(QRectF(app::roundHalfEven(line.x), top, 1, bottom - top), color);
     }
@@ -160,7 +160,7 @@ void drawLoopRegion(SgPainter& painter, const Timeline& view, double x0, double 
     if (!project || !project->loopEnabled() || bottom <= top) return;
     const double left = std::max(x0, view.beatToX(project->loopStart()));
     const double right = std::min(x1, view.beatToX(project->loopEnd()));
-    if (right > left) painter.fillRect(QRectF(left, top, right - left, bottom - top), Theme::kLoopRegion);
+    if (right > left) painter.fillRect(QRectF(left, top, right - left, bottom - top), Theme::loopRegion());
 }
 
 void drawPlayhead(SgPainter& painter, const Timeline& view, double beat, double height, bool ruler) {
@@ -168,9 +168,9 @@ void drawPlayhead(SgPainter& painter, const Timeline& view, double beat, double 
     if (ruler) {
         painter.fillPolygon(
             QPolygonF({QPointF(x - 5, height - 8), QPointF(x + 6, height - 8), QPointF(x + 0.5, height - 1)}),
-            Theme::kPlayhead);
+            Theme::playhead());
     } else {
-        painter.fillRect(QRectF(x, 0, 1, height), Theme::kPlayhead);
+        painter.fillRect(QRectF(x, 0, 1, height), Theme::playhead());
     }
 }
 

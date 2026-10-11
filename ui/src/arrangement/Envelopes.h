@@ -72,10 +72,11 @@ namespace sub::ui::arrangement {
 
 class LanesHost;
 
-inline constexpr QColor kEnvelope{0xff, 0x4a, 0x3d};
-inline constexpr QColor kOverridden{0x8c, 0x8c, 0x8c};
-inline constexpr QColor kUnautomated{255, 74, 61, 110};
-inline constexpr QColor kGhost{255, 74, 61, 170};       // where a click on the line would add a breakpoint
+// An envelope is drawn in the theme's automationOn(), automationOff() while
+// overridden; dashed and faded where a lane's parameter has no automation, and
+// fainter where a click on the line would add a breakpoint (the ghost).
+inline constexpr int kUnautomatedAlpha = 110;
+inline constexpr int kGhostAlpha = 170;
 inline constexpr QColor kLaneBackground{0, 0, 0, 55};  // over the clips of a lane showing automation
 inline constexpr double kPointRadius = 3.0;
 inline constexpr double kPointGrab = 6.0;     // pixels around a breakpoint that grab it

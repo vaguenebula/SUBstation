@@ -109,9 +109,9 @@ A device's sidechain can also be fed from the other side: a track's [Audio
 To](#where-a-track-goes-audio-to) set to that device's track, *Sidechain-‹device›*.
 
 A device with a sidechain input (a plug-in's aux input: a compressor, a gate, a
-vocoder; or the built-in Compressor) has a **sidechain button** (an arrow into a bar)
-in its title bar, lit while it has a sidechain. Its tooltip names the source and where
-it is taken.
+vocoder; or the built-in Compressor, Gate, Multiband Dynamics, Spectral Compressor and
+Sidechain) has a **sidechain button** (an arrow into a bar) in its title bar, lit while
+it has a sidechain. Its tooltip names the source and where it is taken.
 
 Click it to choose the track, group or return whose signal goes into it (or *No
 Sidechain*), and where that is taken, as in Ableton:
@@ -155,7 +155,9 @@ A sidechain into a device in a rack lines up with the signal there (see
 
 ## Delay compensation
 
-Latency that plug-ins report (look-ahead limiters, linear-phase EQs) is compensated:
+Latency that devices report (plug-ins' look-ahead limiters and linear-phase EQs; the
+built-in Gate, Limiter, Spectral Compressor, Amp and Erosion, the Saturator with
+Hi-Quality on, the Sidechain's lookahead) is compensated:
 
 - the other tracks, and the metronome, are delayed to line up, and exports come out
   aligned;

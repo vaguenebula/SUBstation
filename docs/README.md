@@ -30,6 +30,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Importing Ableton Live Sets](guide/ableton-import.md) | what of a Live Set comes across, and what doesn't |
 | [File Manager and hot swap](guide/file-manager.md) | the project's files, finding missing ones, replacing a file everywhere, hot-swapping samples |
 | [Audio setup](guide/audio-setup.md) | ASIO and WASAPI, sample rate, buffers, audio threads, MIDI inputs |
+| [Look and Feel](guide/look-and-feel.md) | the themes: Default, Disableton (Ableton's), Flashbang (light), Gay (rainbow) |
 | [Keyboard shortcuts](guide/shortcuts.md) | every shortcut |
 | [Limitations](guide/limitations.md) | what isn't implemented yet |
 

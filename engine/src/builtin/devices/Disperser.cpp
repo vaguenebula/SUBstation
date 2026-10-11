@@ -43,6 +43,7 @@
 #include "builtin/BuiltinRegistry.h"
 #include "builtin/DisperserDesign.h"
 #include "builtin/Dsp.h"
+#include "builtin/DspBlocks.h"
 
 namespace sub {
 namespace {
@@ -52,26 +53,6 @@ constexpr double kFadeSeconds = 0.02;   // Amount
 constexpr double kMixSeconds = 0.005;   // Dry/Wet and Bypass: each of the two one-poles
 constexpr int kChannels = 2;
 constexpr int kMaxStages = disperser::kMaxStages;
-
-// 0 at 0, 1 at 1, flat at both ends: Amount's fades' shape.
-inline double sCurve(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
-
-// Two one-poles in a row gliding to a target: a jump eases in and out, and a
-// glide can turn back halfway without a kink. It lands on the target exactly
-// once it is within `landed` of it.
-struct Ease {
-    double first = 0.0, value = 0.0;
-
-    void snap(double target) noexcept { first = value = target; }
-    bool settled(double target) const noexcept { return first == target && value == target; }
-    double next(double target, double coefficient, double landed) noexcept {
-        if (settled(target)) return value;
-        first += coefficient * (target - first);
-        value += coefficient * (first - value);
-        if (std::abs(target - first) < landed && std::abs(target - value) < landed) snap(target);
-        return value;
-    }
-};
 
 class DisperserProcessor final : public BuiltinProcessor {
 public:
@@ -160,7 +141,7 @@ private:
             const int from = fading_ ? from_ : stages_;
             const int to = fading_ ? to_ : stages_;
             const bool adding = to > from;
-            const double toShare = fading_ ? sCurve((fadeAt_ + 1) / fadeLength) : 1.0;
+            const double toShare = fading_ ? dsp::sCurve((fadeAt_ + 1) / fadeLength) : 1.0;
             const disperser::Stage stage = stage_;  // (a copy the compiler keeps in registers)
 
             double y[N], tap[N];
@@ -261,11 +242,11 @@ private:
 
     State states_[kChannels][kMaxStages] = {};
     disperser::Stage stage_;  // the coefficients now, as Frequency and Pinch glide
-    Ease freq_, pinch_;        // their glides, in log
+    dsp::Glide freq_, pinch_;        // their glides, in log
     int stages_ = 0;           // the stages heard (when not fading)
     bool fading_ = false;      // from from_ stages to to_, fadeAt_ samples in
     int from_ = 0, to_ = 0, fadeAt_ = 0;
-    Ease wet_, on_;            // Dry/Wet's glide (0..1) and Bypass's (0 bypassed, 1 on)
+    dsp::Glide wet_, on_;            // Dry/Wet's glide (0..1) and Bypass's (0 bypassed, 1 on)
 };
 
 }  // namespace

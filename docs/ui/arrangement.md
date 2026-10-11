@@ -215,7 +215,7 @@ draws a parameter's own value. A project reset clears the waveform cache.
 (`envelopeAreas()`) and how each looks (`envelopes::lookOf()`: the parameter's spec, whether it is overridden, the
 target's own value). `paint()` then draws only the rows that show, in this order:
 
-1. The empty area's colour, then each row's background (`kLaneSelected` if its track is selected). The time
+1. The empty area's colour, then each row's background (`Theme::laneSelected()` if its track is selected). The time
    selection's tinted areas are worked out (`selectedAreas()`: the stretch of each row it covers, `rangeRows()` (a
    gesture's `timeRange()` while one drags), its automation lanes too unless automation is locked).
 2. The grid, all the way down (below the tracks too, where selecting works as well), and the loop region.
@@ -223,14 +223,14 @@ target's own value). `paint()` then draws only the rows that show, in this order
    (`drawGroupSummary()`, as Ableton's group lanes: a thin row per audio or MIDI track in the group, nested ones
    too, in order, and `kGroupSummaryRows` (5) at least, empty ones below theirs (a group of one track has its clips
    in the top fifth); its clips as bars in whole pixels with a 1 px line between the rows while they have room;
-   each in its track's colour while the group is folded, the faint `kGroupOutline` while it is open, its tracks
-   showing below it); its clips, but those the gesture hides; a frozen track's tint (`kFrozenTint`); the lines
+   each in its track's colour while the group is folded, the faint `Theme::groupOutline()` while it is open, its tracks
+   showing below it); its clips, but those the gesture hides; a frozen track's tint (`Theme::frozenTint()`); the lines
    between its automation lanes; its bottom border.
 4. The gesture's previews: `kept()` (what stays of moved clips) and `ghosts()` (where they go, translucent); on a
    frozen track tinted as its clips are.
 5. The envelopes (`envelopes::drawArea()`), shaded over the clips in a track's own lane.
 6. A drop preview (files dragged in: dashed boxes with their names), or the empty arrangement's hint.
-7. The time selection: over the automation lanes it covers (`envelopes::drawRange()`), or as a tint (`kSelection`)
+7. The time selection: over the automation lanes it covers (`envelopes::drawRange()`), or as a tint (`Theme::selection()`)
    over each track's stretch; then the title bars and outlines of the clips there drawn again over it
    (`drawClipFrame()`, clipped to the tint), so selecting never lights up a clip's title bar.
 8. The insert marker on the selected track (when nothing is selected), and a gesture's readout (a breakpoint's value
@@ -244,8 +244,8 @@ louder is taller, cut off at the body's edges); then its frame (`drawClipFrame()
 bar with no name in rows under `kMinTitleRow` 32 px, which only rows saved lower than `app::kMinTrackHeight` 40 px
 are) and its outline (white when selected, else the track colour darker). Only an audio clip's title bar has its
 name: a MIDI clip's is blank (the track header names the track). A deactivated clip (`Clip::muted`) is drawn in
-`kDeactivatedClip` grey instead of its track's colour (title bar, body and outline alike), its waveform or notes in
-the fainter `kDeactivatedContent`; a folded group's bars show it grey too. A folded track's clip
+`Theme::deactivatedClip()` grey instead of its track's colour (title bar, body and outline alike), its waveform or notes in
+the fainter `Theme::deactivatedContent()`; a folded group's bars show it grey too. A folded track's clip
 (`clipTitleHeight(h, true)`) is all title bar: a bar with its name (an audio clip's), as high as an unfolded clip's,
 as in Ableton's folded tracks. A take being recorded (`LiveTakes`) has the same bar. Channels are drawn apart when the body is at least 44 px. Without a
 decoded source it says "Loading…", or "Missing file" over a red tint (`bridge.loadError`). Selection isn't drawn per
@@ -435,7 +435,7 @@ and offers its QML controls what they show (as properties) and do (as invokables
 
 The header is laid out as Ableton's, in columns, in the app's theme: the name column, the In/Out column (from
 `ioLeft`; 0: hidden) and the mixer column (from `mixerLeft`), which QML tells it, and the meter. It paints the
-columns' ground (`kLaneSelected` while selected, else `kPanelAlt`) with `kBorder` lines between them; in the name
+columns' ground (`Theme::laneSelected()` while selected, else `Theme::panelAlt()`) with `Theme::border()` lines between them; in the name
 column, from its indent, its **name bar** in its colour (`barColor()`), the name written dark or light on it (`barText()`, by the bar's lightness): a track's its
 name row, a group's down to its choosers (`kGroupBlock`, 38 px: two rows) or, without them, all its name column;
 below, a shade of its colour (the header's ground tinted with it), the choosers' ground, as for each lane below it.
@@ -450,7 +450,7 @@ activator and solo; under them its In/Out column's second chooser, volume and pa
 The groups' bands are [GroupBands](../../ui/src/arrangement/GroupBands.h)', one item over the whole column (from the
 layout's rows) rather than each header's, so they run on from one header to the next: for each group shown, a band
 in its colour at its depth's indent (`kGroupIndent` 6 px a level, `kGroupBand` 6 px
-wide, with a `kBorder` outline down its right edge), from under the group's colour in its header (its name bar, and
+wide, with a `Theme::border()` outline down its right edge), from under the group's colour in its header (its name bar, and
 the row under it while its choosers show, so the fold button isn't covered) to the bottom of the last track in it,
 across the lines between its tracks and their automation lanes; it stops a line short, so the line under the group
 closes it. Nested groups have a band each, side by side, each one's left edge the outline of the one it is in. A
@@ -556,10 +556,11 @@ breakpoints come from `Project::envelope(owner, key)`; how a parameter maps to 0
 - `trace(view, area, points, x0, x1, quantize)` is the line as drawn: through the breakpoints, flat before the first
   and after the last, sampled every `kSamplePixels` (3 px) along curved segments (`automation::segmentValue`), and in
   steps for a discrete parameter. Hit-testing uses the same `trace`, so what you click is what you see.
-- `drawArea()` shades a track's own lane (over its clips: `kLaneBackground`), draws the line red (`kEnvelope`) or grey
-  while overridden (`kOverridden`), the breakpoints (white when selected, filled when hovered), the hovered segment or
-  end line thicker, and the ghost breakpoint where a click would add one (`kGhost`). A target without an envelope
-  draws its own value as a faint dashed line (`kUnautomated`).
+- `drawArea()` shades a track's own lane (over its clips: `kLaneBackground`), draws the line in the theme's
+  `automationOn()` (red) or, while overridden, `automationOff()` (grey), the breakpoints (white when selected, filled
+  when hovered), the hovered segment or end line thicker, and the ghost breakpoint where a click would add one
+  (`automationOn()`, `kGhostAlpha`). A target without an envelope draws its own value as a faint dashed line
+  (`kUnautomatedAlpha`).
 - `drawRange()` tints the selected range on the lanes it covers; `drawReadout()` shows the value of a breakpoint
   being dragged (`formatNormalized`).
 
