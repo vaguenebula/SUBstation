@@ -29,32 +29,22 @@ Item {
     readonly property alias lineMenu: lineMenu  // (the threshold's or Return's, from the display's lines)
     // Whether the sidechain section shows: view state (DeviceViews), so a frame made again keeps it.
     readonly property bool sidechainShown: DeviceViews.value(deviceId, "sidechain", false)
-    // The widths, measured in the fonts their texts are drawn in, so that the editor fits whatever font the
-    // UI gets (the numbers are the least: the layout in the house font). The knobs' cells as wide as their
-    // captions and widest readouts; the column beside them as its caption, Flip and the Lookahead list.
-    readonly property int knobCellWidth: Math.max(56, ...[thresholdCell, returnCell, floorCell, attackCell, holdCell,
-                                                          releaseCell].map(cellNeeds))
+    // The widths, measured in the fonts their texts are drawn in as a Text lays them out (EditorTextsWidth), so that
+    // the editor fits whatever font the UI gets (the numbers are the least: the layout in the house font). The knobs'
+    // cells as wide as their captions and every text their readouts take; the column beside them as its caption,
+    // Flip and the Lookahead list.
+    readonly property int knobCellWidth: Math.max(56, gridTexts.needed)
     readonly property int sideWidth: Math.ceil(Math.max(56, lookaheadCaption.implicitWidth, flip.implicitWidth,
                                                         lookahead.needs))
     // The editor without its sidechain section: the display, the knobs, the column beside them.
     readonly property int foldedWidth: side.x + sideWidth + 8
     // The section's knob cells: Gain and Dry/Wet, then the EQ's three (which fill the row its buttons
     // above need, should those be wider).
-    readonly property int scCellWidth: Math.max(46, cellNeeds(scGain), cellNeeds(scMix))
-    readonly property int eqCellWidth: Math.max(52, cellNeeds(eqFreq), cellNeeds(eqQ), cellNeeds(eqGain),
-                                                Math.ceil((buttonsWidth - 2 * scCellWidth - 6) / 3))
+    readonly property int scCellWidth: Math.max(46, scTexts.needed)
+    readonly property int eqCellWidth: Math.max(52, eqTexts.needed, Math.ceil((buttonsWidth - 2 * scCellWidth - 6) / 3))
     // The buttons along its top: the source, Listen and EQ at the left, the EQ's types at the right.
     readonly property int buttonsWidth: eqButton.x + eqButton.width + 2 + 6 * 17
     readonly property int sectionWidth: 2 * scCellWidth + 6 + 3 * eqCellWidth
-    // The captions' and readouts' widest digit (see cellNeeds()).
-    readonly property string wideDigit: {
-        let widest = "0"
-        for (const digit of "123456789") {
-            if (textFont.advanceWidth(digit) > textFont.advanceWidth(widest))
-                widest = digit
-        }
-        return widest
-    }
     // How far the main panel moves right for the sidechain section: its width, and the divider with
     // the space round it (13 px), in step with the section as it unfolds.
     readonly property real shift: section.width * (sectionWidth + 13) / sectionWidth
@@ -77,30 +67,18 @@ Item {
               "sc_listen", "sc_eq", "sc_eq_type", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"]
     }
 
-    // The captions' and readouts' font (EditorCaption's, EditorReadout's).
-    FontMetrics {
-        id: textFont
-        font: Theme.uiFont(8)
+    // What the knobs' cells need: the grid's, the section's Gain and Dry/Wet, the EQ's three.
+    EditorTextsWidth {
+        id: gridTexts
+        knobs: [thresholdCell, returnCell, floorCell, attackCell, holdCell, releaseCell]
     }
-
-    // What an EditorKnob's cell needs to show its caption and every readout whole: its parameter's text
-    // (or its formatter's) at either end of its range and at points across it (in its own scale), each
-    // also with every digit of a number but its first the font's widest (a font's digits can differ in
-    // width: so the values between the points are measured too).
-    function cellNeeds(knob) {
-        const param = knob ? knob.param : null
-        let widest = knob ? textFont.advanceWidth(knob.title) : 0
-        if (param && param.valid) {
-            const lo = param.minimum, hi = param.maximum
-            const log = param.logScale && lo > 0
-            for (let i = 0; i <= 32; ++i) {
-                const v = log ? lo * Math.pow(hi / lo, i / 32) : lo + (hi - lo) * i / 32
-                const text = knob.formatter ? knob.formatter(v) : param.format(v)
-                const wide = text.replace(/\d[\d.]*/g, n => n[0] + n.slice(1).replace(/\d/g, editor.wideDigit))
-                widest = Math.max(widest, textFont.advanceWidth(text), textFont.advanceWidth(wide))
-            }
-        }
-        return Math.ceil(widest)
+    EditorTextsWidth {
+        id: scTexts
+        knobs: [scGain, scMix]
+    }
+    EditorTextsWidth {
+        id: eqTexts
+        knobs: [eqFreq, eqQ, eqGain]
     }
 
     // Floor at its bottom is silence (the engine's rule, through the graph).
@@ -192,8 +170,7 @@ Item {
                 id: source
                 objectName: "sidechainSource"
                 // "No Sidechain" whole beside the arrow (a track's name is elided).
-                width: Math.max(96, Math.ceil(sourceFont.advanceWidth(qsTr("No Sidechain"))) + leftPadding
-                                + rightPadding + 2 + 2 + sourceArrow.width + 2)
+                width: Math.max(96, sourceName.needed + leftPadding + rightPadding + 2 + 2 + sourceArrow.width)
                 height: 16
                 role: "small"
                 leftPadding: 4
@@ -205,9 +182,10 @@ Item {
                               + "(the device's sidechain menu)")
                 onClicked: editor.sidechainMenuRequested(source)
 
-                FontMetrics {
-                    id: sourceFont
+                EditorTextsWidth {
+                    id: sourceName
                     font: source.font
+                    texts: [qsTr("No Sidechain")]
                 }
                 // Its name (elided) and an arrow, as a drop-down's.
                 contentItem: Item {
@@ -534,8 +512,7 @@ Item {
                 id: lookahead
                 objectName: "lookahead"
                 // What it needs: its longest choice and the arrow.
-                readonly property real needs: Math.max(0, ...names.map(name => lookaheadFont.advanceWidth(name)))
-                                              + button.leftPadding + button.rightPadding
+                readonly property real needs: choiceNames.needed + button.leftPadding + button.rightPadding
 
                 y: knobGrid.y + attackCell.y + attackCell.knob.y
                    + Math.round((attackCell.knob.height - height) / 2)
@@ -544,9 +521,10 @@ Item {
                 tooltip: qsTr("Lookahead: the gate sees what comes this much ahead, to open before a transient\n"
                               + "(adds as much latency)")
 
-                FontMetrics {
-                    id: lookaheadFont
+                EditorTextsWidth {
+                    id: choiceNames
                     font: lookahead.button.font
+                    texts: lookahead.names
                 }
             }
         }

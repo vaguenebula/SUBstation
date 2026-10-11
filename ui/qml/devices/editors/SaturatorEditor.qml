@@ -27,35 +27,23 @@ Item {
     readonly property bool bass: type === curve.bassShaperType
     readonly property bool colorOn: p.get("color") ? p.get("color").value >= 0.5 : false
 
-    // The widths, measured in the fonts their texts are drawn in, so that the editor fits whatever font the
-    // UI gets (the numbers are the least: the layout in the house font). The Type list as wide as its longest
-    // name with its arrow, and the front panel with it; each column's knob cells as wide as their captions
-    // and widest readouts.
-    readonly property real typeListWidth: listWidth(typeChoice)
-    readonly property int frontWidth: Math.ceil(Math.max(84, typeListWidth, cellNeeds(drive),
+    // The widths, measured in the fonts their texts are drawn in as a Text lays them out (EditorTextsWidth), so that
+    // the editor fits whatever font the UI gets (the numbers are the least: the layout in the house font). The Type
+    // list as wide as its longest name with its arrow, and the front panel with it; each column's knob cells as wide
+    // as their captions and every text their readouts take.
+    readonly property int frontWidth: Math.ceil(Math.max(84, listWidth(typeChoice, typeNames), driveTexts.needed,
                                                          2 * Math.max(dc.implicitWidth, hq.implicitWidth)
                                                          + switches.spacing))
-    readonly property int levelsCell: Math.max(62, cellNeeds(outputKnob), cellNeeds(mixKnob))
-    readonly property int colorCell: Math.max(52, ...[baseKnob, freqKnob, widthKnob, depthKnob].map(cellNeeds))
+    readonly property int levelsCell: Math.max(62, levelTexts.needed)
+    readonly property int colorCell: Math.max(52, colorTexts.needed)
     // (the Waveshaper's rows fill their section, as wide as its title and the Bass Shaper's controls need too)
     readonly property int shaperCell: {
-        const knobs = Math.max(...[wsDrive, wsLin, wsCurve, wsDamp, wsDepth, wsPeriod].map(cellNeeds))
-        const others = Math.max(...editor.shaperTitles.map(title => titleFont.advanceWidth(title)),
-                                bassHint.implicitWidth, editor.bassCell)
-        return Math.max(52, knobs, Math.ceil((others - 2 * wsTop.spacing) / 3))
+        const others = Math.max(titleTexts.needed, bassHint.implicitWidth, editor.bassCell)
+        return Math.max(52, shaperTexts.needed, Math.ceil((others - 2 * wsTop.spacing) / 3))
     }
-    readonly property int bassCell: Math.max(62, cellNeeds(thresholdKnob))
+    readonly property int bassCell: Math.max(62, bassTexts.needed)
     // The shaper section's title: the Waveshaper's or the Bass Shaper's.
     readonly property var shaperTitles: [qsTr("Waveshaper"), qsTr("Bass Shaper")]
-    // The captions' and readouts' widest digit (see cellNeeds()).
-    readonly property string wideDigit: {
-        let widest = "0"
-        for (const digit of "123456789") {
-            if (textFont.advanceWidth(digit) > textFont.advanceWidth(widest))
-                widest = digit
-        }
-        return widest
-    }
 
     // Columns 8 px apart: the front panel (Drive, the curve, Output and Dry/Wet), a line, Color, a line, the
     // shaper's controls.
@@ -63,46 +51,46 @@ Item {
     implicitHeight: 6 + Math.max(front.implicitHeight, curveColumn.implicitHeight, levels.implicitHeight,
                                  colorSection.implicitHeight, shaperSection.implicitHeight) + 6
 
-    // The captions' and readouts' font (EditorCaption's, EditorReadout's), and the shaper's title's.
-    FontMetrics {
-        id: textFont
-        font: Theme.uiFont(8)
+    // What the columns' texts need: each column's knobs', the lists' names, the shaper section's titles.
+    EditorTextsWidth {
+        id: driveTexts
+        knobs: [drive]
     }
-    FontMetrics {
-        id: titleFont
+    EditorTextsWidth {
+        id: levelTexts
+        knobs: [outputKnob, mixKnob]
+    }
+    EditorTextsWidth {
+        id: colorTexts
+        knobs: [baseKnob, freqKnob, widthKnob, depthKnob]
+    }
+    EditorTextsWidth {
+        id: shaperTexts
+        knobs: [wsDrive, wsLin, wsCurve, wsDamp, wsDepth, wsPeriod]
+    }
+    EditorTextsWidth {
+        id: bassTexts
+        knobs: [thresholdKnob]
+    }
+    EditorTextsWidth {
+        id: titleTexts
         font: shaperTitle.font
+        texts: editor.shaperTitles
     }
-    FontMetrics {
-        id: listFont
+    EditorTextsWidth {
+        id: typeNames
         font: typeChoice.button.font
+        texts: typeChoice.names
+    }
+    EditorTextsWidth {
+        id: clipNames
+        font: clip.button.font
+        texts: clip.names
     }
 
-    // A list's width: its longest name with its arrow.
-    function listWidth(choice) {
-        let widest = 0
-        for (const name of choice.names)
-            widest = Math.max(widest, listFont.advanceWidth(name))
-        return Math.ceil(widest + choice.button.leftPadding + choice.button.rightPadding) + 2
-    }
-
-    // What an EditorKnob's cell needs to show its caption and every readout whole: its parameter's text
-    // (or its formatter's) at either end of its range and at points across it (in its own scale), each
-    // also with every digit of a number but its first the font's widest (a font's digits can differ in
-    // width: so the values between the points are measured too).
-    function cellNeeds(knob) {
-        const param = knob ? knob.param : null
-        let widest = knob ? textFont.advanceWidth(knob.title) : 0
-        if (param && param.valid) {
-            const lo = param.minimum, hi = param.maximum
-            const log = param.logScale && lo > 0
-            for (let i = 0; i <= 32; ++i) {
-                const v = log ? lo * Math.pow(hi / lo, i / 32) : lo + (hi - lo) * i / 32
-                const text = knob.formatter ? knob.formatter(v) : param.format(v)
-                const wide = text.replace(/\d[\d.]*/g, n => n[0] + n.slice(1).replace(/\d/g, editor.wideDigit))
-                widest = Math.max(widest, textFont.advanceWidth(text), textFont.advanceWidth(wide))
-            }
-        }
-        return Math.ceil(widest)
+    // A list's width: its longest name (as `names` measures them) with its arrow.
+    function listWidth(choice, names) {
+        return names.needed + choice.button.leftPadding + choice.button.rightPadding
     }
 
     DeviceParamMap {
@@ -175,7 +163,7 @@ Item {
         objectName: "curveColumn"
         x: front.x + front.width + 8
         y: 6
-        width: Math.max(curve.implicitWidth, editor.listWidth(clip))
+        width: Math.max(curve.implicitWidth, editor.listWidth(clip, clipNames))
         height: editor.height - 12
         implicitHeight: curve.implicitHeight + 4 + clip.height
 

@@ -234,7 +234,7 @@ void GateKeyGraph::paint(SgPainter& p) {
     if (on < 0.99) {
         p.save();
         p.setOpacity(1.0 - on);
-        p.drawText(QRectF(r.right() - 64, r.top() + 2, 60, 12), Qt::AlignRight | Qt::AlignVCenter,
+        p.drawText(QRectF(r.right() - 64, r.top() + 2, 60, 12), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
                    QStringLiteral("EQ off"), Theme::kTextDim, uiFont(7));
         p.restore();
     }

@@ -395,16 +395,18 @@ void SaturatorColorGraph::paint(SgPainter& p) {
         p.drawEllipse(QRectF(at.x() - 4.5, at.y() - 4.5, 9, 9), ring, 1.5);
     }
 
-    // Which spectrum is which, on a dark backing (the output's line runs along the bottom right).
+    // Which spectrum is which, on a dark backing (the output's line runs along the bottom right), unclipped: a
+    // glyph reaching past its advance isn't shaved.
     const QFont font = uiFont(7);
     const QString in = QStringLiteral("In"), out = QStringLiteral("Out");
     const double outWidth = SgPainter::textWidth(out, font);
     const double legendWidth = SgPainter::textWidth(in, font) + kLegendGap + outWidth;
     const QRectF corner(r.right() - 3 - legendWidth, r.bottom() - 13, legendWidth, 12);
     p.fillRoundedRect(corner.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
-    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter, out, withAlpha(Theme::kScopeLine, 200), font);
-    p.drawText(corner.adjusted(0, 0, -outWidth - kLegendGap, 0), Qt::AlignRight | Qt::AlignVCenter, in, Theme::kTextDim,
+    p.drawText(corner, Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, out, withAlpha(Theme::kScopeLine, 200),
                font);
+    p.drawText(corner.adjusted(0, 0, -outWidth - kLegendGap, 0), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
+               in, Theme::kTextDim, font);
 }
 
 }  // namespace sub::ui

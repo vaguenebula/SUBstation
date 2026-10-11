@@ -518,12 +518,12 @@ void GateGraph::paint(SgPainter& p) {
     const QFont small = uiFont(7);
 
     // The level axis: a line every 12 dB, its figure in the strip on the right (clear of the key
-    // dot's halo on the plot's edge).
+    // dot's halo on the plot's edge; unclipped, so a wide font's reaches into the gap before the plot, whole).
     for (int db = 0; db >= -60; db -= 12) {
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBar, db == 0 ? 150 : 70));
-        p.drawText(QRectF(r.right() + 6, y - 6, 17, 12), Qt::AlignRight | Qt::AlignVCenter, QString::number(db),
-                   Theme::kTextDim, small);
+        p.drawText(QRectF(r.right() + 6, y - 6, 17, 12), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
+                   QString::number(db), Theme::kTextDim, small);
     }
 
     // The history, newest at the right edge, in columns of whole buckets of values (aligned to the
@@ -633,7 +633,7 @@ void GateGraph::paint(SgPainter& p) {
         p.fillEllipse(led, 3.5 + 4 * ledEase, 3.5 + 4 * ledEase,
                       withAlpha(Theme::kSoloOn, int(std::lround(70 * ledEase))));
     p.fillEllipse(led, 3.5, 3.5, mixColor(Theme::kTextDisabled, Theme::kSoloOn, ledEase));
-    p.drawText(QRectF(led.x() + 7, led.y() - 7, 50, 14), Qt::AlignLeft | Qt::AlignVCenter, state,
+    p.drawText(QRectF(led.x() + 7, led.y() - 7, 50, 14), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip, state,
                idle_ ? Theme::kTextDisabled : open ? Theme::kText : Theme::kTextDim, small);
     if (listening_) {  // (pulsing while sound comes, on a backing of its own: the 0 dB line runs under it)
         const QString listening = QStringLiteral("Listening to the key");

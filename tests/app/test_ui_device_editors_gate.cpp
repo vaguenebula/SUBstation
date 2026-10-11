@@ -14,14 +14,13 @@
 // engine's, its dot follows the mouse, Ctrl and the wheel set the bell's Q.
 // With SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
 
-#include <QFontMetricsF>
-#include <QJSValue>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -136,36 +135,12 @@ class TestUiDeviceEditorsGate : public QObject, public sub::app::test::EditorHar
         return item->mapRectToItem(in, QRectF(0, 0, item->width(), item->height()));
     }
 
-    // What of an EditorKnob's texts isn't whole (empty if all are): its caption, and every text its readout
-    // takes across the knob's range (in its own scale; the parameter's, or its formatter's), in the readout's
-    // font. The caption is centred over the knob.
-    QString cutShort(QQuickItem* view, const char* name) {
-        QQuickItem* cell = find(view, QString::fromLatin1(name));
-        const KnobItem* dial = knob(view, name);
-        if (!cell || !dial)
-            return QStringLiteral("%1: none").arg(QLatin1String(name));
-        QQuickItem* caption = cell->childItems().first();  // (caption, knob, readout)
-        QQuickItem* readout = cell->childItems().last();
-        if (caption->property("truncated").toBool() || caption->property("contentWidth").toDouble() > caption->width())
-            return QStringLiteral("%1: its caption").arg(QLatin1String(name));
-        if (std::abs(rectIn(caption, view).center().x() - rectIn(cell->childItems().at(1), view).center().x()) > 0.5)
-            return QStringLiteral("%1: its caption off its knob").arg(QLatin1String(name));
-        auto* param = cell->property("param").value<QObject*>();
-        const QJSValue formatter = cell->property("formatter").value<QJSValue>();
-        const QFontMetricsF metrics(readout->property("font").value<QFont>());
-        for (int i = 0; i <= 200; ++i) {
-            const double t = i / 200.0;
-            const double v = dial->logScale() ? dial->from() * std::pow(dial->to() / dial->from(), t)
-                                              : dial->from() + (dial->to() - dial->from()) * t;
-            QString text;
-            if (formatter.isCallable())
-                text = formatter.call({QJSValue(v)}).toString();
-            else
-                QMetaObject::invokeMethod(param, "format", Q_RETURN_ARG(QString, text), Q_ARG(double, v));
-            if (text.isEmpty() || metrics.horizontalAdvance(text) > readout->width())
-                return QStringLiteral("%1: \"%2\" in %3 px").arg(QLatin1String(name), text).arg(readout->width());
-        }
-        return {};
+    // The EditorKnobs named, in `view`.
+    QList<QQuickItem*> cells(QQuickItem* view, std::initializer_list<const char*> names) {
+        QList<QQuickItem*> found;
+        for (const char* name : names)
+            found << find(view, QString::fromLatin1(name));
+        return found;
     }
 
     double latencyOf(const Shown& shown) {
@@ -250,8 +225,11 @@ private Q_SLOTS:
             QVERIFY2(body.adjusted(8, 6, -8, -6).contains(rect), name);
             QVERIFY2(!rect.intersects(graph), name);
         }
-        // The knobs in a grid of equal cells 4 px apart, 10 px after the display; the column beside them 8 px
-        // after it, Flip, the Lookahead list and its caption spanning it, and the editor ending 8 px after it.
+        // The display at its own width, 28 px in (after the sidechain's strip); the knobs in a grid of equal
+        // cells 4 px apart, 10 px after it; the column beside them 8 px after it, Flip, the Lookahead list and its
+        // caption spanning it, and the editor ending 8 px after it.
+        QCOMPARE(graph.left(), 28.0);
+        QCOMPARE(graph.width(), double(GateGraph::kWidth));
         const double cell = rectIn(find(view, QStringLiteral("threshold")), view).width();
         const char* grid[2][3] = {{"threshold", "return", "floor"}, {"attack", "hold", "release"}};
         for (const auto& row : grid) {
@@ -271,16 +249,29 @@ private Q_SLOTS:
             QCOMPARE(rect.right(), side.right());
         }
         QCOMPARE(side.right() + 8, folded);
-        // Every text whole: the knobs' captions and readouts (whatever their values), the column's caption,
-        // Flip's name (with the room round it a button's face has).
-        for (const char* name : {"threshold", "return", "floor", "attack", "hold", "release"}) {
-            const QString problem = cutShort(view, name);
+        // Every text whole, as a Text lays it out in its font: the knobs' captions and readouts (whatever their
+        // values), the column's caption, Flip's name (with the room round it a button's face has), the list's
+        // choices beside its arrow.
+        const QList<QQuickItem*> knobs = cells(view, {"threshold", "return", "floor", "attack", "hold", "release"});
+        for (QQuickItem* knobCell : knobs) {
+            const QString problem = knobTextsProblem(knobCell);
             QVERIFY2(problem.isEmpty(), qPrintable(problem));
         }
         QQuickItem* lookaheadCaption = find(view, QStringLiteral("lookaheadCaption"));
-        QVERIFY2(lookaheadCaption->property("contentWidth").toDouble() <= lookaheadCaption->width(),
-                 qPrintable(QString::number(lookaheadCaption->property("contentWidth").toDouble())));
-        QVERIFY(button(view, "flip")->implicitWidth() <= button(view, "flip")->width());
+        const double captionNeeds = textWidth(QStringLiteral("Lookahead"), lookaheadCaption->property("font"));
+        QVERIFY2(captionNeeds <= lookaheadCaption->width() && !lookaheadCaption->property("truncated").toBool(),
+                 qPrintable(QString::number(captionNeeds)));
+        QQuickItem* flip = button(view, "flip");
+        QVERIFY(flip->implicitWidth() <= flip->width());
+        QQuickItem* choices = button(view, "lookahead");
+        const double listNeeds = widestOf(lookahead->property("names").toStringList(), choices->property("font"))
+                                 + choices->property("leftPadding").toDouble()
+                                 + choices->property("rightPadding").toDouble();
+        QVERIFY(listNeeds <= choices->width());
+        // And no wider than that: the cells as their widest text (56 px at least), the column as its caption,
+        // Flip or its list (56 px at least).
+        QCOMPARE(cell, std::max(56.0, std::ceil(knobsNeed(knobs))));
+        QCOMPARE(side.width(), std::ceil(std::max({56.0, captionNeeds, flip->implicitWidth(), listNeeds})));
         QTest::qWait(50);
         const QImage shot = grab();
         save(shot, QStringLiteral("gate-idle.png"));
@@ -763,16 +754,29 @@ private Q_SLOTS:
         QCOMPARE(rectIn(find(view, QStringLiteral("eqType5")), view).right(), inside.right());
         QCOMPARE(rectIn(find(view, QStringLiteral("sc_gain")), view).left(), inside.left());
         QCOMPARE(rectIn(find(view, QStringLiteral("sc_eq_gain")), view).right(), inside.right());
-        for (const char* name : {"sc_gain", "sc_mix", "sc_eq_freq", "sc_eq_q", "sc_eq_gain"}) {
-            const QString problem = cutShort(view, name);
+        const QList<QQuickItem*> scCells = cells(view, {"sc_gain", "sc_mix"});
+        const QList<QQuickItem*> eqCells = cells(view, {"sc_eq_freq", "sc_eq_q", "sc_eq_gain"});
+        for (QQuickItem* knobCell : scCells + eqCells) {
+            const QString problem = knobTextsProblem(knobCell);
             QVERIFY2(problem.isEmpty(), qPrintable(problem));
         }
-        // "No Sidechain" whole beside its arrow; "EQ" inside its button, 2 px clear of either side.
-        QQuickItem* sourceLabel = find(view, QStringLiteral("sidechainSource"))
-                                      ->property("contentItem").value<QQuickItem*>()->childItems().first();
-        QVERIFY(!sourceLabel->property("truncated").toBool());
+        // And no wider: Gain's and Dry/Wet's as their widest text (46 px at least), the EQ's three as theirs (52
+        // at least) or as the buttons above them need.
+        const double scCell = scCells.first()->width(), buttons = left + 2 + 6 * 17 - inside.left();
+        QCOMPARE(scCell, std::max(46.0, std::ceil(knobsNeed(scCells))));
+        QCOMPARE(eqCells.first()->width(),
+                 std::max({52.0, std::ceil(knobsNeed(eqCells)), std::ceil((buttons - 2 * scCell - 6) / 3)}));
+        // "No Sidechain" whole beside its arrow (the button 96 px, or as wide as that needs); "EQ" inside its
+        // button, 2 px clear of either side (22 px at least).
+        QQuickItem* source = find(view, QStringLiteral("sidechainSource"));
+        QQuickItem* sourceLabel = source->property("contentItem").value<QQuickItem*>()->childItems().first();
+        const double nameNeeds = textWidth(QStringLiteral("No Sidechain"), sourceLabel->property("font"));
+        QVERIFY(!sourceLabel->property("truncated").toBool() && nameNeeds <= sourceLabel->width());
+        QVERIFY2(source->width() == 96 || sourceLabel->width() == std::ceil(nameNeeds),
+                 qPrintable(QStringLiteral("%1 in %2").arg(nameNeeds).arg(sourceLabel->width())));
         QQuickItem* eq = button(view, "sc_eq");
         QVERIFY(eq->property("implicitContentWidth").toDouble() + 4 <= eq->width());
+        QCOMPARE(eq->width(), std::max(22.0, std::ceil(eq->property("implicitContentWidth").toDouble()) + 6));
         QVERIFY(rectIn(shown.graph, view).left() >= inside.right() + 6);
         auto enabled = [&](const char* name) { return find(view, QString::fromLatin1(name))->isEnabled(); };
         auto checked = [&](int type) {

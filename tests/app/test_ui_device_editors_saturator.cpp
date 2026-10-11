@@ -9,7 +9,6 @@
 // SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs,
 // with signal flowing, in four of its modes.
 
-#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QSignalSpy>
@@ -21,7 +20,6 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <tuple>
 #include <vector>
 
 #include "EditorHarness.h"
@@ -218,15 +216,29 @@ private Q_SLOTS:
             right = r.right();
         }
         QCOMPARE(s.view->implicitWidth(), right + 8);
-        // The graphs span their columns, each at least its own width.
-        for (const auto& [graph, column, least] :
-             {std::tuple{"saturatorCurve", "curveColumn", SaturatorCurve::kWidth},
-              std::tuple{"saturatorColor", "colorSection", SaturatorColorGraph::kWidth}}) {
+        // A list's need: its longest name beside its arrow, as a Text lays it out.
+        auto listNeeds = [&](const char* id) {
+            QQuickItem* face = buttonOf(find(s.view, QString::fromLatin1(id)));
+            const QStringList names = find(s.view, QString::fromLatin1(id))->property("names").toStringList();
+            return std::ceil(widestOf(names, face->property("font"))) + face->property("leftPadding").toDouble()
+                   + face->property("rightPadding").toDouble();
+        };
+        auto knobs = [&](const QStringList& ids) {
+            QList<QQuickItem*> cells;
+            for (const QString& id : ids)
+                cells << find(s.view, id);
+            return cells;
+        };
+        // The graphs span their columns: the curve's as wide as the curve (160 px) or the Post Clip list under it
+        // needs, Color's as its graph (220 px) or its knobs under it (below).
+        for (const auto& [graph, column] : {std::pair{"saturatorCurve", "curveColumn"},
+                                            std::pair{"saturatorColor", "colorSection"}}) {
             const QRectF plot = rectOf(QString::fromLatin1(graph)), within = columns.at(QString::fromLatin1(column));
             QCOMPARE(plot.left(), within.left());
             QCOMPARE(plot.width(), within.width());
-            QVERIFY2(within.width() >= least, column);
         }
+        QCOMPARE(columns.at(QStringLiteral("curveColumn")).width(),
+                 std::max(double(SaturatorCurve::kWidth), listNeeds("clip")));
         // Color's knobs side by side under its graph, 4 px apart, its section wider than the graph's own width
         // only as far as they need (a wide font's readouts). The Waveshaper's two rows of three fill their
         // section, which is as wide as they need, or as the title and the Bass Shaper's controls need.
@@ -243,18 +255,41 @@ private Q_SLOTS:
         for (const char* id : {"ws_curve", "ws_period"})
             QCOMPARE(rectOf(QString::fromLatin1(id)).right(), shaper.right());
 
-        // The lists as wide as their longest names with the arrow, in the font they are drawn in (the
+        // The lists as wide as their longest names with the arrow, as a Text lays them out in their font (the
         // Type list, "Medium Curve", widening the front panel past its 84 px).
         for (const char* id : {"type", "clip"}) {
             QQuickItem* face = buttonOf(find(s.view, QString::fromLatin1(id)));
-            const QFontMetricsF metrics(face->property("font").value<QFont>());
             const double room =
                 face->width() - face->property("leftPadding").toDouble() - face->property("rightPadding").toDouble();
             for (const QString& name : find(s.view, QString::fromLatin1(id))->property("names").toStringList()) {
-                const double needs = metrics.horizontalAdvance(name);
+                const double needs = textWidth(name, face->property("font"));
                 QVERIFY2(needs <= room, qPrintable(QStringLiteral("%1: %2 px in %3").arg(name).arg(needs).arg(room)));
             }
         }
+        // Each column no wider than what it holds needs: the front panel as Drive's texts, the Type list or DC and
+        // HQ need (84 px at least); Output's and Dry/Wet's cells as their texts (62 at least); Color's four as
+        // theirs (52 at least); the Waveshaper's six as theirs (52 at least), or a third of what the section's
+        // titles, the Bass Shaper's hint or its Threshold need; the Threshold's as its texts (62 at least).
+        QQuickItem* dc = buttonOf(find(s.view, QStringLiteral("dc")));
+        QQuickItem* hq = buttonOf(find(s.view, QStringLiteral("hq")));
+        QCOMPARE(columns.at(QStringLiteral("front")).width(),
+                 std::ceil(std::max({84.0, listNeeds("type"), std::ceil(knobsNeed(knobs({QStringLiteral("drive")}))),
+                                     2 * std::max(dc->implicitWidth(), hq->implicitWidth()) + 4})));
+        QCOMPARE(columns.at(QStringLiteral("levels")).width(),
+                 std::max(62.0, std::ceil(knobsNeed(knobs({QStringLiteral("output"), QStringLiteral("mix")})))));
+        for (const QString& id : kColorKnobs)
+            QCOMPARE(rectOf(id).width(), std::max(52.0, std::ceil(knobsNeed(knobs(kColorKnobs)))));
+        QQuickItem* title = find(s.view, QStringLiteral("shaperTitle"));
+        QQuickItem* hint = find(s.view, QStringLiteral("bassHint"));
+        const double bassCell = rectOf(QStringLiteral("threshold")).width();
+        QCOMPARE(bassCell, std::max(62.0, std::ceil(knobsNeed(knobs({QStringLiteral("threshold")})))));
+        const double others = std::max({textWidth(QStringLiteral("Waveshaper"), title->property("font")),
+                                        textWidth(QStringLiteral("Bass Shaper"), title->property("font")),
+                                        textWidth(hint->property("text").toString(), hint->property("font")),
+                                        bassCell});
+        for (const QString& id : kShaperKnobs)
+            QCOMPARE(rectOf(id).width(), std::max({52.0, std::ceil(knobsNeed(knobs(kShaperKnobs))),
+                                                   std::ceil((std::ceil(others) - 8) / 3)}));
 
         // DC and HQ share the front panel's width, 4 px apart, every edge on a whole pixel (an odd width
         // halved would put the inner edges on half pixels, blurred): at the width the font gives and at one
@@ -298,22 +333,11 @@ private Q_SLOTS:
                 QVERIFY2(std::abs(caption.center().x() - dial.center().x()) <= 0.5, qPrintable(id));
             }
         }
-        // Nor would a readout be at any other value: every text its parameter takes across its range (in its
-        // own scale) fits it, in the font it is drawn in.
+        // Nor would a readout be at any other value: every text its parameter takes across its range fits it, as
+        // a Text lays it out in its font (and the cells are sized by those texts, all of them).
         for (const QString& id : kKnobs) {
-            QQuickItem* readout = find(s.view, id)->childItems().last();
-            auto* param = find(s.view, id)->property("param").value<QObject*>();
-            const KnobItem* knob = knobOf(s.view, id);
-            const QFontMetricsF metrics(readout->property("font").value<QFont>());
-            for (int i = 0; i <= 200; ++i) {
-                const double t = i / 200.0;
-                const double v = knob->logScale() ? knob->from() * std::pow(knob->to() / knob->from(), t)
-                                                  : knob->from() + (knob->to() - knob->from()) * t;
-                QString text;
-                QVERIFY(QMetaObject::invokeMethod(param, "format", Q_RETURN_ARG(QString, text), Q_ARG(double, v)));
-                QVERIFY2(metrics.horizontalAdvance(text) <= readout->width(),
-                         qPrintable(QStringLiteral("%1: %2 in %3 px").arg(id, text).arg(readout->width())));
-            }
+            const QString problem = knobTextsProblem(find(s.view, id));
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
         }
         // The switches show their names whole, with the room round them a button's face has.
         for (const char* id : {"dc", "hq", "color"}) {
@@ -369,8 +393,7 @@ private Q_SLOTS:
                                  500);
         inColumns(16);
         // (the hint under the Threshold too, and the section's title, each text within its width)
-        QQuickItem* hint = find(s.view, QStringLiteral("bassHint"));
-        QVERIFY(hint && hint->isVisible());
+        QVERIFY(hint->isVisible());
         QVERIFY(columns.at(QStringLiteral("shaperSection")).contains(rectOf(QStringLiteral("bassHint"))));
         for (QQuickItem* text : {hint, find(s.view, QStringLiteral("shaperTitle"))})
             QVERIFY2(text->property("contentWidth").toDouble() <= text->width(),

@@ -433,7 +433,8 @@ void SaturatorCurve::paint(SgPainter& p) {
 
     // The drive and HQ in the bottom right corner, which an odd curve takes only when it folds (Sinoid
     // Fold, the Waveshaper's ripples); the type is the list beside it. Each on a dark backing, so a grid
-    // line, Post Clip's ceiling or a fold passing behind doesn't run through it.
+    // line, Post Clip's ceiling or a fold passing behind doesn't run through it (the text unclipped: a glyph
+    // reaching past its advance isn't shaved).
     const QFont font = uiFont(7);
     const double drive = shape_.driveDb;
     const QString driveText =
@@ -442,7 +443,7 @@ void SaturatorCurve::paint(SgPainter& p) {
         const double w = SgPainter::textWidth(text, font);
         const QRectF at(r.right() - 3 - w, bottom - 12, w, 12);
         p.fillRoundedRect(at.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
-        p.drawText(at, Qt::AlignRight | Qt::AlignVCenter, text, color, font);
+        p.drawText(at, Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, text, color, font);
     };
     corner(r.bottom() - 1, driveText, std::abs(drive) > 1e-9 ? Theme::kText : Theme::kTextDim);
     if (hq_)
