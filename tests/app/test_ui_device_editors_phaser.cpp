@@ -14,6 +14,7 @@
 
 #include <QElapsedTimer>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QJSValue>
 #include <QQmlComponent>
 #include <QQuickItem>
@@ -157,6 +158,45 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
         probe->setProperty("text", text);
         return probe->implicitWidth();
     }
+    // The font's widest figure (figures may be proportional).
+    static QString widestFigure(const QFont& font) {
+        const QFontMetricsF metrics(font);
+        QString widest = QStringLiteral("0");
+        for (const QChar digit : QStringLiteral("123456789")) {
+            if (metrics.horizontalAdvance(QString(digit)) > metrics.horizontalAdvance(widest))
+                widest = QString(digit);
+        }
+        return widest;
+    }
+    // Rounded up to even pixels (as the editor's cells are, so that a knob centres in them on whole ones).
+    static double even(double width) { return 2.0 * std::ceil(width / 2.0); }
+    // The widest of some texts as measured: `value` of the texts themselves, `form` of their forms (each figure
+    // the font's widest `figure`: as wide as any text of that form can be).
+    struct Widest {
+        double value = 0.0, form = 0.0;
+
+        void add(double width) {
+            value = std::max(value, width);
+            form = std::max(form, width);
+        }
+        template <typename Measure>
+        void add(const QStringList& texts, const QString& figure, Measure measure) {
+            for (QString text : texts) {
+                value = std::max(value, measure(text));
+                for (QChar& c : text) {
+                    if (c.isDigit())
+                        c = figure.at(0);
+                }
+                form = std::max(form, measure(text));
+            }
+        }
+        // `width` (even, as the editor's cells are) between what the values need and what their forms do, the
+        // house's `least` at least.
+        bool fits(double width, double least) const {
+            return width == even(width) && width >= even(std::max(least, value))
+                   && width <= even(std::max(least, form));
+        }
+    };
 
     // The values over a parameter's range, sampled finely enough to meet every text it reads as (evenly in log
     // for a log-scaled parameter).
@@ -172,8 +212,9 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
     }
 
     // A knob's caption whole, and every value its readout can show (its parameter's whole range, through the
-    // knob's own formatter where it has one).
-    void readoutFits(QQuickItem* cell) {
+    // knob's own formatter where it has one); both centred on the knob. `widest` takes them in (a list's names
+    // as they are: the editor names them).
+    void readoutFits(QQuickItem* cell, Widest& widest) {
         QVERIFY(cell && cell->childItems().size() >= 3);
         QQuickItem* caption = cell->childItems().at(0);
         QQuickItem* readout = cell->childItems().at(2);
@@ -181,7 +222,8 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
         auto* p = qvariant_cast<sub::ui::DeviceParam*>(paramKnobOf(cell)->property("param"));
         QVERIFY(p);
         const QJSValue formatter = cell->property("formatter").value<QJSValue>();
-        const std::unique_ptr<QQuickItem> probe = textProbe(readout->property("font").value<QFont>());
+        const QFont font = readout->property("font").value<QFont>();
+        const std::unique_ptr<QQuickItem> probe = textProbe(font);
         QVERIFY(probe);
         QStringList texts;
         for (const double v : valuesOver(p)) {
@@ -191,6 +233,21 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
             texts << text;
             QVERIFY2(textWidth(probe.get(), text) <= readout->width(),
                      qPrintable(cell->objectName() + QStringLiteral(": ") + text));
+        }
+        const auto measure = [&](const QString& text) { return textWidth(probe.get(), text); };
+        if (p->isList()) {
+            for (const QString& text : texts)
+                widest.add(measure(text));
+        } else {
+            widest.add(texts, widestFigure(font), measure);
+        }
+        const double middle = rectOf(cell, paramKnobOf(cell)).center().x();
+        QVERIFY2(std::abs(rectOf(cell, readout).center().x() - middle) < 0.5, qPrintable(cell->objectName()));
+        if (cell->property("title").isValid()) {  // (an EditorKnob; Env's cell has its switch there)
+            const std::unique_ptr<QQuickItem> captionProbe = textProbe(caption->property("font").value<QFont>());
+            QVERIFY(captionProbe);
+            widest.add(textWidth(captionProbe.get(), caption->property("text").toString()));
+            QVERIFY2(std::abs(rectOf(cell, caption).center().x() - middle) < 0.5, qPrintable(cell->objectName()));
         }
     }
 
@@ -254,6 +311,33 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
             QVERIFY2(!syncAt.intersects(rectOf(view, knobOf(cell))), buttonName);
         }
         QCOMPARE(view->implicitWidth(), rectOf(view, find(view, QString::fromLatin1(last))).right() + 8.0);
+    }
+
+    // The sections in line and no wider than they need: the tabs 8 px in, the house's 58 px or the widest's own;
+    // the mode's section 8 px after them (two cells, or the delay's Time and its notch: the Phaser's knobs
+    // centred in it); then each 10 px after the last: the graph (PhaserGraph's own width), the LFO (two cells
+    // `cell` wide, 4 px apart), the globals (three).
+    void sectionsInLine(QQuickItem* view, double cell) {
+        double tabWidth = 0.0;
+        for (const char* tab : {"modePhaser", "modeFlanger", "modeDoubler"}) {
+            const QRectF at = rectOf(view, find(view, QString::fromLatin1(tab)));
+            QCOMPARE(at.left(), 8.0);
+            tabWidth = std::max(tabWidth, find(view, QString::fromLatin1(tab))->implicitWidth());
+        }
+        const QRectF tab = rectOf(view, find(view, QStringLiteral("modePhaser")));
+        QCOMPARE(tab.width(), std::max(58.0, std::ceil(tabWidth)));
+        const QRectF mode = rectOf(view, find(view, QStringLiteral("delayKnobs")));  // (the section's width)
+        const QRectF phaser = rectOf(view, find(view, QStringLiteral("phaserKnobs")));
+        QCOMPARE(mode.left(), tab.right() + 8.0);
+        QCOMPARE(phaser.width(), 2 * cell + 4.0);
+        QCOMPARE(phaser.center().x(), mode.center().x());
+        const QRectF graph = rectOf(view, find(view, QStringLiteral("phaserGraph")));
+        QCOMPARE(graph.left(), mode.right() + 10.0);
+        QCOMPARE(graph.width(), double(PhaserGraph::kWidth));
+        const QRectF lfo = rectOf(view, find(view, QStringLiteral("rate")));
+        QCOMPARE(lfo.left(), graph.right() + 10.0);
+        QCOMPARE(rectOf(view, find(view, QStringLiteral("duty"))).left(), lfo.left());
+        QCOMPARE(rectOf(view, find(view, QStringLiteral("amount"))).left(), lfo.left() + 2 * cell + 4.0 + 10.0);
     }
 
     // More (LFO 2, the envelope, Safe Bass) open or not: view state the editor keeps (DeviceViews).
@@ -380,12 +464,22 @@ private Q_SLOTS:
             "envAttack", "envRelease"};
         fits(view, controls, "mix");
         QVERIFY(!QTest::currentTestFailed());
+        Widest widest;  // (the cells' captions and readouts)
         for (const char* name : {"notches", "center", "spread", "blend", "rate", "duty", "phaseSpin", "amount",
                                  "feedback", "warmth", "output", "mix", "lfo2Mix", "rate2", "safeBass", "envAmount",
                                  "envAttack", "envRelease"}) {
-            readoutFits(find(view, QString::fromLatin1(name)));
+            readoutFits(find(view, QString::fromLatin1(name)), widest);
             QVERIFY2(!QTest::currentTestFailed(), name);
         }
+        // (a synced rate's caption, centred with its ♪ at the cell's right a pixel clear)
+        auto syncedCaptions = [&] {
+            for (const auto& [knobName, buttonName] : {std::pair{"rate", "sync"}, std::pair{"rate2", "sync2"}}) {
+                QQuickItem* caption = find(view, QString::fromLatin1(knobName))->childItems().at(0);
+                const double sync = find(view, QString::fromLatin1(buttonName))->width();
+                widest.add(caption->implicitWidth() + 2 * (sync + 1.0));
+            }
+        };
+        syncedCaptions();
         set("lfo_sync", 1);
         set("lfo2_sync", 1);
         set("spin_on", 1);
@@ -397,9 +491,31 @@ private Q_SLOTS:
         fits(view, controls, "envRelease");
         QVERIFY(!QTest::currentTestFailed());
         for (const char* name : {"rate", "phaseSpin", "rate2"}) {
-            readoutFits(find(view, QString::fromLatin1(name)));
+            readoutFits(find(view, QString::fromLatin1(name)), widest);
             QVERIFY2(!QTest::currentTestFailed(), name);
         }
+        syncedCaptions();
+        // (the buttons a cell holds: their text with 2 px either side, the border and a pixel clear)
+        for (const char* name : {"spinOn", "fbInvert", "expandButton", "envOn"}) {
+            QQuickItem* control = find(view, QString::fromLatin1(name));
+            QQuickItem* face = buttonOf(control) ? buttonOf(control) : control;
+            widest.add(face->property("implicitContentWidth").toDouble() + 4.0);
+        }
+        // And no wider than they need, whatever the font (732 px in the default, 906 with More): a knob's cell the
+        // house's 52 px or the widest of all that, on even pixels so that the knob centres under them exactly. As
+        // the editor measures a readout's values by their forms, each figure the font's widest, it may be wider
+        // than the widest value itself where figures are proportional, but never wider than the widest form (where
+        // they are all as wide, as in most fonts, the two are the same). The sections in line, 10 px apart.
+        const double cell = find(view, QStringLiteral("notches"))->width();
+        QVERIFY2(widest.fits(cell, 52.0), qPrintable(QString::number(cell)));
+        for (const Control& control : kKnobs)
+            QVERIFY2(find(view, QString::fromLatin1(control.name))->width() == cell, control.name);
+        for (const Control& control : kMoreKnobs)
+            QVERIFY2(find(view, QString::fromLatin1(control.name))->width() == cell, control.name);
+        sectionsInLine(view, cell);
+        QVERIFY(!QTest::currentTestFailed());
+        QCOMPARE(rectOf(view, find(view, QStringLiteral("lfo2Mix"))).left(),
+                 rectOf(view, find(view, QStringLiteral("amount"))).left() + 3 * cell + 2 * 4.0 + 10.0);
         setExpanded(view, false);
         QVERIFY(fitted());
         // The delay modes: the Time knob over both delays' ranges, and the Flanger's first notch under it over
@@ -411,17 +527,34 @@ private Q_SLOTS:
         QTRY_COMPARE(find(view, QStringLiteral("delayKnobs"))->opacity(), 1.0);
         fits(view, controls, "mix");
         QVERIFY(!QTest::currentTestFailed());
-        readoutFits(time);
+        Widest widestTime;
+        readoutFits(time, widestTime);
         QVERIFY(!QTest::currentTestFailed());
-        const std::unique_ptr<QQuickItem> probe = textProbe(notch->property("font").value<QFont>());
+        const QFont notchFont = notch->property("font").value<QFont>();
+        const std::unique_ptr<QQuickItem> probe = textProbe(notchFont);
         QVERIFY(probe);
+        QStringList notchTexts;
         for (const double ms : valuesOver(qvariant_cast<sub::ui::DeviceParam*>(paramKnobOf(time)->property("param")))) {
             const QString text = QStringLiteral("Notch %1").arg(formatValue(500.0 / ms, QStringLiteral("Hz")));
             QVERIFY2(textWidth(probe.get(), text) <= notch->width(), qPrintable(text));
+            if (!notchTexts.contains(text))
+                notchTexts << text;
         }
         set("mode", 2);
         QCOMPARE(paramIdOf(time), QStringLiteral("doubler_time"));
-        readoutFits(time);
+        readoutFits(time, widestTime);
+        QVERIFY(!QTest::currentTestFailed());
+        // The Time knob's cell: an EditorKnob's width at its size, or its widest caption or readout; the mode's
+        // section two cells, or the Time knob's or its notch's, all on even pixels (the Time knob centred in it).
+        QVERIFY2(widestTime.fits(time->width(), knobOf(time)->width() + 16.0),
+                 qPrintable(QString::number(time->width())));
+        QQuickItem* section = find(view, QStringLiteral("delayKnobs"));
+        Widest widestSection;
+        widestSection.add(notchTexts, widestFigure(notchFont),
+                          [&](const QString& text) { return textWidth(probe.get(), text); });
+        QVERIFY2(widestSection.fits(section->width(), std::max(2 * cell + 4.0, time->width())),
+                 qPrintable(QString::number(section->width())));
+        QCOMPARE(rectOf(view, time).center().x(), rectOf(view, section).center().x());
     }
 
     // Every knob and switch sets its parameter, one undo step each.

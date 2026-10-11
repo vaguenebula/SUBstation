@@ -25,10 +25,15 @@ Item {
 
     readonly property int margin: 8
     // A knob's cell: as wide as its widest caption or readout (the house's 52 px, an EditorKnob's width at the
-    // house size, at least), and a synced rate's caption centred with room for its ♪ at the cell's right, a
-    // pixel clear.
-    readonly property int cell: Math.max(52, Math.ceil(cellTexts.implicitWidth),
-                                         Math.ceil(syncedTexts.implicitWidth) + 2 * (syncSize + 1))
+    // house size, at least), a synced rate's caption centred with room for its ♪ at the cell's right, a pixel
+    // clear, and the buttons a cell holds (Spin, Ø, More, Env) their text with 2 px either side (the border and a
+    // pixel clear); on even pixels, so that the 34 px knob centres under its caption and readout exactly.
+    readonly property int cell: even(Math.max(52, cellTexts.implicitWidth,
+                                              syncedTexts.implicitWidth + 2 * (syncSize + 1),
+                                              Math.max(spinButton.button.implicitContentWidth,
+                                                       invertButton.button.implicitContentWidth,
+                                                       expandButton.implicitContentWidth,
+                                                       envAmount.switchContentWidth) + 4))
     readonly property int knobSize: 34
     readonly property int syncSize: 12  // the ♪ switch
     readonly property int gap: 4        // between cells
@@ -36,15 +41,19 @@ Item {
     // The mode tabs: 58 px, or the widest tab's own width.
     readonly property int tabWidth: Math.max(58, Math.ceil(Array.from(tabs.children).reduce(
         (widest, tab) => Math.max(widest, tab.implicitWidth), 0)))
-    // The mode's section (two cells, or the delay's Time and the Flanger's notch under it) and the LFO's.
-    readonly property int pairWidth: Math.max(2 * cell + gap, Math.ceil(timeTexts.implicitWidth),
-                                              Math.ceil(notchTexts.implicitWidth))
+    // The delay's Time knob's cell: as wide as its caption or readout (an EditorKnob's width at its size, 60 px,
+    // at least), on even pixels as the others.
+    readonly property int timeWidth: even(Math.max(time.size + 16, timeTexts.implicitWidth))
+    // The mode's section: two cells, or the delay's Time and the Flanger's notch under it (centred in it, so on
+    // even pixels too); the LFO's: two cells.
+    readonly property int modeWidth: even(Math.max(2 * cell + gap, timeWidth, notchTexts.implicitWidth))
+    readonly property int pairWidth: 2 * cell + gap
     readonly property int tripleWidth: 3 * cell + 2 * gap  // the globals and the extra section
-    readonly property int graphWidth: 240
+    readonly property int graphWidth: graph.implicitWidth  // (PhaserGraph's own: 240 px)
 
     // Where each section starts.
     readonly property int modeX: margin + tabWidth + 8
-    readonly property int graphX: modeX + pairWidth + sectionGap
+    readonly property int graphX: modeX + modeWidth + sectionGap
     readonly property int lfoX: graphX + graphWidth + sectionGap
     readonly property int globalsX: lfoX + pairWidth + sectionGap
     readonly property int extraX: globalsX + tripleWidth + sectionGap
@@ -66,6 +75,11 @@ Item {
     implicitWidth: globalsX + tripleWidth + (expanded ? sectionGap + tripleWidth : 0) + margin
     implicitHeight: 6 + Math.max(rowsHeight, time.implicitHeight + delayKnobs.spacing + notchReadout.implicitHeight,
                                  graph.implicitHeight, 3 * 16 + 8) + 6
+
+    // `width` rounded up to even pixels: something 34 or 44 px wide centres in it on whole ones.
+    function even(width) {
+        return 2 * Math.ceil(width / 2)
+    }
 
     function on(id) {
         const param = p.get(id)
@@ -215,12 +229,14 @@ Item {
         id: envCell
 
         property alias knob: envKnob
+        readonly property real switchContentWidth: envSwitch.button.implicitContentWidth
         property bool dimmed: false
 
         width: editor.cell
         spacing: 1
 
         ParamButton {
+            id: envSwitch
             objectName: "envOn"
             anchors.horizontalCenter: parent.horizontalCenter
             width: Math.min(envCell.width, Math.max(40, implicitWidth))
@@ -308,13 +324,14 @@ Item {
         id: modeSection
         x: editor.modeX
         y: 0
-        width: editor.pairWidth
+        width: editor.modeWidth
         height: editor.height
 
         // The Phaser's: its notches, where they are, how far apart, and what the modulation moves.
         Grid {
             id: phaserKnobs
             objectName: "phaserKnobs"
+            x: (parent.width - width) / 2  // (the section may be wider, for the delay's texts)
             y: editor.rowsY
             columns: 2
             columnSpacing: editor.gap
@@ -379,7 +396,7 @@ Item {
                 id: time
                 objectName: "time"
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: Math.max(size + 16, Math.ceil(timeTexts.implicitWidth))
+                width: editor.timeWidth
                 size: 44
                 param: editor.mode === 2 ? p.get("doubler_time") : p.get("flange_time")
                 title: qsTr("Time")
@@ -464,6 +481,7 @@ Item {
                     tooltip: qsTr("The LFO's shape")
                 }
                 ParamButton {
+                    id: spinButton
                     objectName: "spinOn"
                     width: editor.cell
                     param: p.get("spin_on")
@@ -526,6 +544,7 @@ Item {
                 spacing: 4
 
                 ParamButton {
+                    id: invertButton
                     objectName: "fbInvert"
                     width: editor.cell
                     param: p.get("fb_invert")

@@ -24,9 +24,9 @@ Item {
 
     // The display: 234 px, or as wide as its tabs or its strip need in a wider font.
     readonly property int graphWidth: Math.max(234, 3 * tabWidth + 2 * tabs.spacing, Math.ceil(strip.needed))
-    // A knob's cell: as wide as its widest caption or readout (the house's 52 px at least), centred in a
-    // column 12 px wider.
-    readonly property int cellWidth: Math.max(52, Math.ceil(cellTexts.implicitWidth))
+    // A knob's cell: as wide as its widest caption or readout (the house's 52 px at least), on even pixels so
+    // that the 34 px knob centres under its caption and readout exactly; centred in a column 12 px wider.
+    readonly property int cellWidth: 2 * Math.ceil(Math.max(52, cellTexts.implicitWidth) / 2)
     readonly property int columnWidth: cellWidth + 12
     readonly property int columnSpacing: 2
     // Ø's, between Feedback's column and the next: its text inside the button's border, a pixel clear.
@@ -230,13 +230,14 @@ Item {
                 tooltip: qsTr("High-pass: below this frequency the sound isn't chorused "
                               + "(the lows pass through unmodulated)")
             }
-            // As wide as its widest value, centred 9 px from either edge: clear of the automation dot (6 px in,
-            // 2.5 px round). Its values: "20 Hz" to "1000 Hz" (999.6 rounded), "1.00 kHz" to "2.00 kHz".
+            // As wide as its widest value with 8.5 px either side at least: clear of the automation dot (6 px in,
+            // 2.5 px round). Its values: "20 Hz" to "1000 Hz" (999.6 rounded), "1.00 kHz" to "2.00 kHz"; at their
+            // widest, "####", "1.##" with each # the font's widest figure, and "2.00".
             ParamBox {
                 id: hpFreq
                 objectName: "hpFreq"
                 x: 25
-                width: Math.ceil(figures.advanceOf(sampleText)) + 2 * 9
+                width: Math.ceil(figures.advanceOf(sampleText) + 2 * 8.5)
                 param: p.get("hp_freq")
                 logScale: true
                 decimals: 0

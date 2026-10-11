@@ -15,9 +15,12 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
+#include <QtQuickTest/quicktest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 #include "EditorHarness.h"
 #include "audio/ChorusVoices.h"
@@ -151,6 +154,39 @@ class TestUiDeviceEditorsChorus : public QObject, public sub::app::test::EditorH
         probe->setProperty("text", text);
         return probe->implicitWidth();
     }
+    // The font's widest figure (figures may be proportional).
+    static QString widestFigure(const QFont& font) {
+        const QFontMetricsF metrics(font);
+        QString widest = QStringLiteral("0");
+        for (const QChar digit : QStringLiteral("123456789")) {
+            if (metrics.horizontalAdvance(QString(digit)) > metrics.horizontalAdvance(widest))
+                widest = QString(digit);
+        }
+        return widest;
+    }
+    // The widest of some texts as measured: `value` of the texts themselves, `form` of their forms (each figure
+    // the font's widest `figure`: as wide as any text of that form can be).
+    struct Widest {
+        double value = 0.0, form = 0.0;
+
+        void add(double width) {
+            value = std::max(value, width);
+            form = std::max(form, width);
+        }
+        template <typename Measure>
+        void add(const QStringList& texts, const QString& figure, Measure measure) {
+            for (QString text : texts) {
+                value = std::max(value, measure(text));
+                for (QChar& c : text) {
+                    if (c.isDigit())
+                        c = figure.at(0);
+                }
+                form = std::max(form, measure(text));
+            }
+        }
+    };
+    // Rounded up to even pixels (as the knobs' cells are, so that a knob centres in them on whole ones).
+    static double even(double width) { return 2.0 * std::ceil(width / 2.0); }
 
     // The strip's voices (outside Chorus mode): whole, at the strip's right end, 8 px clear of the high-pass box.
     bool voicesClear(QQuickItem* view) {
@@ -254,12 +290,6 @@ private Q_SLOTS:
         QVERIFY(std::abs(rectOf(find(view, QStringLiteral("hpFreq"))).bottom() - (view->height() - 6)) < 0.5);
         QVERIFY(std::abs(rectOf(find(view, QStringLiteral("modeVibrato"))).right() - rectOf(graph).right()) < 0.5);
         QCOMPARE(rectOf(graph).left(), 8.0);
-        QVERIFY(rectOf(graph).width() >= 234.0);  // (234 px, or what a wider font's tabs or strip need)
-        // As wide as its parts: 8 + the display, the knobs' columns (each knob centred in its own) + 8, less the
-        // frame's border (the device's width, as the house's editors count it).
-        const QRectF last = rectOf(find(view, QStringLiteral("mix")));
-        const double columnWidth = view->property("columnWidth").toDouble();
-        QCOMPARE(view->implicitWidth(), last.right() + (columnWidth - last.width()) / 2 + 8.0 - 2.0);
         // The tabs on whole pixels.
         for (const char* tab : {"modeChorus", "modeEnsemble", "modeVibrato"}) {
             const QRectF at = rectOf(find(view, QString::fromLatin1(tab)));
@@ -318,19 +348,12 @@ private Q_SLOTS:
         auto* hpFreq = qvariant_cast<ValueBoxItem*>(find(view, QStringLiteral("hpFreq"))->property("box"));
         QVERIFY(hpFreq && hpFreq->logScale());
         QCOMPARE(hpFreq->text(), QStringLiteral("100 Hz"));
-        // Wide enough for every value it shows, centred clear of the automation dot (6 px in, 2.5 px round), and
-        // Time for its longest choice and its arrow.
+        // Wide enough for every value it shows, centred clear of the automation dot (6 px in, 2.5 px round).
         const QFontMetricsF boxFont(hpFreq->property("font").value<QFont>());
         const QStringList hpTexts = textsOver(boundParam(view, "hpFreq"));
         QVERIFY(hpTexts.contains(QStringLiteral("20 Hz")) && hpTexts.contains(QStringLiteral("2.00 kHz")));
         for (const QString& text : hpTexts)
             QVERIFY2((hpFreq->width() - boxFont.horizontalAdvance(text)) / 2 >= 6.0 + 2.5, qPrintable(text));
-        for (int choice = 0; choice < 6; ++choice) {
-            set("time", choice);
-            QQuickItem* face = button(view, "time");
-            QVERIFY2(face->implicitWidth() <= face->width() + 0.5, qPrintable(face->property("text").toString()));
-        }
-        set("time", 0.0);
         // Every knob's caption and every value its readout can show whole (Offset's and Shape's too, shown in
         // Vibrato), each centred on its knob.
         for (const char* id : {"rate", "amount", "feedback", "warmth", "width", "offset", "shape", "output", "mix"}) {
@@ -376,6 +399,93 @@ private Q_SLOTS:
         QCOMPARE(graph->xOfCycles(graph->windowCycles()), plot.left());
         QVERIFY(std::abs(graph->yOf(11.5) - (plot.top() + plot.height() * 0.12 / 1.24)) < 1e-9);
         QVERIFY(std::abs(graph->yOf(1.5) - (plot.bottom() - plot.height() * 0.12 / 1.24)) < 1e-9);
+
+        // And no wider than its texts need, whatever the font (534 px in the default). A knob's cell: the house's
+        // 52 px, or its widest caption or readout, measured as a Text lays it out, on even pixels so that the knob
+        // centres under them exactly. As the editor measures a readout's values by their forms, each figure the
+        // font's widest, it may be wider than the widest value itself where figures are proportional, but never
+        // wider than the widest form (where they are all as wide, as in most fonts, the two are the same).
+        const char* const knobIds[] = {"rate", "amount", "feedback", "warmth", "width", "offset", "shape", "output",
+                                       "mix"};
+        Widest widest;
+        for (const char* id : knobIds) {
+            QQuickItem* cell = find(view, QString::fromLatin1(id));
+            QQuickItem* caption = cell->childItems().at(0);
+            const QFont font = cell->childItems().at(2)->property("font").value<QFont>();
+            const std::unique_ptr<QQuickItem> captionProbe = textProbe(caption->property("font").value<QFont>());
+            const std::unique_ptr<QQuickItem> readoutProbe = textProbe(font);
+            QVERIFY(captionProbe && readoutProbe);
+            widest.add(textWidth(captionProbe.get(), caption->property("text").toString()));
+            widest.add(textsOver(boundParam(view, id)), widestFigure(font),
+                       [&](const QString& text) { return textWidth(readoutProbe.get(), text); });
+        }
+        for (const char* id : knobIds) {
+            const double width = find(view, QString::fromLatin1(id))->width();
+            QVERIFY2(width == even(width) && width >= even(std::max(52.0, widest.value))
+                         && width <= even(std::max(52.0, widest.form)),
+                     id);
+        }
+        const double cellWidth = find(view, QStringLiteral("rate"))->width();
+        // The high-pass box: its widest value (its widest form at most, as above) with 8.5 px either side (the
+        // dot's clearance), on whole pixels.
+        Widest widestValue;
+        widestValue.add(hpTexts, widestFigure(hpFreq->property("font").value<QFont>()),
+                        [&](const QString& text) { return boxFont.horizontalAdvance(text); });
+        QVERIFY(hpFreq->width() >= std::ceil(widestValue.value + 2 * 8.5)
+                && hpFreq->width() <= std::ceil(widestValue.form + 2 * 8.5));
+        // Time: every choice whole with its arrow, the longest within the pixel the whole width adds.
+        QQuickItem* timeFace = button(view, "time");
+        double longestChoice = 0.0;
+        for (int choice = 0; choice < 6; ++choice) {
+            set("time", choice);
+            QVERIFY(QQuickTest::qWaitForPolish(window_));  // (the face's Row laid out again)
+            QVERIFY2(timeFace->implicitWidth() <= timeFace->width(), qPrintable(timeFace->property("text").toString()));
+            longestChoice = std::max(longestChoice, timeFace->implicitWidth());
+        }
+        set("time", 0.0);
+        QVERIFY(longestChoice > timeFace->width() - 1.0);
+        // The Taps buttons and Ø: the house's 16 and 14 px, or their text with 2 px either side (the border and a
+        // pixel clear).
+        for (const auto& [name, least] : {std::pair{"taps1", 16.0}, std::pair{"taps2", 16.0},
+                                          std::pair{"fbInvert", 14.0}}) {
+            QQuickItem* face = button(view, name);
+            const double content = face->property("implicitContentWidth").toDouble();
+            QVERIFY2(face->width() == std::max(least, std::ceil(content) + 4.0), name);
+        }
+        // The display: 234 px, or as wide as its tabs need (a third each, as wide as the widest's own, 3 px
+        // apart) or its strip (the box 8 px clear of what stands at its right end: Taps' caption, or the other
+        // modes' voices), on whole pixels.
+        double tabWidth = 0.0;
+        for (const char* tab : {"modeChorus", "modeEnsemble", "modeVibrato"})
+            tabWidth = std::max(tabWidth, find(view, QString::fromLatin1(tab))->implicitWidth());
+        const QRectF boxAt = rectOf(find(view, QStringLiteral("hpFreq")));
+        double gap = rectOf(find(view, QStringLiteral("tapsCaption"))).left() - boxAt.right();
+        QQuickItem* voices = find(view, QStringLiteral("voicesText"));
+        for (const double mode : {1.0, 2.0}) {
+            set("mode", mode);
+            gap = std::min(gap, rectOf(graph).right() - voices->implicitWidth() - boxAt.right());
+        }
+        set("mode", 0.0);
+        const double stripWidth = rectOf(graph).width() - (gap - 8.0);
+        QCOMPARE(rectOf(graph).width(),
+                 std::max({234.0, 3 * std::ceil(tabWidth) + 2 * 3.0, std::ceil(stripWidth - 1e-6)}));
+        // The knobs' columns 10 px after it: each 12 px wider than its cell (the knob centred), 2 px apart,
+        // Feedback's with Ø's slot after its cell; the editor 8 px past the last, less the frame's border (the
+        // device's width, as the house's editors count it).
+        const double column = cellWidth + 12.0;
+        const QRectF rateAt = rectOf(find(view, QStringLiteral("rate")));
+        const QRectF feedbackAt = rectOf(find(view, QStringLiteral("feedback")));
+        const QRectF invertAt = rectOf(find(view, QStringLiteral("fbInvert")));
+        const QRectF widthAt = rectOf(find(view, QStringLiteral("width")));
+        const QRectF outputAt = rectOf(find(view, QStringLiteral("output")));
+        QCOMPARE(rateAt.left(), rectOf(graph).right() + 10.0 + 6.0);
+        QCOMPARE(feedbackAt.left(), rateAt.left() + column + 2.0);
+        QCOMPARE(invertAt.left(), feedbackAt.right());
+        QCOMPARE(widthAt.left(), feedbackAt.left() + column + invertAt.width() + 2.0);
+        QCOMPARE(rectOf(find(view, QStringLiteral("offset"))).left(), widthAt.left());
+        QCOMPARE(outputAt.left(), widthAt.left() + column + 2.0);
+        QCOMPARE(rectOf(find(view, QStringLiteral("mix"))).left(), outputAt.left());
+        QCOMPARE(view->implicitWidth(), outputAt.right() + 6.0 + 8.0 - 2.0);
     }
 
     void knobsUndoable() {
