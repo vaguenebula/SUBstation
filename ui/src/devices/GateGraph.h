@@ -28,6 +28,7 @@
 #include "devices/DeviceCanvas.h"
 #include "devices/EditorPaint.h"
 
+#include <QFont>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
@@ -54,11 +55,12 @@ public:
     static constexpr double kFloorDb = -72.0;  // the level axis
     static constexpr double kCeilingDb = 6.0;
     static constexpr double kHistorySeconds = 2.5;
-    static constexpr double kLineGrab = 6.0;     // px either side of a line that picks it up
-    static constexpr double kRightStrip = 62.0;  // the dB figures and the two meters, captioned
+    static constexpr double kLineGrab = 6.0;  // px either side of a line that picks it up
     enum Stream { Input = 0, Output, Key, Open, kStreams };
 
     explicit GateGraph(QQuickItem* parent = nullptr);
+
+    static QFont textFont();  // what its figures, captions and labels are drawn in: the UI font at 7 pt
 
     // The values a stream's ring keeps at `valuesPerSecond`: what the plot can show (kHistorySeconds, as
     // far behind the newest value as the drawing may lag) and a tenth more for the columns drawn in part at
@@ -94,6 +96,12 @@ public:
     bool animating() const { return animating_; }
     QRectF inMeter() const;    // the meters' wells
     QRectF gateMeter() const;
+    // Their captions' texts as drawn (textFont()'s advances, a line high), each centred over its meter, the
+    // Gate's held 3 px inside the right edge (2 px clear of the border). The In meter is 20 px left of the
+    // Gate's, or further while "In" would end within two of the font's word spaces and a pixel of "Gate"
+    // (nearer, the two read as one phrase), the plot narrowing by as much.
+    QRectF inCaption() const;
+    QRectF gateCaption() const;
     // Whether Floor at `floorDb` is silence (its bottom: the editor shows it as "−inf dB").
     Q_INVOKABLE bool floorIsSilent(double floorDb) const;
 
@@ -130,6 +138,12 @@ private:
     Line lineAt(const QPointF& pos) const;
     void hoverAt(const QPointF& pos);
     void endDrag();
+
+    // The strip right of the plot, measured once in textFont() (it doesn't change), from the right edge in: the
+    // Gate meter, the In meter, 3 px before it the dB figures' column, and the plot 6 px before that.
+    double inCaptionWidth_ = 0.0, gateCaptionWidth_ = 0.0;  // "In" and "Gate"
+    double inInset_ = 36.0;       // the In meter's left edge from the right edge (see inCaption())
+    double figuresWidth_ = 17.0;  // as wide as the widest figure, 17 px at least
 
     // The parameters, as sync() read them.
     double thresholdDb_ = -12.0;

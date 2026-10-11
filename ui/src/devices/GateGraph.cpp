@@ -10,6 +10,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
@@ -32,6 +33,9 @@ constexpr double kPingSeconds = 0.25;     // the ring as the gate opens
 constexpr double kPulseSeconds = 1.2;     // the listening label's pulse
 constexpr double kShadeAlpha = 36.0;      // the blue where the gate is open, over the levels
 constexpr double kKeyFall = 300.0;        // dB/s the key dot falls (24 dB in 80 ms: it moves, it doesn't lag)
+constexpr double kMeterWidth = 6.0;       // the meters' wells
+constexpr double kGateInset = 16.0;       // the Gate meter's left edge from the display's right edge
+constexpr double kMeterSpacing = 20.0;    // from the In meter's left edge to the Gate's, at least
 constexpr double kPi = 3.14159265358979323846;
 
 // What a stream holds where it has no values: the bottom of the axis, closed.
@@ -64,6 +68,19 @@ void drawGateMeter(SgPainter& p, const QRectF& rect, double reductionDb) {
 
 GateGraph::GateGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     setImplicitSize(kWidth, kMinimumHeight);
+    // The strip right of the plot, measured from the right edge in (see inCaption()): where the Gate's caption
+    // starts, then the In meter far enough left of it for "In" to end two word spaces and a pixel before that;
+    // the figures' column as wide as the widest.
+    const QFontMetricsF metrics(textFont());
+    inCaptionWidth_ = metrics.horizontalAdvance(QStringLiteral("In"));
+    gateCaptionWidth_ = metrics.horizontalAdvance(QStringLiteral("Gate"));
+    const double gateCaptionInset =
+        std::max(kGateInset - kMeterWidth / 2 + gateCaptionWidth_ / 2, 3.0 + gateCaptionWidth_);
+    const double inCentreInset =
+        gateCaptionInset + 2 * metrics.horizontalAdvance(QLatin1Char(' ')) + 1.0 + inCaptionWidth_ / 2;
+    inInset_ = std::max(kGateInset + kMeterSpacing, std::ceil(inCentreInset + kMeterWidth / 2));  // (whole pixels)
+    for (int db = 0; db >= -60; db -= 12)
+        figuresWidth_ = std::max(figuresWidth_, std::ceil(metrics.horizontalAdvance(QString::number(db))));
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);  // (right-click off the lines: the frame's menu)
     setAcceptHoverEvents(true);
     fitRings(sampleRate() / sub::app::gateDisplaySamples());
@@ -88,8 +105,11 @@ GateGraph::GateGraph(QQuickItem* parent) : DeviceCanvas(parent) {
 
 // --- Geometry ------------------------------------------------------------------------------
 
+QFont GateGraph::textFont() { return uiFont(7); }
+
 QRectF GateGraph::plot() const {
-    return QRectF(5, 5, std::max(1.0, width() - 5 - kRightStrip), std::max(1.0, height() - 10));
+    const double strip = inInset_ + 3 + figuresWidth_ + 6;  // (62 px in the default font)
+    return QRectF(5, 5, std::max(1.0, width() - 5 - strip), std::max(1.0, height() - 10));
 }
 
 double GateGraph::yOf(double db) const {
@@ -101,10 +121,21 @@ double GateGraph::yOf(double db) const {
 
 QRectF GateGraph::inMeter() const {
     const double top = yOf(0.0);
-    return QRectF(width() - 36, top, 6, yOf(kFloorDb) - top);
+    return QRectF(width() - inInset_, top, kMeterWidth, yOf(kFloorDb) - top);
 }
 
-QRectF GateGraph::gateMeter() const { return inMeter().translated(20, 0); }  // (its caption clear of the In's)
+QRectF GateGraph::gateMeter() const { return inMeter().translated(inInset_ - kGateInset, 0); }
+
+QRectF GateGraph::inCaption() const {
+    const QRectF meter = inMeter();
+    return QRectF(meter.center().x() - inCaptionWidth_ / 2, std::max(1.0, meter.top() - 13), inCaptionWidth_, 12);
+}
+
+QRectF GateGraph::gateCaption() const {
+    const QRectF meter = gateMeter();
+    const double left = std::min(meter.center().x() - gateCaptionWidth_ / 2, width() - 3 - gateCaptionWidth_);
+    return QRectF(left, std::max(1.0, meter.top() - 13), gateCaptionWidth_, 12);
+}
 
 bool GateGraph::floorIsSilent(double floorDb) const { return sub::app::gateFloorIsSilent(floorDb); }
 
@@ -515,15 +546,15 @@ void GateGraph::paint(SgPainter& p) {
     p.fillRoundedRect(QRectF(0, 0, w, h), 4, 4, Theme::kMeterBg);
     p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 4, 4, withAlpha(Theme::kGridBeat, 150), 1);
     const QRectF r = plot();
-    const QFont small = uiFont(7);
+    const QFont small = textFont();
 
     // The level axis: a line every 12 dB, its figure in the strip on the right (clear of the key
-    // dot's halo on the plot's edge; unclipped, so a wide font's reaches into the gap before the plot, whole).
+    // dot's halo on the plot's edge), in a column as wide as the widest figure.
     for (int db = 0; db >= -60; db -= 12) {
         const double y = yOf(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBar, db == 0 ? 150 : 70));
-        p.drawText(QRectF(r.right() + 6, y - 6, 17, 12), Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip,
-                   QString::number(db), Theme::kTextDim, small);
+        p.drawText(QRectF(r.right() + 6, y - 6, figuresWidth_, 12),
+                   Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, QString::number(db), Theme::kTextDim, small);
     }
 
     // The history, newest at the right edge, in columns of whole buckets of values (aligned to the
@@ -665,13 +696,9 @@ void GateGraph::paint(SgPainter& p) {
     // The meters, captioned above: the input's level (red above 0 dB, over the well's top), and how
     // far the gate turns it down.
     const QRectF inRect = inMeter(), gateRect = gateMeter();
-    for (const auto& [rect, caption] :
-         {std::pair{inRect, QStringLiteral("In")}, std::pair{gateRect, QStringLiteral("Gate")}}) {
-        const double width = SgPainter::textWidth(caption, small) + 2;
-        const double left = std::min(rect.center().x() - width / 2, w - 2 - width);
-        p.drawText(QRectF(left, std::max(1.0, rect.top() - 13), width, 12), Qt::AlignCenter, caption,
-                   Theme::kTextDim, small);
-    }
+    for (const auto& [box, caption] :
+         {std::pair{inCaption(), QStringLiteral("In")}, std::pair{gateCaption(), QStringLiteral("Gate")}})
+        p.drawText(box.adjusted(-1, 0, 1, 0), Qt::AlignCenter, caption, Theme::kTextDim, small);  // (a pixel spare)
     drawLevelMeter(p, inRect, inMeter_.level, inMeter_.peak, kFloorDb, 0.0, MeterWell::Panel);
     if (inMeter_.level > 0.0) {
         const double top = yOf(std::min(inMeter_.level, kCeilingDb));

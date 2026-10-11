@@ -14,6 +14,7 @@
 // engine's, its dot follows the mouse, Ctrl and the wheel set the bell's Q.
 // With SUBSTATION_UI_SCREENSHOTS set, device-editors-gate*.png are saved there.
 
+#include <QFontMetricsF>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -32,6 +33,7 @@
 #include "devices/GateGraph.h"
 #include "devices/GateKeyGraph.h"
 #include "model/Device.h"
+#include "theme/Theme.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -279,6 +281,43 @@ private Q_SLOTS:
         const QRectF well = shown.graph->inMeter();
         const QPoint inWell = scenePoint(shown.graph, QPointF(well.center().x(), well.top() + well.height() / 12));
         QCOMPARE(shot.pixelColor(inWell * shot.devicePixelRatio()), QColor(0x25, 0x25, 0x25));
+
+        // The meters' captions inside the display and right of the plot, each centred over its meter (the Gate's
+        // unless that would take it within 3 px of the right edge), and "In" ending two of their font's word spaces
+        // and a pixel before "Gate" begins (any nearer, the two read as one phrase, "In Gate"). As drawn too: the
+        // caption row blank for two word spaces between the last of In's ink and the first of Gate's.
+        GateGraph* display = shown.graph;
+        const QRectF inCaption = display->inCaption(), gateCaption = display->gateCaption();
+        const double space = QFontMetricsF(GateGraph::textFont()).horizontalAdvance(QLatin1Char(' '));
+        QVERIFY(inCaption.left() > display->plot().right() + 6 && inCaption.top() >= 1.0 && gateCaption.top() >= 1.0);
+        QVERIFY(gateCaption.right() <= display->width() - 3 + 1e-9);
+        QCOMPARE(inCaption.center().x(), display->inMeter().center().x());
+        if (gateCaption.right() < display->width() - 3 - 1e-9)
+            QCOMPARE(gateCaption.center().x(), display->gateMeter().center().x());
+        else
+            QVERIFY(gateCaption.center().x() < display->gateMeter().center().x());
+        const double apart = gateCaption.left() - inCaption.right();
+        QVERIFY2(apart >= 2 * space + 1 - 1e-9,
+                 qPrintable(QStringLiteral("%1 px apart, a space %2").arg(apart).arg(space)));
+        const double dpr = shot.devicePixelRatio();
+        const QRectF row(display->mapToScene(inCaption.topLeft()) * dpr,
+                         display->mapToScene(gateCaption.bottomRight()) * dpr);
+        const double between = display->mapToScene(QPointF((inCaption.right() + gateCaption.left()) / 2, 0)).x() * dpr;
+        int lastIn = -1, firstGate = -1;
+        for (int x = int(std::floor(row.left() - dpr)); x <= int(std::ceil(row.right() + dpr)); ++x) {
+            bool ink = false;  // (well off the display's black)
+            for (int y = int(std::ceil(row.top())); y < int(std::floor(row.bottom())) && !ink; ++y) {
+                const QColor c = shot.pixelColor(x, y);
+                ink = std::max({c.red(), c.green(), c.blue()}) > Theme::kMeterBg.red() + 40;
+            }
+            if (ink && x < between)
+                lastIn = x;
+            else if (ink && firstGate < 0)
+                firstGate = x;
+        }
+        QVERIFY(lastIn >= 0 && firstGate >= 0);
+        const double blank = (firstGate - lastIn - 1) / dpr;
+        QVERIFY2(blank >= 2 * space, qPrintable(QStringLiteral("%1 px blank, a space %2").arg(blank).arg(space)));
     }
 
     void controlsUndoable() {
