@@ -6,6 +6,7 @@
 #include "sg/SgPainter.h"
 #include "theme/Theme.h"
 
+#include <QFontMetricsF>
 #include <QList>
 
 #include <algorithm>
@@ -20,6 +21,21 @@ constexpr double kSagSeconds = 0.06;
 constexpr double kSagStepDb = 0.05;  // the curve is made again when the sag as drawn moves this far
 
 double amplitude(double db) { return std::min(1.0, std::pow(10.0, db / 20.0)); }
+
+constexpr double kTextRow = 12.0;  // a text's row: a line of its font centred in it
+
+// The baseline of a line of `metrics`' font centred in a text row from `top`, on whole pixels: where
+// SgPainter::drawText(QRectF, Qt::AlignVCenter) puts it (the line's top rounded, its ascent rounded).
+double baselineIn(double top, const QFontMetricsF& metrics) {
+    return std::round(top + (kTextRow - metrics.height()) / 2.0) + std::round(metrics.ascent());
+}
+
+// Where `text`'s glyphs land with its pen at `pen`: their tight box, out to whole pixels.
+QRectF glyphBox(const QString& text, const QPointF& pen) {
+    return QRectF(QFontMetricsF(AmpDriveGraph::textFont()).tightBoundingRect(text).translated(pen).toAlignedRect());
+}
+
+QString captionText() { return QStringLiteral("Drive"); }
 
 }  // namespace
 
@@ -51,6 +67,65 @@ double AmpDriveGraph::xOf(double v) const {
 double AmpDriveGraph::yOf(double v) const {
     const QRectF r = plot();
     return r.center().y() - v / range_ * r.height() / 2.0;
+}
+
+QFont AmpDriveGraph::textFont() { return uiFont(7); }
+
+QString AmpDriveGraph::peakText(double db, double floorDb) {
+    return db <= floorDb + 0.5
+               ? QStringLiteral("−∞")
+               : pythonFixed(db, 0).replace(QLatin1Char('-'), QChar(0x2212)) + QStringLiteral(" dB");
+}
+
+QPointF AmpDriveGraph::captionPen() const {
+    const QRectF r = plot();
+    return QPointF(std::round(r.left() + 4), baselineIn(r.top() + 2, QFontMetricsF(textFont())));
+}
+
+QPointF AmpDriveGraph::peakPen(const QString& peak) const {
+    const QRectF r = plot();
+    const QFontMetricsF metrics(textFont());
+    return QPointF(std::round(r.right() - 4 - metrics.horizontalAdvance(peak)), baselineIn(r.bottom() - 14, metrics));
+}
+
+QRectF AmpDriveGraph::captionBox() const { return glyphBox(captionText(), captionPen()); }
+
+QRectF AmpDriveGraph::peakBox(const QString& peak) const { return glyphBox(peak, peakPen(peak)); }
+
+QList<AmpDriveGraph::GridLine> AmpDriveGraph::grid(const QString& peak) const {
+    const QRectF r = plot();
+    // The texts' boxes and a pixel round them, which no line lights: one whose pixels across (half a pixel
+    // either side of its middle, out to whole pixels) reach into the caption's (top left) starts past it, one
+    // reaching into the peak's (bottom right) ends before it, its end's feather (the pixel past it, half lit) too.
+    const QRectF top = captionBox().adjusted(-1, -1, 1, 1), bottom = peakBox(peak).adjusted(-1, -1, 1, 1);
+    const auto reaches = [](double at, double from, double to) {
+        return std::floor(at - 0.5) < to && std::ceil(at + 0.5) > from;
+    };
+    QList<GridLine> lines;
+    const auto upright = [&](double x, bool axis) {
+        const double from =
+            reaches(x, top.left(), top.right()) ? std::max(r.top() + 2, top.bottom() + 1) : r.top() + 2;
+        const double to =
+            reaches(x, bottom.left(), bottom.right()) ? std::min(r.bottom() - 2, bottom.top() - 1) : r.bottom() - 2;
+        if (to > from)
+            lines.append({QLineF(x, from, x, to), axis});
+    };
+    const auto level = [&](double y, bool axis) {
+        const double from =
+            reaches(y, top.top(), top.bottom()) ? std::max(r.left() + 2, top.right() + 1) : r.left() + 2;
+        const double to =
+            reaches(y, bottom.top(), bottom.bottom()) ? std::min(r.right() - 2, bottom.left() - 1) : r.right() - 2;
+        if (to > from)
+            lines.append({QLineF(from, y, to, y), axis});
+    };
+    // Half scale either way, then the axes through the middle.
+    for (const double v : {-0.5, 0.5}) {
+        upright(xOf(v), false);
+        level(yOf(v * range_), false);
+    }
+    upright(r.center().x(), true);
+    level(r.center().y(), true);
+    return lines;
 }
 
 double AmpDriveGraph::curveAt(double x) const {
@@ -170,16 +245,10 @@ void AmpDriveGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
     p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::kMeterBg);
-    // The grid: the axes through the middle, half scale either way.
-    for (const double v : {-0.5, 0.5}) {
-        p.drawLine(QPointF(xOf(v), r.top() + 2), QPointF(xOf(v), r.bottom() - 2), withAlpha(Theme::kGridSub, 200));
-        p.drawLine(QPointF(r.left() + 2, yOf(v * range_)), QPointF(r.right() - 2, yOf(v * range_)),
-                   withAlpha(Theme::kGridSub, 200));
-    }
-    p.drawLine(QPointF(r.center().x(), r.top() + 2), QPointF(r.center().x(), r.bottom() - 2),
-               withAlpha(Theme::kGridBeat, 200));
-    p.drawLine(QPointF(r.left() + 2, r.center().y()), QPointF(r.right() - 2, r.center().y()),
-               withAlpha(Theme::kGridBeat, 200));
+    // The grid: half scale either way and the axes through the middle, short of the texts.
+    const QString peak = peakText();
+    for (const GridLine& line : grid(peak))
+        p.drawLine(line.line.p1(), line.line.p2(), withAlpha(line.axis ? Theme::kGridBeat : Theme::kGridSub, 200));
 
     p.save();
     p.setClipRect(r);
@@ -221,15 +290,9 @@ void AmpDriveGraph::paint(SgPainter& p) {
     }
     p.restore();
 
-    const QFont font = uiFont(7);
-    p.drawText(QRectF(r.left() + 4, r.top() + 2, 60, 12), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Drive"),
-               Theme::kTextDim, font);
-    const QString peak = input_.level <= floorDb_ + 0.5
-                             ? QStringLiteral("−∞")
-                             : pythonFixed(input_.level, 0).replace(QLatin1Char('-'), QChar(0x2212)) +
-                                   QStringLiteral(" dB");
-    p.drawText(QRectF(r.right() - 64, r.bottom() - 14, 60, 12), Qt::AlignRight | Qt::AlignVCenter, peak, Theme::kText,
-               font);
+    const QFont font = textFont();
+    p.drawText(captionPen(), captionText(), Theme::kTextDim, font);
+    p.drawText(peakPen(peak), peak, Theme::kText, font);
 }
 
 }  // namespace sub::ui

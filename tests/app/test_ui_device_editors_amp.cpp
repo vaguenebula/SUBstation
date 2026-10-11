@@ -1,24 +1,28 @@
 // The Amp's editor (AmpEditor.qml, AmpPanel, AmpDriveGraph, AmpToneGraph),
 // loaded as the device view loads it, with a real session over an engine: it
-// fits the body; its controls bound to their parameters (undoable, the engine
-// following); the model buttons with their sliding underline; the tone curve and
-// the transfer curve being the engine's own maths (the application layer's
-// AmpResponse.h), the transfer made again only for what it is made from; the
-// tone handles' drags one undo step each; and the displays reaching the face
-// (rendering offline): the tubes, the dots, the lamp and the meter, holding
-// through ticks that read nothing and cooling after, the sag's feedback, a
-// backlog of display values counting for nothing; an editor opened on a model
-// showing it at once. With SUBSTATION_UI_SCREENSHOTS set to a folder, the
-// editor is saved there as PNGs: Lead with signal flowing, Bass in Dual turned
-// up, a tone handle dragged, idle.
+// fits the body, whatever widths its texts come to (a font's, a translation's),
+// the drive graph's texts clear of its grid; its controls bound to their
+// parameters (undoable, the engine following); the model buttons with their
+// sliding underline; the tone curve and the transfer curve being the engine's
+// own maths (the application layer's AmpResponse.h), the transfer made again
+// only for what it is made from; the tone handles' drags one undo step each;
+// and the displays reaching the face (rendering offline): the tubes, the dots,
+// the lamp and the meter, holding through ticks that read nothing and cooling
+// after, the sag's feedback, a backlog of display values counting for nothing;
+// an editor opened on a model showing it at once. With
+// SUBSTATION_UI_SCREENSHOTS set to a folder, the editor is saved there as PNGs:
+// Lead with signal flowing, Bass in Dual turned up, a tone handle dragged, idle.
 
 #include <QFontMetricsF>
 #include <QGuiApplication>
+#include <QImage>
 #include <QMouseEvent>
 #include <QQuickItem>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStyleHints>
 #include <QTest>
+#include <QTranslator>
 #include <QUndoStack>
 #include <QWheelEvent>
 
@@ -40,6 +44,7 @@
 #include "devices/AmpToneGraph.h"
 #include "devices/DeviceParam.h"
 #include "model/Automation.h"
+#include "theme/Theme.h"
 
 using namespace sub::app;
 using namespace sub::ui;
@@ -74,6 +79,24 @@ sub::ParamInfo deviceInfo(const char* id) {
             return info;
     return {};
 }
+
+// Longer texts than the default font gives the Amp's, as a translation might: Presence's and Dry/Wet's captions.
+class LongerTexts : public QTranslator {
+public:
+    static inline const QString kPresence = QStringLiteral("Präsenzanhebung");
+    static inline const QString kMix = QStringLiteral("Trocken/Nass-Anteil");
+
+    bool isEmpty() const override { return false; }
+    QString translate(const char* context, const char* source, const char* = nullptr, int = -1) const override {
+        if (qstrcmp(context, "AmpEditor") != 0)
+            return {};
+        if (qstrcmp(source, "Presence") == 0)
+            return kPresence;
+        if (qstrcmp(source, "Dry/Wet") == 0)
+            return kMix;
+        return {};
+    }
+};
 
 }  // namespace
 
@@ -198,26 +221,9 @@ class TestUiAmp : public QObject, public sub::app::test::EditorHarness {
         return event.isAccepted();
     }
 
-private Q_SLOTS:
-    void initTestCase() {
-        if (!haveDisplay())
-            QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
-        startHost();
-    }
-
-    void cleanupTestCase() { stopHost(); }
-
-    void init() { clearHost(); }
-
-    // --- It loads, fits and lays out as Ableton's ----------------------------------------------
-
-    void loads() {
-        QVariant url;
-        QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url),
-                                  Q_ARG(QVariant, QStringLiteral("amp")));
-        QVERIFY(url.toString().endsWith(QStringLiteral("AmpEditor.qml")));
-        const Shown s = showAmp();
-        QVERIFY(s.view && s.panel && s.drive && s.tone);
+    // How the editor fits the body and lays out, whatever widths its texts come to (the font's, a translation's).
+    // A failure is a QVERIFY's (the caller checks QTest::currentTestFailed()).
+    void laysOut(const Shown& s) {
         QVERIFY2(s.view->implicitHeight() <= bodyHeight(),
                  qPrintable(QStringLiteral("%1 > %2").arg(s.view->implicitHeight()).arg(bodyHeight())));
         const double width = s.view->implicitWidth();  // (its parts', checked below)
@@ -387,6 +393,29 @@ private Q_SLOTS:
         }
     }
 
+private Q_SLOTS:
+    void initTestCase() {
+        if (!haveDisplay())
+            QSKIP("needs a display: the offscreen platform renders Qt Quick in software, without this geometry");
+        startHost();
+    }
+
+    void cleanupTestCase() { stopHost(); }
+
+    void init() { clearHost(); }
+
+    // --- It loads, fits and lays out as Ableton's ----------------------------------------------
+
+    void loads() {
+        QVariant url;
+        QMetaObject::invokeMethod(root_.get(), "editorFor", Q_RETURN_ARG(QVariant, url),
+                                  Q_ARG(QVariant, QStringLiteral("amp")));
+        QVERIFY(url.toString().endsWith(QStringLiteral("AmpEditor.qml")));
+        const Shown s = showAmp();
+        QVERIFY(s.view && s.panel && s.drive && s.tone);
+        laysOut(s);
+    }
+
     // What the editor takes from the device, through the application layer, is the device's own:
     // the models (the logo's names, how many there are) and what the displays read at silence (the
     // floor the levels fall to). (Their rate, how many values a tick counts, comes with them:
@@ -462,6 +491,62 @@ private Q_SLOTS:
         QCOMPARE(readoutOf(s.view, QStringLiteral("mix")), QStringLiteral("40 %"));
         undo()->undo();
         QCOMPARE(knobOf(s.view, QStringLiteral("mix"))->value(), 100.0);
+    }
+
+    // Texts longer than the default font gives (as a translation might: Presence's and Dry/Wet's captions here)
+    // widen the plate and the right column, and the editor lays out as ever (laysOut()): the model buttons and the
+    // knobs' cells share the wider plate in whole pixels, in line with the tone graph, no wider than their texts
+    // need, every caption whole.
+    void widensForLongerTexts() {
+        LongerTexts longer;
+        QVERIFY(QCoreApplication::installTranslator(&longer));
+        const auto uninstall = qScopeGuard([&] { QCoreApplication::removeTranslator(&longer); });
+        const Shown s = showAmp();
+        QVERIFY(s.view && s.panel && s.drive && s.tone);
+        QCOMPARE(find(s.view, QStringLiteral("presence"))->property("title").toString(), LongerTexts::kPresence);
+        QCOMPARE(find(s.view, QStringLiteral("mix"))->property("title").toString(), LongerTexts::kMix);
+        const double plate = s.tone->width(), right = find(s.view, QStringLiteral("mix"))->width();
+        QVERIFY2(plate > 368.0, qPrintable(QString::number(plate)));
+        QVERIFY2(right > 80.0, qPrintable(QString::number(right)));
+        laysOut(s);
+        if (QTest::currentTestFailed())
+            return;
+        for (const QString& id : kDials + QStringList{QStringLiteral("mix")}) {
+            for (QQuickItem* text : find(s.view, id)->childItems()) {
+                if (text->inherits("QQuickText"))
+                    QVERIFY2(!text->property("truncated").toBool(),
+                             qPrintable(id + QStringLiteral(": ") + text->property("text").toString()));
+            }
+        }
+
+        // How the rows share a plate, whatever its width (share(): the model buttons 3 px apart, the knobs' cells
+        // 4): each starting where the one before it ends and the spacing after (the first at the plate's left),
+        // the last ending at its right, their widths a pixel apart at most where it doesn't divide.
+        const auto share = [&](int width, int count, int spacing, int i) {
+            QVariant at;
+            QMetaObject::invokeMethod(s.view, "share", Q_RETURN_ARG(QVariant, at), Q_ARG(QVariant, width),
+                                      Q_ARG(QVariant, count), Q_ARG(QVariant, spacing), Q_ARG(QVariant, i));
+            return at.toInt();
+        };
+        int uneven = 0;
+        for (int width = 368; width <= 480; ++width) {
+            for (const auto& [count, spacing] : {std::pair{7, 3}, std::pair{6, 4}}) {
+                QString row;
+                int end = -spacing, narrowest = width, widest = 0;
+                for (int i = 0; i < count; ++i) {
+                    const int x = share(width, count, spacing, i);
+                    const int cell = share(width, count, spacing, i + 1) - spacing - x;
+                    row += QStringLiteral(" %1+%2").arg(x).arg(cell);
+                    QVERIFY2(x == end + spacing, qPrintable(QString::number(width) + row));
+                    end = x + cell;
+                    narrowest = std::min(narrowest, cell);
+                    widest = std::max(widest, cell);
+                }
+                QVERIFY2(end == width && widest - narrowest <= 1, qPrintable(QString::number(width) + row));
+                uneven += widest != narrowest;
+            }
+        }
+        QVERIFY(uneven > 100);  // (most widths don't divide)
     }
 
     // No caption or readout is cut short, whatever the font: each cell is as wide as its caption and the widest
@@ -903,6 +988,113 @@ private Q_SLOTS:
         editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), 4.0);
         QCOMPARE(made.count(), 2);
         editor()->clearEnvelope(s.track, key);
+    }
+
+    // The drive graph's texts read clear of it, whatever the font and whatever the peak: "Drive" in the top left
+    // quarter, the input's peak (every readout it can show) in the bottom right one, the quarters the curve never
+    // reaches, each inside the plot; the grid stops a pixel short of either where it would come within a pixel of
+    // it, and is whole elsewhere.
+    void driveTextsClear() {
+        const Shown s = showAmp();
+        QVERIFY(s.drive);
+        AmpDriveGraph* graph = s.drive;
+        const QRectF plot = graph->plot();
+        const double floor = ampDisplayFloorDb();
+        QCOMPARE(AmpDriveGraph::peakText(floor, floor), QStringLiteral("\u2212\u221e"));
+        QCOMPARE(AmpDriveGraph::peakText(-18.2, floor), QStringLiteral("\u221218 dB"));
+        QStringList peaks{AmpDriveGraph::peakText(floor, floor), AmpDriveGraph::peakText(-0.3, floor)};
+        for (int db = 12; db > int(floor); --db) peaks << AmpDriveGraph::peakText(db, floor);
+        const QFontMetricsF metrics(AmpDriveGraph::textFont());
+        QString widest;  // (the loudest of the widest)
+        for (const QString& peak : peaks) {
+            if (widest.isEmpty() || metrics.horizontalAdvance(peak) > metrics.horizontalAdvance(widest))
+                widest = peak;
+        }
+        const auto near = [](const QRectF& box) { return box.adjusted(-1, -1, 1, 1); };
+        // The pixels a grid line lights: half a pixel either side of it across, out to whole pixels, and its
+        // antialiased flat ends' feathers, a pixel past each end (half lit) along.
+        const auto lit = [](const QLineF& line) {
+            const QRectF r = QRectF(line.p1(), line.p2()).normalized();
+            return QRectF((line.x1() == line.x2() ? r.adjusted(-0.5, -1, 0.5, 1) : r.adjusted(-1, -0.5, 1, 0.5))
+                              .toAlignedRect());
+        };
+        const QRectF caption = graph->captionBox();
+        QVERIFY2(caption.left() >= plot.left() + 1 && caption.top() >= plot.top() + 1 &&
+                     caption.right() <= graph->xOf(0.0) - 1 && caption.bottom() <= graph->yOf(0.0) - 1,
+                 qPrintable(QStringLiteral("Drive at %1,%2 %3x%4")
+                                .arg(caption.x()).arg(caption.y()).arg(caption.width()).arg(caption.height())));
+        for (const QString& peak : peaks) {
+            const QRectF box = graph->peakBox(peak);
+            const QString what = QStringLiteral("%1 at %2,%3 %4x%5")
+                                     .arg(peak).arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height());
+            QVERIFY2(box.left() >= graph->xOf(0.0) + 1 && box.top() >= graph->yOf(0.0) + 1 &&
+                         box.right() <= plot.right() - 1 && box.bottom() <= plot.bottom() - 1,
+                     qPrintable(what));
+            const QList<AmpDriveGraph::GridLine> grid = graph->grid(peak);
+            QCOMPARE(grid.size(), 6);
+            for (const AmpDriveGraph::GridLine& line : grid) {
+                const bool upright = line.line.x1() == line.line.x2();
+                const double at = upright ? line.line.x1() : line.line.y1();
+                const double from = upright ? line.line.y1() : line.line.x1();
+                const double to = upright ? line.line.y2() : line.line.x2();
+                const double start = upright ? plot.top() + 2 : plot.left() + 2;
+                const double end = upright ? plot.bottom() - 2 : plot.right() - 2;
+                const QString which = what + QStringLiteral(": the line %1 at %2, %3 to %4")
+                                                 .arg(upright ? "up" : "across")
+                                                 .arg(at)
+                                                 .arg(from)
+                                                 .arg(to);
+                // Clear of both texts by a pixel at least, the pixels it lights.
+                QVERIFY2(!lit(line.line).intersects(near(box)) && !lit(line.line).intersects(near(caption)),
+                         qPrintable(which));
+                // Cut only where, whole, it would come within a pixel of one, and then just short of that.
+                const QRectF whole = lit(upright ? QLineF(at, start, at, end) : QLineF(start, at, end, at));
+                QVERIFY2(from == (whole.intersects(near(caption))
+                                      ? (upright ? near(caption).bottom() : near(caption).right()) + 1
+                                      : start),
+                         qPrintable(which));
+                QVERIFY2(to == (whole.intersects(near(box)) ? (upright ? near(box).top() : near(box).left()) - 1 : end),
+                         qPrintable(which));
+            }
+        }
+        // Nor does the curve (nor its dots, on it) reach them, whichever the model, driven hard.
+        editor()->setDeviceParam(s.track, s.device, QStringLiteral("gain"), 10.0);
+        for (int model = 0; model < ampModelCount(); ++model) {
+            editor()->setDeviceParam(s.track, s.device, QStringLiteral("type"), double(model));
+            QVERIFY(!graph->curve().empty());
+            for (const QPointF& v : graph->curve()) {
+                const QPointF at(graph->xOf(v.x()), graph->yOf(v.y()));
+                QVERIFY2(!near(caption).contains(at) && !near(graph->peakBox(widest)).contains(at),
+                         qPrintable(QStringLiteral("model %1 at %2: %3").arg(model).arg(v.x()).arg(v.y())));
+            }
+        }
+
+        // Drawn so: with a tone reading out the widest of them, where the half-scale line up the right would run
+        // into it, the pixel row above it is the well's.
+        clearHost();
+        QString figure = widest.left(widest.indexOf(QLatin1Char(' ')));
+        const double db = figure.replace(QChar(0x2212), QLatin1Char('-')).toDouble();
+        const Shown played = showAmp(tone(220.0, kSampleRate, std::pow(10.0, db / 20.0)));
+        QVERIFY(played.drive);
+        refreshDisplays();
+        engine_->renderOffline(0.0, kSampleRate / 4);
+        refreshDisplays();
+        QCOMPARE(played.drive->peakText(), widest);
+        QTest::qWait(50);
+        const QRectF box = played.drive->peakBox(widest);
+        const double x = played.drive->xOf(0.5);
+        if (QRectF(QPointF(x - 0.5, plot.top()), QPointF(x + 0.5, plot.bottom())).intersects(near(box))) {
+            const QImage image = grab();
+            const auto pixel = [&](double y) {
+                const QPointF at = played.drive->mapToScene(QPointF(x, y));
+                return qGray(image.pixel(int(std::floor(at.x())), int(std::floor(at.y()))));
+            };
+            const int well = qGray(Theme::kMeterBg.rgb());
+            QVERIFY2(pixel(played.drive->yOf(0.0) + 3.5) - well >= 8,
+                     qPrintable(QString::number(pixel(played.drive->yOf(0.0) + 3.5))));  // (the line, higher up)
+            QVERIFY2(std::abs(pixel(box.top() - 0.5) - well) <= 3,
+                     qPrintable(QString::number(pixel(box.top() - 0.5))));  // (above the readout)
+        }
     }
 
     // --- The displays reach the face ------------------------------------------------------------------

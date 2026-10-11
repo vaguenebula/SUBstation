@@ -8,6 +8,7 @@
 #include "theme/Theme.h"
 
 #include <QCursor>
+#include <QFontMetricsF>
 #include <QHoverEvent>
 #include <QLinearGradient>
 #include <QMouseEvent>
@@ -39,9 +40,28 @@ bool audible(const std::vector<float>& samples) {
     return std::any_of(samples.begin(), samples.end(), [](float s) { return s != 0.0f; });
 }
 
+// The baseline of a line of `metrics`' font centred in a strip `height` tall, on whole pixels: where
+// SgPainter::drawText(QRectF, Qt::AlignVCenter) puts it (the line's top rounded, its ascent rounded).
+double baselineIn(double height, const QFontMetricsF& metrics) {
+    return std::round((height - metrics.height()) / 2.0) + std::round(metrics.ascent());
+}
+
+// The strip's height in `font`: kTopStrip, or the least height over it that holds the strip's glyphs.
+double topStripFor(const QFont& font) {
+    const QFontMetricsF metrics(font);
+    const QRectF ink = metrics.tightBoundingRect(ErosionGraph::stripGlyphs());
+    const auto holds = [&](double height) {
+        const double baseline = baselineIn(height, metrics);
+        return baseline + ink.top() >= 0.0 && baseline + ink.bottom() <= height;
+    };
+    double height = ErosionGraph::kTopStrip;
+    while (!holds(height) && height < 4 * ErosionGraph::kTopStrip) height += 1.0;
+    return height;
+}
+
 }  // namespace
 
-ErosionGraph::ErosionGraph(QQuickItem* parent) : DeviceCanvas(parent) {
+ErosionGraph::ErosionGraph(QQuickItem* parent) : DeviceCanvas(parent), topStrip_(topStripFor(stripFont())) {
     setImplicitSize(kWidth, kMinimumHeight);
     setAcceptedMouseButtons(Qt::LeftButton);
     setAcceptHoverEvents(true);
@@ -57,7 +77,7 @@ ErosionGraph::ErosionGraph(QQuickItem* parent) : DeviceCanvas(parent) {
     });
 }
 
-QRectF ErosionGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, kTopStrip, -1, -1); }
+QRectF ErosionGraph::plot() const { return QRectF(0, 0, width(), height()).adjusted(1, topStrip_, -1, -1); }
 
 QRectF ErosionGraph::travel() const {
     return plot().adjusted(0, kDotRadius + kHaloGrowth + 1.0, 0, -(kDotRadius + 1.0));
@@ -492,13 +512,20 @@ void ErosionGraph::paint(SgPainter& p) {
     // What modulates, and where and how far.
     const Strip texts = strip();
     const double left = texts.sourceRect.left(), right = texts.readoutRect.right();
-    p.drawText(QRectF(left, 0, std::max(0.0, texts.readoutRect.left() - kStripGap - left), kTopStrip),
+    p.drawText(QRectF(left, 0, std::max(0.0, texts.readoutRect.left() - kStripGap - left), topStrip_),
                Qt::AlignLeft | Qt::AlignVCenter, texts.source, Theme::kTextDim, font);
-    p.drawText(QRectF(left, 0, right - left, kTopStrip), Qt::AlignRight | Qt::AlignVCenter, texts.readout,
+    p.drawText(QRectF(left, 0, right - left, topStrip_), Qt::AlignRight | Qt::AlignVCenter, texts.readout,
                amount_ > 0.0 ? Theme::kText : Theme::kTextDim, font);
 }
 
 QFont ErosionGraph::stripFont() { return uiFont(7); }
+
+double ErosionGraph::stripBaseline() const { return baselineIn(topStrip_, QFontMetricsF(stripFont())); }
+
+QString ErosionGraph::stripGlyphs() {
+    return tr("Sine") + tr("Noise %1").arg(QStringLiteral("0123456789 %")) + tr(" · Mono") +
+           tr(" · Stereo %1").arg(QString()) + QStringLiteral(" kHz ±µs ms");
+}
 
 ErosionGraph::Strip ErosionGraph::strip() const {
     Strip texts;
@@ -515,10 +542,10 @@ ErosionGraph::Strip ErosionGraph::strip() const {
     const QRectF r = plot();
     const double left = r.left() + kStripInset, right = r.right() - kStripInset;
     const double readoutWidth = std::min(std::ceil(SgPainter::textWidth(texts.readout, stripFont())), right - left);
-    texts.readoutRect = QRectF(right - readoutWidth, 0, readoutWidth, kTopStrip);
+    texts.readoutRect = QRectF(right - readoutWidth, 0, readoutWidth, topStrip_);
     const double room = std::max(0.0, texts.readoutRect.left() - kStripGap - left);
     texts.sourceRect =
-        QRectF(left, 0, std::min(std::ceil(SgPainter::textWidth(texts.source, stripFont())), room), kTopStrip);
+        QRectF(left, 0, std::min(std::ceil(SgPainter::textWidth(texts.source, stripFont())), room), topStrip_);
     return texts;
 }
 

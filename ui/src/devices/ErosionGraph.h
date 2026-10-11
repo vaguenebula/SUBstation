@@ -54,7 +54,7 @@ public:
     static constexpr double kWidthPixels = 40.0;       // Alt-dragged up this far, the Filter Width doubles
     static constexpr double kWheelOctaves = 0.25;      // a wheel notch multiplies it by 2^0.25 (Ctrl: 2^(1/16))
     static constexpr double kFine = 0.15;              // Shift-dragged, the dot moves this share of the mouse's way
-    static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout,
+    static constexpr double kTopStrip = 14.0;          // over the plot: the source and the readout (topStrip()),
     static constexpr double kStripInset = 3.0;         // this far in from the plot's sides,
     static constexpr double kStripGap = 8.0;           // and at least this far apart
     static constexpr double kDotRadius = 5.0;          // the dot's ring (2 px wide),
@@ -87,6 +87,11 @@ public:
     // Where the dot is: the frequency the modulator plays (held to the axis), and the Amount.
     QPointF dot() const;
 
+    // The strip over the plot: kTopStrip, or taller if a font needs it, so the strip holds every glyph its texts
+    // show (stripGlyphs()) with a line of stripFont() centred in it, its baseline at stripBaseline().
+    double topStrip() const { return topStrip_; }
+    double stripBaseline() const;  // on whole pixels, where SgPainter::drawText(QRectF, Qt::AlignVCenter) puts it
+    static QString stripGlyphs();  // the texts' words (as translated), the figures and the units
     // The strip's texts over the plot, in stripFont(): what modulates at the left ("Noise 70 % · Stereo 60 %"),
     // where and how far at the right ("1.00 kHz · ±87 µs"); each one's rect where its text is, as wide as it
     // (the source's cut short kStripGap before the readout, should a font ever need more than the strip has:
@@ -176,6 +181,7 @@ private:
     double pressedFreq_ = 1000.0, pressedAmount_ = 25.0;
     bool fromDot_ = false;
     double pressedWidth_ = 2.5, pressedY_ = 0.0;  // an Alt drag's start (a wheel notch in it starts it again)
+    const double topStrip_;                       // topStrip(), for its font
     QMetaObject::Connection bridgeConnection_;    // the bridge's deviceChanged: a new sample rate
 };
 

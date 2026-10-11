@@ -22,6 +22,10 @@
 // while the editor wasn't showing, seconds of it) is history. The curve is made
 // again only when what it is made from changes (the settings, the rate, the
 // width), not at every sync. No mouse.
+//
+// Its texts sit in the two quarters the curve never reaches: "Drive" at the
+// top left, the input's peak at the bottom right. Whatever their font and the
+// peak, the grid stops a pixel short of them (grid()).
 
 #include "audio/AmpResponse.h"
 #include "devices/DeviceCanvas.h"
@@ -30,7 +34,10 @@
 #include <QList>
 
 #include <QElapsedTimer>
+#include <QFont>
+#include <QLineF>
 #include <QPointF>
+#include <QString>
 #include <QtQml/qqmlregistration.h>
 
 #include <array>
@@ -68,6 +75,27 @@ public:
     double xOf(double v) const;
     double yOf(double v) const;
 
+    // Its texts, in textFont(): "Drive" at the top left, the input's peak at the bottom right ("−18 dB", "−∞" at
+    // the floor). Those are the quarters the curve, its dots and the clean gain never reach: for an input above 0
+    // the output's highest is above 0, and its lowest below 0 for one under.
+    static QFont textFont();
+    static QString peakText(double db, double floorDb);
+    QString peakText() const { return peakText(input_.level, floorDb_); }  // as drawn
+    // Where a text's glyphs land: its tight box (QFontMetricsF::tightBoundingRect, out to whole pixels) at its
+    // pen, on whole pixels where a line of the font centred in its 12 px row puts it (the caption's 4 px in from
+    // the plot's left, the peak's right-aligned 4 px in from its right).
+    QRectF captionBox() const;
+    QRectF peakBox(const QString& peak) const;
+    // The grid as drawn with `peak` read out: the half-scale lines, then the axes (`axis`), 1 px wide and 2 px
+    // in from the plot's edges, each stopping where the pixels it lights (its ends' antialiased feathers, a pixel
+    // past them, among them) would come within a pixel of a text's box: the caption's cuts a line's start, the
+    // peak's its end.
+    struct GridLine {
+        QLineF line;
+        bool axis = false;
+    };
+    QList<GridLine> grid(const QString& peak) const;
+
 Q_SIGNALS:
     void curveChanged();
     void levelsChanged();
@@ -82,6 +110,8 @@ private:
     void updateCurve();              // for the settings (the preamp's part too), if they changed
     void shapeCurve();               // for the sag as drawn
     double curveAt(double x) const;  // interpolated from curve_
+    QPointF captionPen() const;      // where the texts' baselines start
+    QPointF peakPen(const QString& peak) const;
 
     // What the curve is made from: the settings, the columns and the rate.
     struct CurveKey {

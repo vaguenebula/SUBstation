@@ -287,16 +287,30 @@ private Q_SLOTS:
     }
 
     // The display's strip shows what modulates and where, both whole and apart, at their widest: over the plot,
-    // inside its sides, and a strip's height for the font.
+    // inside its sides, and their glyphs inside the strip, whatever the font's line (the strip kTopStrip, or as
+    // much taller as a font's glyphs need, and no more).
     void stripTextsWhole() {
         QQuickItem* view = showErosion();
         QVERIFY(view);
         auto* graph = find<ErosionGraph>(view, QStringLiteral("erosionGraph"));
         QVERIFY(graph);
         const QFontMetricsF metrics(ErosionGraph::stripFont());
-        QVERIFY(metrics.height() <= ErosionGraph::kTopStrip);
         const QRectF plot = graph->plot();
-        QCOMPARE(plot.top(), ErosionGraph::kTopStrip);
+        QCOMPARE(plot.top(), graph->topStrip());
+        // A text's glyphs (their tight box) on the strip's baseline, in a strip `height` tall: a line of the font
+        // centred in it, on whole pixels as SgPainter::drawText puts it.
+        const auto baselineIn = [&](double height) {
+            return std::round((height - metrics.height()) / 2.0) + std::round(metrics.ascent());
+        };
+        QCOMPARE(graph->stripBaseline(), baselineIn(graph->topStrip()));
+        const auto holds = [&](const QString& text, double height) {
+            const QRectF ink = metrics.tightBoundingRect(text).translated(0.0, baselineIn(height));
+            return ink.top() >= 0.0 && ink.bottom() <= height;
+        };
+        const QString glyphs = ErosionGraph::stripGlyphs();
+        QVERIFY2(holds(glyphs, graph->topStrip()), qPrintable(QString::number(graph->topStrip())));
+        QVERIFY2(graph->topStrip() == ErosionGraph::kTopStrip || !holds(glyphs, graph->topStrip() - 1.0),
+                 qPrintable(QString::number(graph->topStrip())));
         int checked = 0;
         for (const double blend : {0.0, 50.0, 99.0, 100.0}) {
             for (const double stereo : {0.0, 99.0, 100.0}) {
@@ -316,6 +330,8 @@ private Q_SLOTS:
                              qPrintable(what));
                     for (const QRectF& rect : {strip.sourceRect, strip.readoutRect})
                         QVERIFY(rect.top() >= 0.0 && rect.bottom() <= plot.top());
+                    QVERIFY2(holds(strip.source, graph->topStrip()) && holds(strip.readout, graph->topStrip()),
+                             qPrintable(what));
                     ++checked;
                 }
             }
