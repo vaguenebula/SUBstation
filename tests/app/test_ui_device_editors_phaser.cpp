@@ -1172,7 +1172,7 @@ private Q_SLOTS:
     }
 
     // The graph's animation keeps its pace whatever the audio's block size and the LFO's rate: with
-    // 2048-frame blocks (a tick in two bringing nothing) the meters still fall 24 dB a second; a fast
+    // 2048-frame blocks (most ticks bringing nothing) the meters still fall 24 dB a second; a fast
     // LFO's comet tail follows the way it went; a random shape's trace starts afresh when chosen.
     void animationKeepsPace() {
         QQuickItem* view = showPhaser(1);
@@ -1183,30 +1183,53 @@ private Q_SLOTS:
         set("lfo_rate", 4);  // "1/16": 8 Hz at 120 BPM
         set("lfo_wave", 0);
         set("amount", 100);
-        // Played as the audio thread would: a block whenever the wall clock makes one due, the displays
-        // ticking every 16 ms, from `beat` on.
+        // Played as the audio thread would, from `beat` on, on the clock the graph's animation goes by
+        // (tickSeconds(): the time since the last tick, at least a tick's): the displays ticked back to back,
+        // so each counts a tick (or what it took, when the machine held this thread up longer), and a block
+        // rendered whenever that clock makes one due. Not by the wall clock, waiting between ticks: the
+        // displays' own clock would tick them in the waits too, each tick counting a tick, and the playback,
+        // told of twice the time the audio had played, would run dry and hold between blocks.
         double beat = 0.0;
+        std::vector<double> ticks;  // the last playLive()'s ticks, by that clock (seconds)
+        QElapsedTimer sinceTick;
         auto playLive = [&](double seconds, int block) {
-            QElapsedTimer clock;
-            clock.start();
+            constexpr double kTick = kDisplayRefreshMs / 1000.0;
             const double blockSeconds = double(block) / kSampleRate;
             qint64 blocks = 0;
-            while (clock.elapsed() < qint64(seconds * 1000.0)) {
-                for (; double(blocks) * blockSeconds <= double(clock.elapsed()) / 1000.0; ++blocks) {
+            ticks.clear();
+            for (;;) {
+                // This tick's time: the last's and what tickSeconds() will count since (counted again after each
+                // block rendered: rendering takes time too).
+                double now = 0.0;
+                for (;;) {
+                    if (!ticks.empty()) {
+                        const double took = double(sinceTick.nsecsElapsed()) / 1e9;
+                        now = ticks.back() + (took > 1.0 ? kTick : std::clamp(took, kTick, 0.1));
+                    }
+                    if (now >= seconds || double(blocks) * blockSeconds > now)
+                        break;
                     engine()->renderOffline(beat, block);
                     beat += blockSeconds * 2.0;  // (120 BPM)
+                    ++blocks;
                 }
+                if (now >= seconds)
+                    return;
+                sinceTick.start();
                 refreshDisplays();
-                QTest::qWait(16);
+                ticks.push_back(now);
             }
         };
         playLive(0.5, 2048);
         QVERIFY(graph->live());
         QVERIFY2(std::abs(graph->levelIn() - 20 * std::log10(0.5)) < 1.0,
                  qPrintable(QString::number(graph->levelIn())));
-        // 8 Hz: more than half a cycle over the trail's ten ticks (the way the dot went: the phase apart from the
-        // oldest's would read that as less than it is, or as nothing).
-        QVERIFY2(graph->trailSpan() > 0.5, qPrintable(QString::number(graph->trailSpan())));
+        // 8 Hz: the trail spans the way the dot went over its ten ticks, the time they took at that rate (within
+        // 15 %: the playhead's pace bends a little to keep its lag), more than a cycle; the phase apart from the
+        // oldest's would read that as a fraction of a cycle, or nothing.
+        QVERIFY(ticks.size() >= size_t(PhaserGraph::kTrail));
+        const double went = 8.0 * (ticks.back() - ticks[ticks.size() - PhaserGraph::kTrail]);
+        QVERIFY2(went > 1.0 && std::abs(graph->trailSpan() - went) < 0.15 * went,
+                 qPrintable(QStringLiteral("%1 cycles, gone %2").arg(graph->trailSpan()).arg(went)));
 
         // The tone over (it ends at beat 2): the input falls at its pace, though some ticks bring nothing.
         beat = 2.5;
