@@ -27,14 +27,14 @@ Item {
     // at least.
     readonly property int cellWidth: Math.max(64, Math.ceil(knobTexts.implicitWidth))
     // The Focus column: its value boxes wide enough for the widest value ("20.00 kHz", or "14.44 kHz" where the
-    // 4 is the widest figure), centred with 11 px either side, clear of the automation dot (drawn at x 3.5..8.5
-    // in the box); and its captions.
+    // 4 is the widest figure), centred with 11 px either side, 2 px clear of the automation dot (drawn at x
+    // 3.5..8.5 in the box); and its captions.
     readonly property int focusWidth: Math.max(cellWidth, Math.ceil(figures.advance(focusSample)) + 2 * 11,
                                                Math.ceil(focusCaptions.implicitWidth))
     // The Focus boxes' widest text: of the forms their values take, "20 Hz" to "20.00 kHz" ("1000 Hz": 999.6).
     readonly property string focusSample: {
         const high = p.get("focus_hi")
-        return figures.widestOf(["dd Hz", "ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"]
+        return figures.widestOf(["## Hz", "### Hz", "1000 Hz", "#.## kHz", "1#.## kHz"]
                                     .map(pattern => figures.sample(pattern))
                                     .concat(high ? [high.format(high.maximum)] : []))
     }
@@ -79,9 +79,9 @@ Item {
             return widest
         }
 
-        // `pattern` with each "d" the widest figure: at least as wide as any value of that form.
+        // `pattern` with each "#" the widest figure: at least as wide as any value of that form.
         function sample(pattern) {
-            return pattern.replace(/d/g, widest)
+            return pattern.replace(/#/g, widest)
         }
         // `text`'s advance, and of `texts` the one with the widest (the font followed, as above).
         function advance(text) {
@@ -104,15 +104,15 @@ Item {
         text: lines.join("\n")
     }
     // What the knobs show at their widest: their captions, and each readout's widest form, every figure the
-    // font's widest (the levels' "-dd.d dB", the ratios' "dd.d:1", Tilt's "-d.d dB/oct", the percentages, the
-    // times' "d.dd s", "ddd ms", "1000 ms" (999.6 rounded) and "d.d ms"). In the captions' and readouts' font.
+    // font's widest (the levels' "-##.# dB", the ratios' "##.#:1", Tilt's "-#.# dB/oct", the percentages, the
+    // times' "#.## s", "### ms", "1000 ms" (999.6 rounded) and "#.# ms"). In the captions' and readouts' font.
     Widest {
         id: knobTexts
         font: Theme.uiFont(8)
         lines: [thresholdKnob, ratioKnob, belowKnob, upwardKnob, tiltKnob, kneeKnob, rangeKnob, smoothKnob, attackKnob,
                 releaseKnob, linkKnob, mixKnob, outputKnob]
             .map(knob => knob.title)
-            .concat(["-dd.d dB", "dd.d:1", "-d.d dB/oct", "100 %", "d.dd s", "ddd ms", "1000 ms", "d.d ms"]
+            .concat(["-##.# dB", "##.#:1", "-#.# dB/oct", "100 %", "#.## s", "### ms", "1000 ms", "#.# ms"]
                         .map(pattern => figures.sample(pattern)))
     }
     // The Focus column's captions.

@@ -350,21 +350,24 @@ private Q_SLOTS:
             QVERIFY2(!rect.intersects(graphRect) && rect.left() > graphRect.right() && rect.left() < centerOf(dial).x(),
                      id);
             QVERIFY2(rect.right() <= 1 + view_->width() - 8 + 0.5, id);
-            // Wide enough for every value's text, centred, 2 px clear of the automation dot (x 3.5..8.5); and no
-            // wider than its widest text with every figure the font's widest and 11 px either side needs, or its
-            // column's other parts (a knob's cell, the captions, whole).
+            // Wide enough for every value's text, centred on a whole pixel as the box draws it, its ink too, 2 px
+            // clear of the automation dot (x 3.5..8.5, lighting part of the pixel at 8): from 11 px in; and no wider
+            // than its widest text with every figure the font's widest and 11 px either side needs, or its column's
+            // other parts (a knob's cell, the captions, whole).
             const QFontMetricsF metrics(uiFont(8));
             double nearest = box->width(), widened = 0.0;
             QString text;
             for (const double v : valuesOf(p)) {
-                const double advance = metrics.horizontalAdvance(p->format(v));
-                if ((box->width() - advance) / 2 < nearest) {
-                    nearest = (box->width() - advance) / 2;
-                    text = p->format(v);
+                const QString shown = p->format(v);
+                const double left = std::round((box->width() - metrics.horizontalAdvance(shown)) / 2) +
+                                    std::min(0.0, metrics.boundingRect(shown).left());
+                if (left < nearest) {
+                    nearest = left;
+                    text = shown;
                 }
-                widened = std::max(widened, metrics.horizontalAdvance(::widened(p->format(v), metrics)));
+                widened = std::max(widened, metrics.horizontalAdvance(::widened(shown, metrics)));
             }
-            QVERIFY2(nearest >= 8.5 + 2.0 - 1e-6,
+            QVERIFY2(nearest >= 11.0 - 1e-6,
                      qPrintable(QStringLiteral("%1: %2 px for \"%3\"").arg(id).arg(box->width()).arg(text)));
             QQuickItem* caption = nullptr;
             for (QQuickItem* child : box->parentItem()->childItems())
@@ -448,7 +451,9 @@ private Q_SLOTS:
                      qPrintable(QStringLiteral("%1: %2, the texts need %3").arg(entry.first).arg(width).arg(need)));
         }
         tick();  // (the lines glided there)
-        QTRY_COMPARE(below->opacity(), value("upward") > 1.001 ? 1.0 : 0.55);  // (Below dimmed at Upward 1:1)
+        // Upward at its widest is past 1:1 ("10.0:1" is "1.0:1" and a figure more), so Below is no longer dimmed.
+        QVERIFY2(value("upward") > 1.001, qPrintable(QString::number(value("upward"))));
+        QTRY_COMPARE(below->opacity(), 1.0);
         QTest::qWait(50);
         save(grab(), QStringLiteral("spectral-widest.png"));
         while (undo()->index() > before) undo()->undo();

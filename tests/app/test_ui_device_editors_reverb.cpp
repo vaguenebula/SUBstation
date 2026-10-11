@@ -1,8 +1,8 @@
 // The Reverb's editor (ui/qml/devices/editors/ReverbEditor.qml; ui/src/devices/ReverbFilterPad, ReverbSpinPad,
 // ReverbDecayGraph): loaded as the device view loads it, over a real engine. It fits the view's height (and its own
-// least height), nothing overlapping, its boxes, lists and switches as wide as their text (the boxes' every value
-// clear of the automation dot) and its knobs the house's 34 px in rows; every caption and readout reads whole at its
-// widest, whatever the font, and nothing is wider than its text needs; every control is bound to its parameter
+// least height), nothing overlapping, its boxes, lists and switches as wide as their text (the boxes' every value a
+// pixel clear of the automation dot) and its knobs the house's 34 px in rows; every caption and readout reads whole at
+// its widest, whatever the font, and nothing is wider than its text needs; every control is bound to its parameter
 // (undoably, with a tooltip), each switch the one under the mouse over it (Chorus's over its knob's caption too); the
 // pads' and the graph's drags are one undo step each and set what the engine plays; the curves are the engine's own
 // maths (ReverbResponse.h); what the engine publishes as it renders reaches the pads and the graph (lit by what is now,
@@ -58,8 +58,10 @@ const QList<std::pair<const char*, const char*>> kControls = {
     {"chorusAmountKnob", "chorus_amount"}, {"chorusRateKnob", "chorus_rate"}, {"reflectKnob", "reflect"},
     {"diffuseKnob", "diffuse"},      {"mixKnob", "mix"}};
 const QStringList kCanvases = {QStringLiteral("filterPad"), QStringLiteral("spinPad"), QStringLiteral("decayGraph")};
-// A value box's automation dot reaches this far in from its left (ValueBoxItem: 2.5 px round at 6 px).
-constexpr double kDotRight = 8.5;
+// A value box's automation dot reaches this far in from its left (ValueBoxItem: 2.5 px round at 6 px), lighting
+// part of the pixel there; its text keeps a pixel clear of it, drawn from kTextFrom px in or further (ValueBoxItem
+// centres it on a whole pixel).
+constexpr double kDotRight = 8.5, kTextFrom = kDotRight + 1.5;
 // The knobs of each row, left to right.
 const QList<const char*> kFirstRow = {"shapeKnob",     "sizeKnob",         "stereoKnob",  "decayKnob",
                                       "diffusionKnob", "chorusAmountKnob", "reflectKnob", "mixKnob"};
@@ -283,10 +285,11 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
     }
 
     // Every box as wide as the widest text its parameter takes (over its whole range, whatever the font's
-    // figures) with the automation dot clear of it (every value's text, centred, starting where the dot ends or
-    // further in, and its ink too), and no wider (its widest text with every figure the font's widest no more than
-    // half a pixel further in); every list as wide as its longest name with the arrow, and its caption (or a knob's
-    // column), and no wider; every switch as wide as its text (and icon); the knobs the house's 34 px.
+    // figures) with the automation dot clear of it (every value's text, centred on a whole pixel as the box draws
+    // it, and its ink too, from kTextFrom px in: a pixel clear of the dot), and no wider (its widest text with every
+    // figure the font's widest no further in than that); every list as wide as its longest name with the arrow, and
+    // its caption (or a knob's column), and no wider; every switch as wide as its text (and icon); the knobs the
+    // house's 34 px.
     void checkWidths(QQuickItem* view) {
         const double cell = control(view, "shapeKnob")->width();
         for (const auto& [name, id] : kControls) {
@@ -300,7 +303,7 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                 QString text;
                 for (const double v : valuesOf(p)) {
                     const QString shown = p->format(v);
-                    const double left = (item->width() - metrics.horizontalAdvance(shown)) / 2 +
+                    const double left = std::round((item->width() - metrics.horizontalAdvance(shown)) / 2) +
                                         std::min(0.0, metrics.boundingRect(shown).left());
                     if (left < nearest) {
                         nearest = left;
@@ -308,13 +311,13 @@ class TestUiDeviceEditorsReverb : public QObject, public sub::app::test::EditorH
                     }
                     widened = std::max(widened, metrics.horizontalAdvance(::widened(p->format(v), metrics)));
                 }
-                QVERIFY2(nearest >= kDotRight - 1e-6,
+                QVERIFY2(nearest >= kTextFrom - 1e-6,
                          qPrintable(QStringLiteral("%1 %2 px: \"%3\" %4 px in")
                                         .arg(QString::fromLatin1(name))
                                         .arg(item->width())
                                         .arg(text)
                                         .arg(nearest)));
-                QVERIFY2((item->width() - widened) / 2 <= kDotRight + 0.5 + 1e-6,
+                QVERIFY2((item->width() - widened) / 2 <= kTextFrom + 1e-6,
                          qPrintable(QStringLiteral("%1 %2 px for %3").arg(QString::fromLatin1(name)).arg(item->width())
                                         .arg(widened)));
             } else if (kind.endsWith("Choice")) {
@@ -1220,7 +1223,29 @@ private Q_SLOTS:
         }
         refreshes(30, 16);
         QTest::qWait(200);  // (the dimmed controls' fades)
-        save(grab(), QStringLiteral("reverb-automation.png"));
+        const QImage image = grab();
+        save(image, QStringLiteral("reverb-automation.png"));
+        // As drawn: in each box the dot (6 px in) and the text, with the pixel past where the dot ends the box's
+        // own colour all the way down inside its border.
+        const double dpr = image.devicePixelRatio();
+        for (const auto& [name, id] : kControls) {
+            if (!QByteArray(name).endsWith("Box"))
+                continue;
+            QQuickItem* item = control(s.view, name);
+            const QRectF r = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+            const auto pixel = [&](double x, double y) { return image.pixel(int(x * dpr), int(y * dpr)); };
+            const QRgb inside = pixel(r.left() + kDotRight + 0.5, r.top() + 2);
+            QVERIFY2(pixel(r.left() + 6, r.center().y()) != inside, name);  // (the dot)
+            for (int x = int(std::round((r.left() + kDotRight + 0.5) * dpr)); x < int((r.left() + kTextFrom) * dpr);
+                 ++x) {
+                for (int y = int((r.top() + 2) * dpr); y < int((r.bottom() - 2) * dpr); ++y) {
+                    QVERIFY2(image.pixel(x, y) == inside,
+                             qPrintable(QStringLiteral("%1: (%2, %3) in it").arg(QString::fromLatin1(name))
+                                            .arg(x / dpr - r.left())
+                                            .arg(y / dpr - r.top())));
+                }
+            }
+        }
     }
 };
 

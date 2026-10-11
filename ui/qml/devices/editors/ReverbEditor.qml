@@ -23,10 +23,10 @@ import SUBstation
 //
 // Everything with text is as wide as the font makes it: the knobs' columns their
 // widest caption or readout (the house's 52 px at least), the boxes their widest
-// text (sample texts in the font's widest digits) and the automation dot, the
-// lists their longest names and the arrow, the switches their text. The pads and
-// the graph span the boxes under them (and the switches over them, and their own
-// captions), and everything to their right follows.
+// text (sample texts in the font's widest digits) a pixel clear of the automation
+// dot, the lists their longest names and the arrow, the switches their text. The
+// pads and the graph span the boxes under them (and the switches over them, and
+// their own captions), and everything to their right follows.
 Item {
     id: editor
 
@@ -46,10 +46,10 @@ Item {
     readonly property real canvasHeight: height - 54
     readonly property real boxY: height - 24
     readonly property real dim: 0.55
-    // A box's text this far in from either side at its widest: where the automation dot (drawn 3.5 to 8.5 px in from
-    // its left) ends, so the dot never reaches a value. (ParamBox's own width, its text and 16 px, puts the text
-    // half a pixel into the dot.)
-    readonly property real boxMargin: 8.5
+    // A box's text this far in from either side at its widest: a pixel past the automation dot (drawn 3.5 to 8.5 px
+    // in from its left), so a clear pixel stays between the dot and every value (the text drawn from 10 px in, on a
+    // whole pixel). (ParamBox's own width, its text and 16 px, puts the text half a pixel into the dot.)
+    readonly property real boxMargin: 9.5
     // A knob's column: as wide as the widest caption or readout a knob shows (the house's 52 px at least).
     readonly property real cell: Math.max(52, Math.ceil(knobTexts.implicitWidth))
     // Chorus's column: a knob's, or as wide as its switch (the Amount knob's title) needs; an even width, so the
@@ -75,10 +75,10 @@ Item {
         return param ? param.value >= 0.5 : false
     }
 
-    // A sample text: `pattern` with each "d" the font's widest digit (figures may be proportional), so what is
+    // A sample text: `pattern` with each "#" the font's widest digit (figures may be proportional), so what is
     // measured is as wide as the widest value of that form, whatever the font.
     function sample(pattern) {
-        return pattern.replace(/d/g, boxFont.widestDigit)
+        return pattern.replace(/#/g, boxFont.widestDigit)
     }
     // A box's sample text: the widest of the forms its values take (as `sample` makes them).
     function boxSample(patterns) {
@@ -118,8 +118,8 @@ Item {
         text: lines.join("\n")
     }
     // What the knobs show at their widest: their captions, and each readout's widest form, every figure the
-    // font's widest (Predelay's "ddd ms" and "0.dd ms", Size's "ddd.dd", Stereo's degrees, Decay's "dd.dd s" and
-    // "1000 ms" (999.6 rounded), the percentages, Rate's "d.dd Hz", the levels' "-dd.d dB"). In the captions' and
+    // font's widest (Predelay's "### ms" and "0.## ms", Size's "###.##", Stereo's degrees, Decay's "##.## s" and
+    // "1000 ms" (999.6 rounded), the percentages, Rate's "#.## Hz", the levels' "-##.# dB"). In the captions' and
     // readouts' font.
     Widest {
         id: knobTexts
@@ -127,8 +127,8 @@ Item {
         lines: [shapeKnob, predelayKnob, sizeKnob, stereoKnob, decayKnob, diffusionKnob, scaleKnob,
                 chorusAmountKnob, chorusRateKnob, reflectKnob, diffuseKnob, mixKnob]
             .map(knob => knob.title)
-            .concat(["ddd ms", "d.d ms", "0.dd ms", "1000 ms", "ddd.dd", "ddd°", "dd.dd s", "100 %", "d.dd Hz",
-                     "-dd.d dB"]
+            .concat(["### ms", "#.# ms", "0.## ms", "1000 ms", "###.##", "###°", "##.## s", "100 %", "#.## Hz",
+                     "-##.# dB"]
                         .map(pattern => editor.sample(pattern)))
     }
 
@@ -262,7 +262,7 @@ Item {
         param: p.get("in_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.boxSample(["ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])  // (50 Hz to 18 kHz)
+        sampleText: editor.boxSample(["### Hz", "1000 Hz", "#.## kHz", "1#.## kHz"])  // (50 Hz to 18 kHz)
         tooltip: qsTr("In Filter Freq: the centre of the band the reverb hears")
     }
     Box {
@@ -273,7 +273,7 @@ Item {
         param: p.get("in_width")
         step: 0.05
         decimals: 2
-        sampleText: editor.boxSample(["d.dd oct"])
+        sampleText: editor.boxSample(["#.## oct"])
         tooltip: qsTr("In Filter Width: how wide that band is, in octaves")
     }
 
@@ -318,7 +318,7 @@ Item {
         param: p.get("spin_amount")
         step: 0.5
         decimals: 1
-        sampleText: editor.boxSample(["dd %", "100 %"])
+        sampleText: editor.boxSample(["## %", "100 %"])
         tooltip: qsTr("ER Spin Amount: how far the reflections drift")
     }
     Box {
@@ -329,7 +329,7 @@ Item {
         param: p.get("spin_rate")
         logScale: true
         decimals: 2
-        sampleText: editor.boxSample(["d.dd Hz"])
+        sampleText: editor.boxSample(["#.## Hz"])
         tooltip: qsTr("ER Spin Rate: how fast they drift (fast: doppler pitch and swirling pans)")
     }
     Knob {
@@ -482,7 +482,7 @@ Item {
         param: p.get("lo_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.boxSample(["dd Hz", "ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])
+        sampleText: editor.boxSample(["## Hz", "### Hz", "1000 Hz", "#.## kHz", "1#.## kHz"])
         tooltip: qsTr("Lo Shelf Freq: where the lows start dying away faster")
     }
     Box {
@@ -493,7 +493,7 @@ Item {
         param: p.get("lo_gain")
         step: 1
         decimals: 0
-        sampleText: editor.boxSample(["dd %", "100 %"])
+        sampleText: editor.boxSample(["## %", "100 %"])
         tooltip: qsTr("Lo Shelf Gain: how long the lows ring, as a share of Decay")
     }
     Box {
@@ -504,7 +504,7 @@ Item {
         param: p.get("hi_freq")
         logScale: true
         decimals: 0
-        sampleText: editor.boxSample(["dd Hz", "ddd Hz", "1000 Hz", "d.dd kHz", "1d.dd kHz"])
+        sampleText: editor.boxSample(["## Hz", "### Hz", "1000 Hz", "#.## kHz", "1#.## kHz"])
         tooltip: qsTr("Hi Filter Freq: where the highs start dying away faster")
     }
     Box {
@@ -515,7 +515,7 @@ Item {
         param: p.get("hi_gain")
         step: 1
         decimals: 0
-        sampleText: editor.boxSample(["dd %", "100 %"])
+        sampleText: editor.boxSample(["## %", "100 %"])
         tooltip: qsTr("Hi Shelf Gain: how long the highs ring, as a share of Decay (unused by the low-pass)")
     }
 
