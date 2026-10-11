@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <span>
 #include <tuple>
 #include <vector>
 
@@ -253,8 +254,9 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
 
     // Everything shown fits: inside the body, no text cut short or spilling out of its box, no two of `controls`
     // over each other, the switches' texts inside their borders (a pixel each side), a list's clear of its arrow,
-    // each ♪ clear of its caption's text and of the dial under it; and the editor as wide as its sections, the
-    // last (`last`'s) 8 px from the right.
+    // each ♪ before its caption's text, a pixel clear, and clear of the dial under it, nearer its caption than
+    // any other in its row by the cells' gap (4 px) at least (so that it reads as its caption's and not as the
+    // next cell's); and the editor as wide as its sections, the last (`last`'s) 8 px from the right.
     void fits(QQuickItem* view, const QStringList& controls, const char* last) {
         QList<QQuickItem*> items;
         collect(view, items);
@@ -306,9 +308,29 @@ class TestUiDeviceEditorsPhaser : public QObject, public sub::app::test::EditorH
                 continue;
             QQuickItem* caption = cell->childItems().at(0);
             const QRectF captionAt = rectOf(view, caption), syncAt = rectOf(view, sync);
-            const double textRight = captionAt.center().x() + caption->implicitWidth() / 2;
-            QVERIFY2(syncAt.left() >= textRight + 1.0 - 1e-6, buttonName);
+            const double textLeft = captionAt.center().x() - caption->implicitWidth() / 2;
+            const double own = textLeft - syncAt.right();
+            QVERIFY2(own >= 1.0 - 1e-6, buttonName);
             QVERIFY2(!syncAt.intersects(rectOf(view, knobOf(cell))), buttonName);
+            // (a caption's text: centred in its cell, as wide as it lays out)
+            for (const auto& controls : {std::span<const Control>(kKnobs), std::span<const Control>(kMoreKnobs)}) {
+                for (const Control& control : controls) {
+                    QQuickItem* other = find(view, QString::fromLatin1(control.name));
+                    if (other == cell || !shown(other) || !other->property("title").isValid())
+                        continue;  // (Env's cell has its switch where the caption would be)
+                    QQuickItem* otherCaption = other->childItems().at(0);
+                    const QRectF at = rectOf(view, otherCaption);
+                    if (at.bottom() <= syncAt.top() || at.top() >= syncAt.bottom())
+                        continue;
+                    const double half = otherCaption->implicitWidth() / 2;
+                    const double gap = std::max(at.center().x() - half - syncAt.right(),
+                                                syncAt.left() - (at.center().x() + half));
+                    QVERIFY2(gap >= own + 4.0 - 1e-6,
+                             qPrintable(QStringLiteral("%1: %2 px from %3, %4 from its own")
+                                            .arg(QString::fromLatin1(buttonName), QString::number(gap),
+                                                 QString::fromLatin1(control.name), QString::number(own))));
+                }
+            }
         }
         QCOMPARE(view->implicitWidth(), rectOf(view, find(view, QString::fromLatin1(last))).right() + 8.0);
     }
@@ -471,7 +493,7 @@ private Q_SLOTS:
             readoutFits(find(view, QString::fromLatin1(name)), widest);
             QVERIFY2(!QTest::currentTestFailed(), name);
         }
-        // (a synced rate's caption, centred with its ♪ at the cell's right a pixel clear)
+        // (a synced rate's caption, centred with its ♪ before it a pixel clear)
         auto syncedCaptions = [&] {
             for (const auto& [knobName, buttonName] : {std::pair{"rate", "sync"}, std::pair{"rate2", "sync2"}}) {
                 QQuickItem* caption = find(view, QString::fromLatin1(knobName))->childItems().at(0);

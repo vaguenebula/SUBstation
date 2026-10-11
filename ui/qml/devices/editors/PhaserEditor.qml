@@ -25,9 +25,9 @@ Item {
 
     readonly property int margin: 8
     // A knob's cell: as wide as its widest caption or readout (the house's 52 px, an EditorKnob's width at the
-    // house size, at least), a synced rate's caption centred with room for its ♪ at the cell's right, a pixel
-    // clear, and the buttons a cell holds (Spin, Ø, More, Env) their text with 2 px either side (the border and a
-    // pixel clear); on even pixels, so that the 34 px knob centres under its caption and readout exactly.
+    // house size, at least), a synced rate's caption centred with room for its ♪ before it, a pixel clear, and
+    // the buttons a cell holds (Spin, Ø, More, Env) their text with 2 px either side (the border and a pixel
+    // clear); on even pixels, so that the 34 px knob centres under its caption and readout exactly.
     readonly property int cell: even(Math.max(52, cellTexts.implicitWidth,
                                               syncedTexts.implicitWidth + 2 * (syncSize + 1),
                                               Math.max(spinButton.button.implicitContentWidth,
@@ -114,7 +114,7 @@ Item {
                      "#.## ms", "##.# ms", "### ms"].map(pattern => figures.sample(pattern)))
             .concat(p.get("lfo_rate") ? p.get("lfo_rate").labels : [])
     }
-    // The synced rates' captions, beside their ♪.
+    // The synced rates' captions, after their ♪.
     Widest {
         id: syncedTexts
         lines: [qsTr("Freq"), qsTr("Rate")]
@@ -168,7 +168,7 @@ Item {
         size: editor.knobSize
     }
 
-    // A knob whose rate can be synced: the ♪ switch at the right of its caption. Synced, it steps
+    // A knob whose rate can be synced: the ♪ switch before its caption. Synced, it steps
     // through note values, and the wheel moves it one a notch (the knob's own wheel moves a fiftieth
     // of the range, which a list of 22 rounds back to where it was).
     component SyncedKnob: Item {
@@ -206,11 +206,13 @@ Item {
                     param.set(next, "")
             }
         }
-        // At the cell's right in the caption's row (no taller than it, so it stays clear of the dial).
+        // In the caption's row (no taller than it, so it stays clear of the dial), just before the caption: a
+        // pixel clear of the wider of its two (Freq, Rate), so that it stays put as they swap. There it reads as
+        // the caption's, not as the next cell's, whose caption may fill that cell.
         ParamButton {
             id: syncButton
             objectName: synced.buttonName
-            x: synced.width - width
+            x: Math.floor((synced.width - syncedTexts.implicitWidth) / 2) - 1 - width
             y: 0
             width: editor.syncSize
             height: Math.min(editor.syncSize, knob.knob.y)
