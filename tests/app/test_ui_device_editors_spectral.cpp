@@ -215,11 +215,27 @@ class TestUiDeviceEditorsSpectral : public QObject, public sub::app::test::Edito
         return count ? (rows / count + 0.5) / scale : -1.0;
     }
 
-    // A drag from `from` by `by` in `steps` moves, with `modifiers`.
-    void drag(QPoint from, QPoint by, Qt::KeyboardModifiers modifiers = Qt::NoModifier, int steps = 3) {
+    // A drag from `from` by `by` in `steps` moves, with `modifiers`: the item that took the press (null: none).
+    QQuickItem* drag(QPoint from, QPoint by, Qt::KeyboardModifiers modifiers = Qt::NoModifier, int steps = 3) {
         QTest::mousePress(window_, Qt::LeftButton, modifiers, from);
+        QQuickItem* const took = window_->mouseGrabberItem();
         for (int i = 1; i <= steps; ++i) dragTo(from + by * i / steps, modifiers);
         QTest::mouseRelease(window_, Qt::LeftButton, modifiers, from + by);
+        return took;
+    }
+
+    // What took a press, for a check's message: the item's class, with the text of each popup open in it if that
+    // was the popups' overlay (an open popup takes the presses over it).
+    static QByteArray nameOf(QQuickItem* item) {
+        if (!item)
+            return "nothing";
+        QByteArray name = item->metaObject()->className();
+        for (QQuickItem* child : item->childItems()) {
+            QObject* popup = child->parent();
+            if (child->isVisible() && popup && popup->metaObject()->indexOfProperty("text") >= 0)
+                name += " (\"" + popup->property("text").toString().left(40).toUtf8() + "\")";
+        }
+        return name;
     }
 
     // The engine's value of the device's parameter.
@@ -645,13 +661,15 @@ private Q_SLOTS:
         QTest::mouseMove(window_, scenePoint(graph_, QPointF(plot.center().x(), plot.top() + 4)));
         QTRY_COMPARE(graph_->hoveredHandle(), int(SpectralGraph::None));
 
-        // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px. (Pressed from off
-        // the display, so that no tooltip is up: this window has no room for the display's below or above it, so a
-        // tip up as the press comes lies over the plot's bottom, where the handle is, and takes the press.)
+        // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px. The display takes
+        // the press. No tooltip may be up as it comes: the display's own has no room below or above it in this window,
+        // so it lies over the plot's bottom, where the handle is, and would take the press (the tilt left as it was).
+        // Moving off the display first closes any tip a hover opened.
         QTest::mouseMove(window_, QPoint(1, 1));
         const double dbPerPixel = graph_->dbPerPixel();
         const int steps = undo()->index();
-        drag(at(SpectralGraph::TiltLow), QPoint(0, -20));
+        QQuickItem* const took = drag(at(SpectralGraph::TiltLow), QPoint(0, -20));
+        QVERIFY2(took == graph_, nameOf(took).constData());
         QVERIFY2(std::abs(value("tilt") - (6.0 - 20 * dbPerPixel / std::log2(10.0))) <= 0.02,
                  qPrintable(QString::number(value("tilt"))));
         QCOMPARE(value("threshold"), -60.0);

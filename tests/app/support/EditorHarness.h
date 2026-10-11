@@ -199,8 +199,9 @@ protected:
 
     // The system's cursor out of the window's way, at the screen's bottom left. A knob's or value box's drag puts
     // it back where the drag began (DragCursor), over the editor, and Windows tells a window where it is whenever
-    // the window changes under it (as each editor is shown, taking its size): what lies there would be hovered,
-    // and its tooltip would pop up over the editor.
+    // the window changes under it: shrunk as an editor goes, the window grows back under it as the next is shown,
+    // and Qt has the mouse enter there. What lies there would be hovered, and its tooltip would pop up over the
+    // editor. (Only this program moves the cursor meanwhile: on Windows CTest runs the UI's tests one at a time.)
     void parkCursor() {
         QScreen* screen = window_->screen();
         if (!screen)

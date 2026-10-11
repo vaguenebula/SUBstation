@@ -49,7 +49,9 @@ Item {
     }
 
     // Measured as the box draws it (ValueBoxItem, with QPainter): with the font's hinted advances, not Qt Quick
-    // text's design ones, which hinting can widen (Windows' Segoe UI at 8 pt: "20.00 kHz" is 49 px, not 47).
+    // text's design ones, which hinting can widen (Windows' Segoe UI at 8 pt: "20.00 kHz" is 49 px, not 47). The
+    // render type stays a constant, set before the font and text: TextMetrics measures again when those change, not
+    // when it does.
     TextMetrics {
         id: widestFocus
         font: Theme.uiFont(8)
