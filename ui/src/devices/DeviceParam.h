@@ -13,6 +13,7 @@
 //   DeviceParam { id: threshold; session: Session; trackId: ...; deviceId: ...; paramId: "threshold" }
 //   Knob { value: threshold.value; onMoved: (v, key) => threshold.set(v, key) }
 
+#include <QJSValue>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -85,6 +86,13 @@ public:
 
     // A value in its units ("-18.0 dB", a list's name).
     Q_INVOKABLE QString format(double value) const;
+    // Every form its text takes across its range (format()'s, or `formatter`'s: value => text), each number's
+    // figures after its first as "#" (any figure: "-1#.# dB"): what a control must be wide enough for, whatever
+    // the value and the font (EditorKnob's texts()). The range is read at 33 points across it (in its own scale)
+    // and just under each power of ten in it (where a value rounds up to a longer text: "1000 ms"), and between
+    // two points whose forms differ other than in one figure by one, halfway too (six times over at most), so
+    // every form turns up, with every first figure. Without a formatter, worked out once per text rule.
+    Q_INVOKABLE QStringList textForms(const QJSValue& formatter = QJSValue()) const;
     // Typed text as a value (null if it doesn't read as one); a frequency may say "1.5k" or "2 kHz".
     Q_INVOKABLE QVariant parse(const QString& text) const;
     // Sets it through the editor: one undo step per `mergeKey` (empty: a step of its own).

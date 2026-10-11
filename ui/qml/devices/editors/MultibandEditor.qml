@@ -14,9 +14,9 @@ import SUBstation
 // switched off (its split: the Mid band then shapes its frequencies) or
 // bypassed (its activator) dims its controls; they stay editable, as Live
 // keeps them. The columns are as wide as their texts need in the font the UI
-// has (measured): every box its widest text with the automation dot clear of
-// it, every caption its name, every knob its name and its widest value, every
-// button its text.
+// has (measured): every box its texts with the automation dot clear of them,
+// every caption its name, every knob its name and every text its readout
+// takes, every button its text.
 // Every control shows its parameter as it is now (its automation's value while
 // that plays), sets it undoably, touches it when pressed, and right-click
 // gives its menu.
@@ -67,78 +67,53 @@ Item {
         }
     }
 
-    // The 8 pt font of the captions, boxes and readouts, measured.
-    FontMetrics {
-        id: metrics
-        font: Theme.uiFont(8)
-    }
-    // `pattern` written in each figure in turn ("-##.# dB": "-00.0 dB" to "-99.9 dB"): the widest of them is as
-    // wide as any value's text of that form, as a box or a Text lays it out (whichever figure is widest there).
-    function samples(pattern) {
-        return [..."0123456789"].map(figure => pattern.replace(/#/g, figure))
-    }
-    // The widest of `texts` as a box draws them (by advance, centred: FontMetrics, as ValueBoxItem measures).
-    function widest(texts) {
-        return texts.reduce((a, b) => metrics.advanceWidth(b) > metrics.advanceWidth(a) ? b : a)
-    }
-    // A box for `text`: the text centred with 9 px at either side, so the automation dot (drawn from 3.5 to
-    // 8.5 px) stays clear of it and never touches a minus sign.
-    function boxWidth(text) {
-        return Math.ceil(metrics.advanceWidth(text) + 2 * 9)
-    }
-    // How wide `texts` need a caption or a readout (a Text) to be, in whole pixels: as a Text lays them out (a
-    // hidden one, a line each, is as wide as the widest of them: a Text lays text out in the font's design
-    // metrics, which can be a pixel off what FontMetrics gives where the font is hinted), or as far as a glyph
-    // reaches past its advance if further.
-    component TextsWidth: Text {
-        id: measured
-        property var texts: []
-        readonly property int needed: Math.ceil(Math.max(implicitWidth, ...texts.map(text => {
-            const ink = inkMetrics.boundingRect(text)
-            return ink.x + ink.width
-        })))
-        visible: false
-        font: Theme.uiFont(8)
-        text: texts.join("\n")
-
-        FontMetrics {
-            id: inkMetrics
-            font: measured.font
+    // The columns, as wide as their texts need in the fonts they are drawn in (so the editor fits whatever font the
+    // UI gets): each box column its boxes' texts with the automation dot clear of them (EditorBoxWidth: the bands'
+    // gains, ±24 dB; the thresholds, -80 to 0 dB; the ratios, 1:0.250 to 1:100; the times, 0.1 ms to 5 s; the
+    // crossovers), and its caption whichever page is shown, as a Text lays it out (EditorTextsWidth).
+    function bandParams(fields) {
+        const all = []
+        for (const band of ["low", "mid", "high"]) {
+            for (const field of fields)
+                all.push(p.get(band + "_" + field))
         }
+        return all
     }
-
-    // The boxes' widest texts: the band's gains (±24 dB), the thresholds (-80 to 0 dB), the ratios (1:0.250 to
-    // 1:100), the times (0.1 ms to 5 s: "0.88 ms", "8.8 ms", "888 ms", "1000 ms" just under a second, "4.44 s")
-    // and the crossovers (to 15.00 kHz).
-    readonly property string gainSample: widest(samples("-2#.# dB"))
-    readonly property string thresholdSample: widest(samples("-##.# dB"))
-    readonly property string ratioSample: widest(samples("1:0.###"))
-    readonly property string timeSample: widest(samples("0.## ms").concat(samples("#.# ms"), samples("### ms"),
-                                                                           ["1000 ms"], samples("#.## s")))
-    readonly property string crossoverSample: widest(samples("1#.## kHz"))
-    // The columns' captions, whichever page is shown.
-    TextsWidth {
+    EditorBoxWidth {
+        id: levelBoxes
+        params: editor.bandParams(["in", "out"])
+    }
+    EditorBoxWidth {
+        id: fieldBoxes
+        params: editor.bandParams(["above", "below", "attack"])
+    }
+    EditorBoxWidth {
+        id: field2Boxes
+        params: editor.bandParams(["above_ratio", "below_ratio", "release"])
+    }
+    EditorBoxWidth {
+        id: crossoverBoxes
+        params: [p.get("xover_low"), p.get("xover_high")]
+    }
+    EditorTextsWidth {
         id: levelCaptions
         texts: [qsTr("Input"), qsTr("Output")]
     }
-    TextsWidth {
+    EditorTextsWidth {
         id: fieldCaptions
         texts: [qsTr("Above"), qsTr("Below"), qsTr("Attack")]
     }
-    TextsWidth {
+    EditorTextsWidth {
         id: field2Captions
         texts: [qsTr("Ratio"), qsTr("Release")]
     }
-    // Each box column as wide as its widest text with the dot clear of it needs, and its caption: Input and
-    // Output; Above, Below and Attack; the ratios and Release; the crossovers.
-    readonly property int levelBoxWidth: Math.max(boxWidth(gainSample), levelCaptions.needed)
-    readonly property int fieldWidth: Math.max(boxWidth(widest([thresholdSample, timeSample])), fieldCaptions.needed)
-    readonly property int field2Width: Math.max(boxWidth(widest([ratioSample, timeSample])), field2Captions.needed)
-    readonly property int crossoverWidth: boxWidth(crossoverSample)
+    readonly property int levelBoxWidth: Math.max(levelBoxes.needed, levelCaptions.needed)
+    readonly property int fieldWidth: Math.max(fieldBoxes.needed, fieldCaptions.needed)
+    readonly property int field2Width: Math.max(field2Boxes.needed, field2Captions.needed)
     // The columns (x): the band column (its button and solo over the split's switch and crossover, as wide as
-    // the wider needs); Input; the display; the two fields; Output; the device's own controls. Each follows the
-    // one before it.
-    readonly property int bandWidth: Math.max(16 + crossoverWidth,
+    // the wider needs, both filling it); Input; the display; the two fields; Output; the device's own controls.
+    // Each follows the one before it.
+    readonly property int bandWidth: Math.max(16 + crossoverBoxes.needed,
                                               Math.ceil(Math.max(highRow.buttonWidth, midRow.buttonWidth,
                                                                  lowRow.buttonWidth)) + 2 + 18)
     readonly property int inX: 8 + bandWidth + 6
@@ -265,14 +240,14 @@ Item {
         ParamBox {
             objectName: split.band === "high" ? "xoverHigh" : "xoverLow"
             x: 16
-            width: editor.crossoverWidth
+            width: split.width - 16  // (the band column: as wide as the crossover's texts need, or its buttons)
             param: split.frequency
             logScale: true
             decimals: 0
             defaultValue: split.frequency ? split.frequency.defaultValue : undefined
             formatter: editor.formatOf(split.frequency)
             parser: editor.parserOf(split.frequency)
-            sampleText: editor.crossoverSample
+            sampleText: crossoverBoxes.sample
             tooltip: split.boxTip
             opacity: splitOn.lit ? 1 : editor.dimmed
             Behavior on opacity {
@@ -393,7 +368,7 @@ Item {
             step: 0.1
             decimals: 1
             formatter: editor.formatOf(row.param("in"))
-            sampleText: editor.gainSample
+            sampleText: levelBoxes.sample
             tooltip: qsTr("Gain before the band's dynamics (it moves the band's level against its thresholds)")
         }
         Page {
@@ -408,7 +383,7 @@ Item {
                 step: 0.1
                 decimals: 1
                 formatter: editor.formatOf(row.param("above"))
-                sampleText: editor.thresholdSample
+                sampleText: fieldBoxes.sample
                 tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at "
                               + "1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
@@ -423,7 +398,7 @@ Item {
                 decimals: 3
                 formatter: editor.formatOf(row.param("above_ratio"))
                 parser: t => editor.parseRatio(t)
-                sampleText: editor.ratioSample
+                sampleText: field2Boxes.sample
                 tooltip: qsTr("Above: what happens to the band above this level. From 1:1 up it is compressed (at "
                               + "1:4, 4 dB over the threshold comes out as 1), under 1:1 (1:0.500) expanded upwards")
             }
@@ -440,7 +415,7 @@ Item {
                 step: 0.1
                 decimals: 1
                 formatter: editor.formatOf(row.param("below"))
-                sampleText: editor.thresholdSample
+                sampleText: fieldBoxes.sample
                 tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up "
                               + "(upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 "
                               + "(1:0.500) pushed down (downward expansion)")
@@ -456,7 +431,7 @@ Item {
                 decimals: 3
                 formatter: editor.formatOf(row.param("below_ratio"))
                 parser: t => editor.parseRatio(t)
-                sampleText: editor.ratioSample
+                sampleText: field2Boxes.sample
                 tooltip: qsTr("Below: what happens to the band below this level. From 1:1 up it is pulled up "
                               + "(upward compression: at 1:4, 4 dB under the threshold comes out as 1), under 1:1 "
                               + "(1:0.500) pushed down (downward expansion)")
@@ -475,7 +450,7 @@ Item {
                 decimals: 2
                 formatter: editor.formatOf(row.param("attack"))
                 parser: t => editor.parseTime(t)
-                sampleText: editor.timeSample
+                sampleText: fieldBoxes.sample
                 tooltip: qsTr("Attack: how fast the band's compression or expansion comes when its level crosses a "
                               + "threshold into a region")
             }
@@ -490,7 +465,7 @@ Item {
                 decimals: 2
                 formatter: editor.formatOf(row.param("release"))
                 parser: t => editor.parseTime(t)
-                sampleText: editor.timeSample
+                sampleText: field2Boxes.sample
                 tooltip: qsTr("Release: how fast it lets go when the level comes back")
             }
         }
@@ -504,7 +479,7 @@ Item {
             step: 0.1
             decimals: 1
             formatter: editor.formatOf(row.param("out"))
-            sampleText: editor.gainSample
+            sampleText: levelBoxes.sample
             tooltip: qsTr("Gain after the band's dynamics")
         }
     }
@@ -553,20 +528,18 @@ Item {
 
     // --- The device's own controls -----------------------------------------------------------
 
-    // Their widths: a knob's cell as wide as its name and its widest value as its caption and readout lay
-    // them out (the device's three at least EditorKnob's own 52 px: Amount 0 to 100 %, Time 10 to 1000 %,
-    // Output ±24 dB; S/C Gain -70 to 24 dB, S/C Mix 0 to 100 %), and the column as wide as its widest row
-    // needs. The button rows fill it, so their edges line up (Soft Knee, Peak and RMS sharing it as their texts
-    // need, Peak and RMS alike), and the knobs are centred in it.
-    TextsWidth {
+    // Their widths: a knob's cell as wide as its caption and every text its readout takes (EditorKnob's texts(),
+    // as a Text lays them out: Amount 0 to 100 %, Time 10 to 1000 %, Output ±24 dB, the device's three at least
+    // EditorKnob's own 52 px; S/C Gain -70 to 24 dB, S/C Mix 0 to 100 %), and the column as wide as its widest
+    // row needs. The button rows fill it, so their edges line up (Soft Knee, Peak and RMS sharing it as their
+    // texts need, Peak and RMS alike), and the knobs are centred in it.
+    EditorTextsWidth {
         id: knobTexts
-        texts: [qsTr("Amount"), qsTr("Time"), qsTr("Output")].concat(editor.samples("### %"),
-                                                                     editor.samples("1### %"),
-                                                                     editor.samples("-2#.# dB"))
+        knobs: [amountKnob, timeKnob, outputKnob]
     }
-    TextsWidth {
+    EditorTextsWidth {
         id: scKnobTexts
-        texts: [qsTr("S/C Gain"), qsTr("S/C Mix")].concat(editor.samples("-##.# dB"), editor.samples("### %"))
+        knobs: [scGain, scMix]
     }
     readonly property int knobCellWidth: Math.max(52, knobTexts.needed)
     readonly property int scKnobWidth: scKnobTexts.needed
@@ -596,6 +569,7 @@ Item {
             spacing: 2
 
             EditorKnob {
+                id: amountKnob
                 objectName: "amount"
                 width: editor.knobCellWidth
                 size: 28
@@ -604,6 +578,7 @@ Item {
                 tooltip: qsTr("How much of every ratio applies: at 0 % nothing is compressed or expanded")
             }
             EditorKnob {
+                id: timeKnob
                 objectName: "time"
                 width: editor.knobCellWidth
                 size: 28
@@ -612,6 +587,7 @@ Item {
                 tooltip: qsTr("Scales every band's attack and release")
             }
             EditorKnob {
+                id: outputKnob
                 objectName: "output"
                 width: editor.knobCellWidth
                 size: 28
@@ -674,6 +650,7 @@ Item {
                 tooltip: qsTr("The sidechain's level")
             }
             EditorKnob {
+                id: scMix
                 objectName: "scMix"
                 width: editor.scKnobWidth
                 size: 24

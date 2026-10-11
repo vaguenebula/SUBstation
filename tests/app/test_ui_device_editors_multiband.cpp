@@ -9,15 +9,12 @@
 // need no window (they run on any platform). With SUBSTATION_UI_SCREENSHOTS set
 // to a folder, the editor is saved there.
 
-#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QHash>
 #include <QImage>
 #include <QMouseEvent>
-#include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
-#include <QSet>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
@@ -25,7 +22,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <memory>
 #include <utility>
 #include <vector>
 
@@ -139,51 +135,6 @@ class TestUiDeviceEditorsMultiband : public QObject, public sub::app::test::Edit
         }
         return QStringLiteral("still moving");
     }
-    // A Text, as the captions and the readouts are (EditorCaption, EditorReadout), to measure texts with.
-    std::unique_ptr<QQuickItem> textProbe_;
-    // How wide `text` is in `font` as a caption or a readout lays it out: a Text's implicitWidth. (A Text lays
-    // text out in the font's design metrics: where the font is hinted, QFontMetrics can be a pixel off it.)
-    double textWidth(const QString& text, const QFont& font) {
-        if (!textProbe_) {
-            QQmlComponent component(qml_.get());
-            component.setData(QByteArrayLiteral("import QtQuick\nText {}"), QUrl());
-            textProbe_.reset(qobject_cast<QQuickItem*>(component.create()));
-            if (!textProbe_) {
-                qWarning() << component.errors();
-                return 1e9;
-            }
-        }
-        textProbe_->setProperty("font", font);
-        textProbe_->setProperty("text", text);
-        return textProbe_->implicitWidth();
-    }
-    // The widest text a parameter shows over its range (its format() at 20001 values across it, in even steps
-    // of the value or, log-scaled, of its log: closer together than its texts step), a value showing it, and how
-    // wide it is in `font`: as a box centres it (its advance) or, `asText`, as a Text lays it out.
-    struct Widest {
-        QString text;
-        double width = 0.0;
-        double value = 0.0;
-    };
-    Widest widestText(const sub::ui::DeviceParam* param, const QFont& font, bool asText) {
-        const QFontMetricsF metrics(font);
-        const double from = param->minimum(), to = param->maximum();
-        constexpr int kSteps = 20000;
-        Widest widest;
-        QSet<QString> measured;
-        for (int i = 0; i <= kSteps; ++i) {
-            const double t = double(i) / kSteps;
-            const double value = param->logScale() ? from * std::pow(to / from, t) : from + (to - from) * t;
-            const QString text = param->format(value);
-            if (measured.contains(text))
-                continue;
-            measured.insert(text);
-            const double width = asText ? textWidth(text, font) : metrics.horizontalAdvance(text);
-            if (width > widest.width)
-                widest = {text, width, value};
-        }
-        return widest;
-    }
     static sub::ui::DeviceParam* paramOf(QQuickItem* control) {
         return control ? qvariant_cast<sub::ui::DeviceParam*>(control->property("param")) : nullptr;
     }
@@ -199,10 +150,7 @@ private Q_SLOTS:
             startHost();
     }
 
-    void cleanupTestCase() {
-        textProbe_.reset();  // (before its QML engine)
-        stopHost();
-    }
+    void cleanupTestCase() { stopHost(); }
 
     void init() {
         if (headless(QTest::currentTestFunction()))
@@ -298,7 +246,10 @@ private Q_SLOTS:
         for (std::size_t i = 1; i < std::size(columns); ++i)
             QVERIFY2(right(columns[i - 1]) <= left(columns[i]), columns[i]);
         QVERIFY(right("highActive") <= left("highSolo") && right("highSolo") <= left("midIn"));
-        QCOMPARE(right("highSolo"), right("xoverHigh"));  // (the band column's edges line up)
+        QVERIFY(left("highActive") == left("highOn") && right("highOn") <= left("xoverHigh"));
+        // (the band column's edges line up: the buttons fill it above, the crossover box below)
+        QCOMPARE(right("highSolo"), right("xoverHigh"));
+        QCOMPARE(right("lowSolo"), right("xoverLow"));
         QVERIFY(left("highOn") >= 8 && right("globals") <= s.view->width() - 8);
         QCOMPARE(s.view->implicitWidth(), right("globals") + 8);
         // The device's own controls: the button rows fill their column, so their edges line up; the knobs
@@ -309,49 +260,69 @@ private Q_SLOTS:
         QCOMPARE(right("scListen"), right("globals"));
         QVERIFY(left("amount") >= left("globals") && right("output") <= right("globals"));
 
-        // Every box is as wide as its widest text and the automation dot beside it need, whatever the font:
-        // the widest text its parameter shows, centred, starts half a pixel clear of the dot (drawn from 3.5 to
-        // 8.5 px from its left), so the dot never touches a minus sign.
-        QStringList boxNames = {QStringLiteral("xoverHigh"), QStringLiteral("xoverLow")};
-        for (const char* band : {"high", "mid", "low"}) {
-            for (const char* field : {"In", "Out", "Above", "AboveRatio", "Below", "BelowRatio", "Attack", "Release"})
-                boxNames.append(QString::fromLatin1(band) + QString::fromLatin1(field));
-        }
-        for (const QString& name : boxNames) {
+        // Every box shows every text its parameter takes whole, whatever the font, a pixel clear of the
+        // automation dot (drawn from 3.5 to 8.5 px from its left), so the dot never touches a minus sign.
+        auto items = [&](const QStringList& names) {
+            QList<QQuickItem*> found;
+            for (const QString& name : names)
+                found << find(s.view, name);
+            return found;
+        };
+        auto bandBoxes = [&](std::initializer_list<const char*> fields) {
+            QStringList names;
+            for (const char* band : {"high", "mid", "low"}) {
+                for (const char* field : fields)
+                    names << QString::fromLatin1(band) + QString::fromLatin1(field);
+            }
+            return names;
+        };
+        const QStringList levelBoxes = bandBoxes({"In", "Out"});
+        const QStringList fieldBoxes = bandBoxes({"Above", "Below", "Attack"});
+        const QStringList field2Boxes = bandBoxes({"AboveRatio", "BelowRatio", "Release"});
+        const QStringList crossovers = {QStringLiteral("xoverHigh"), QStringLiteral("xoverLow")};
+        for (const QString& name : levelBoxes + fieldBoxes + field2Boxes + crossovers) {
             QQuickItem* item = find(s.view, name);
-            ValueBoxItem* valueBox = box(s.view, qPrintable(name));
-            QVERIFY2(item && valueBox && paramOf(item), qPrintable(name));
-            const Widest widest = widestText(paramOf(item), valueBox->font(), false);
-            const QString where = QStringLiteral("%1: \"%2\" (%3 px) in %4 px")
-                                      .arg(name, widest.text)
-                                      .arg(widest.width)
-                                      .arg(item->width());
-            QVERIFY2(item->width() >= item->implicitWidth(), qPrintable(where));
-            QVERIFY2((item->width() - widest.width) / 2 >= 9.0, qPrintable(where));
+            QVERIFY2(item && box(s.view, qPrintable(name)) && paramOf(item), qPrintable(name));
+            QVERIFY2(item->width() >= item->implicitWidth(), qPrintable(name));
+            const QString problem = boxTextsProblem(item);
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
         }
-        // Every knob's name and widest value fit its cell: its caption and readout never elide (the readout
-        // showing its widest value, too).
+        // Each column as wide as its boxes' texts need and its caption (on every page), and no wider: the band
+        // column as its crossover box, or its buttons (a band's name, and its solo, 2 px apart) if they need more.
+        auto widthOf = [&](const QString& name) { return find(s.view, name)->width(); };
+        const QVariant captionFont = find(s.view, QStringLiteral("inCaption"))->property("font");
+        auto captionsNeed = [&](const QStringList& texts) { return std::ceil(widestOf(texts, captionFont)); };
+        const double levelsNeed = std::max(boxesNeed(items(levelBoxes)),
+                                           captionsNeed({QStringLiteral("Input"), QStringLiteral("Output")}));
+        const double fieldsNeed = std::max(boxesNeed(items(fieldBoxes)),
+                                           captionsNeed({QStringLiteral("Above"), QStringLiteral("Below"),
+                                                         QStringLiteral("Attack")}));
+        const double fields2Need = std::max(boxesNeed(items(field2Boxes)),
+                                            captionsNeed({QStringLiteral("Ratio"), QStringLiteral("Release")}));
+        for (const QString& name : levelBoxes)
+            QCOMPARE(widthOf(name), levelsNeed);
+        for (const QString& name : fieldBoxes)
+            QCOMPARE(widthOf(name), fieldsNeed);
+        for (const QString& name : field2Boxes)
+            QCOMPARE(widthOf(name), fields2Need);
+        double buttonsNeed = 0.0;
+        for (const char* name : {"highActive", "midActive", "lowActive"})
+            buttonsNeed = std::max(buttonsNeed, find(s.view, QString::fromLatin1(name))->implicitWidth());
+        QCOMPARE(right("highSolo") - left("highActive"),
+                 std::max(16 + boxesNeed(items(crossovers)), std::ceil(buttonsNeed) + 2 + 18));
+        // Every knob's caption and every text its readout takes fit its cell (and the cell is sized by those
+        // texts, all of them), as a Text lays them out; each cell as wide as they need (the device's three at
+        // least EditorKnob's 52 px), and no wider.
         for (const char* name : {"amount", "time", "output", "scGain", "scMix"}) {
-            QQuickItem* cell = find(s.view, QString::fromLatin1(name));
-            const QList<QQuickItem*> children = cell->childItems();
-            QQuickItem* caption = children.first();
-            QQuickItem* readout = children.last();
-            const QFont font = qvariant_cast<QFont>(readout->property("font"));
-            const Widest widest = widestText(paramOf(cell), font, true);
-            const QString where = QStringLiteral("%1: \"%2\" (%3 px) in %4 px")
-                                      .arg(QString::fromLatin1(name), widest.text)
-                                      .arg(widest.width)
-                                      .arg(readout->width());
-            QVERIFY2(widest.width <= readout->width(), qPrintable(where));
-            editor()->setDeviceParam(s.track, s.device, paramOf(cell)->paramId(), widest.value);
-            QTRY_COMPARE(readout->property("text").toString(), widest.text);
-            QVERIFY2(!readout->property("truncated").toBool() && readout->implicitWidth() <= readout->width(),
-                     qPrintable(where));
-            QVERIFY2(caption->implicitWidth() <= caption->width(), name);
+            const QString problem = knobTextsProblem(find(s.view, QString::fromLatin1(name)));
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
         }
-        while (undo()->canUndo())  // (the knobs as they were, nothing to undo)
-            undo()->undo();
-        undo()->clear();
+        const QStringList knobs = {QStringLiteral("amount"), QStringLiteral("time"), QStringLiteral("output")};
+        const QStringList scKnobs = {QStringLiteral("scGain"), QStringLiteral("scMix")};
+        for (const QString& name : knobs)
+            QCOMPARE(widthOf(name), std::max(52.0, std::ceil(knobsNeed(items(knobs)))));
+        for (const QString& name : scKnobs)
+            QCOMPARE(widthOf(name), std::ceil(knobsNeed(items(scKnobs))));
         // Every button's text fits within its padding.
         for (const char* name : {"highActive", "midActive", "lowActive", "highSolo", "midSolo", "lowSolo", "highOn",
                                  "lowOn", "pageTime", "pageBelow", "pageAbove", "softKnee", "modePeak", "modeRms",

@@ -35,6 +35,8 @@
 
 #include <QCursor>
 #include <QDir>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
 #include <QMouseEvent>
@@ -50,6 +52,7 @@
 #include <QWheelEvent>
 #include <QtDebug>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -80,6 +83,12 @@ Window {
     function eqWindow(trackId, deviceId) {
         return EqWindows.windowOf(trackId, deviceId)
     }
+    // How wide `text` is in `font` as a Text lays it out.
+    function textWidth(text, font) {
+        textProbe.font = font
+        textProbe.text = text
+        return textProbe.implicitWidth
+    }
     // A parameter's cell, as the device view shows those of devices without an editor.
     function showKnob(trackId, deviceId, paramId) {
         loader.sourceComponent = knob
@@ -90,6 +99,11 @@ Window {
         return loader.item
     }
 
+    Text {
+        id: textProbe
+        visible: false
+        textFormat: Text.PlainText
+    }
     Component {
         id: knob
         DeviceParamKnob {
@@ -295,6 +309,135 @@ protected:
         QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("device-editors-") + name)));
     }
 
+    // --- Texts -----------------------------------------------------------------------------
+
+    // How wide `text` is in `font` (an item's "font" property) as a Text lays it out (a caption, a readout, a
+    // button's or a list's name): what that Text needs to show it whole. (QFontMetricsF can be a pixel off it,
+    // where the font is hinted or kerned.)
+    double textWidth(const QString& text, const QVariant& font) const {
+        QVariant width;
+        QMetaObject::invokeMethod(root_.get(), "textWidth", Q_RETURN_ARG(QVariant, width), Q_ARG(QVariant, text),
+                                  Q_ARG(QVariant, font));
+        return width.toDouble();
+    }
+
+    // The widest of `texts` in `font`, as textWidth() measures them, a "#" in them as the font's widest figure
+    // (by the same measure).
+    double widestOf(const QStringList& texts, const QVariant& font) const {
+        QString widestFigure = QStringLiteral("0");
+        for (char figure = '1'; figure <= '9'; ++figure) {
+            if (textWidth(QString(QLatin1Char(figure)), font) > textWidth(widestFigure, font))
+                widestFigure = QString(QLatin1Char(figure));
+        }
+        double widest = 0.0;
+        for (QString text : texts)
+            widest = std::max(widest, textWidth(text.replace(QLatin1Char('#'), widestFigure), font));
+        return widest;
+    }
+
+    // A text's form, as EditorKnob's texts() gives it: each number's figures after its first as "#".
+    static QString formOf(QString text) {
+        bool inNumber = false;
+        for (QChar& c : text) {
+            if (c.isDigit()) {
+                if (inNumber)
+                    c = QLatin1Char('#');
+                inNumber = true;
+            } else if (c != QLatin1Char('.')) {
+                inNumber = false;
+            }
+        }
+        return text;
+    }
+
+    // Every text an EditorKnob's readout shows across its knob's range (its parameter's, or its formatter's): at
+    // `points` across it (in its own scale), and just under each power of ten in it, where a value rounds up to a
+    // longer text ("1000 ms").
+    QStringList readoutTexts(QQuickItem* cell, int points = 1000) const {
+        auto* param = cell->property("param").value<QObject*>();
+        if (!param)
+            return {};
+        const QJSValue formatter = cell->property("formatter").value<QJSValue>();
+        const double lo = param->property("minimum").toDouble(), hi = param->property("maximum").toDouble();
+        const bool log = param->property("logScale").toBool() && lo > 0;
+        std::vector<double> values;
+        for (int i = 0; i <= points; ++i) {
+            const double t = double(i) / points;
+            values.push_back(log ? lo * std::pow(hi / lo, t) : lo + (hi - lo) * t);
+        }
+        for (int n = -3; n <= 6; ++n) {
+            for (const double power : {std::pow(10.0, n), -std::pow(10.0, n)}) {
+                if (const double under = power * (1 - 1e-9); under > lo && under < hi)
+                    values.push_back(under);
+            }
+        }
+        QStringList texts;
+        for (double value : values) {
+            if (param->property("steps").toInt() > 0)
+                value = std::round(value);
+            QString text;
+            if (formatter.isCallable())
+                text = formatter.call({QJSValue(value)}).toString();
+            else
+                QMetaObject::invokeMethod(param, "format", Q_RETURN_ARG(QString, text), Q_ARG(double, value));
+            texts << text;
+        }
+        texts.removeDuplicates();
+        return texts;
+    }
+
+    // How wide these EditorKnobs' cells must be for their captions and every text their readouts show
+    // (readoutTexts(), each number's figures after its first the font's widest), as a Text lays them out.
+    double knobsNeed(const QList<QQuickItem*>& cells) const {
+        double widest = 0.0;
+        for (QQuickItem* cell : cells) {
+            QQuickItem* caption = cell->childItems().first();  // (caption, knob, readout)
+            QQuickItem* readout = cell->childItems().last();
+            QStringList forms;
+            for (const QString& text : readoutTexts(cell))
+                forms << formOf(text);
+            forms.removeDuplicates();
+            widest = std::max({widest, textWidth(caption->property("text").toString(), caption->property("font")),
+                               widestOf(forms, readout->property("font"))});
+        }
+        return widest;
+    }
+
+    // What of an EditorKnob's texts isn't whole (empty if all are), as a Text lays them out in their fonts: its
+    // caption (centred over its knob while shown), every text its readout shows (readoutTexts()), and what its
+    // texts() gives an editor to size its cell by (its caption and the forms of those texts, all and no others).
+    QString knobTextsProblem(QQuickItem* cell) const {
+        const QString name = cell->objectName();
+        const QList<QQuickItem*> parts = cell->childItems();  // (caption, knob, readout)
+        QQuickItem* caption = parts.first();
+        QQuickItem* readout = parts.last();
+        const QString title = caption->property("text").toString();
+        if (caption->property("truncated").toBool() || textWidth(title, caption->property("font")) > caption->width())
+            return QStringLiteral("%1: its caption, in %2 px").arg(name).arg(caption->width());
+        const QRectF knob = parts.at(1)->mapRectToItem(cell, QRectF(0, 0, parts.at(1)->width(), parts.at(1)->height()));
+        if (cell->isVisible() && std::abs(caption->x() + caption->width() / 2 - knob.center().x()) > 0.5)
+            return QStringLiteral("%1: its caption off its knob").arg(name);
+        const QStringList texts = readoutTexts(cell);
+        QStringList forms = {title};
+        for (const QString& text : texts) {
+            if (text.isEmpty() || textWidth(text, readout->property("font")) > readout->width())
+                return QStringLiteral("%1: \"%2\" in %3 px").arg(name, text).arg(readout->width());
+            forms << formOf(text);
+        }
+        forms.removeDuplicates();
+        QVariant given;
+        QMetaObject::invokeMethod(cell, "texts", Q_RETURN_ARG(QVariant, given));
+        if (given.metaType() == QMetaType::fromType<QJSValue>())
+            given = given.value<QJSValue>().toVariant();
+        QStringList sizedBy = given.toStringList();
+        sizedBy.removeDuplicates();
+        forms.sort();
+        sizedBy.sort();
+        if (sizedBy != forms)
+            return QStringLiteral("%1: sized by %2, not %3").arg(name, sizedBy.join(u'|'), forms.join(u'|'));
+        return {};
+    }
+
     // The displays' clock ticked: what the editors read from the engine's displays as the view refreshes.
     void refreshDisplays() { Q_EMIT sub::ui::DisplayClock::instance()->tick(); }
 
@@ -303,6 +446,54 @@ protected:
         const QString path = writeWav(dir_.path(name + QStringLiteral(".wav")), stereo(mono), 2);
         const ClipRefs refs = editor()->addClips(QString(), 0.0, {{path, seconds}});
         return refs.isEmpty() ? QString() : refs.first().trackId;
+    }
+
+    // --- Value boxes -----------------------------------------------------------------------
+
+    // A value box (a ParamBox) draws its text centred by its advance (as QFontMetricsF measures it), from a whole
+    // pixel, and its automation dot from 3.5 to 8.5 px from its left. What of its texts isn't whole or touches the
+    // dot (empty if none): every text it shows (readoutTexts(), by the box's `param` and `formatter`) must start,
+    // its ink too, 10 px in at the least, a pixel clear of the dot.
+    QString boxTextsProblem(QQuickItem* control) const {
+        const QString name = control->objectName();
+        auto* box = qvariant_cast<QQuickItem*>(control->property("box"));
+        if (!box)
+            return QStringLiteral("%1: no box").arg(name);
+        const QFontMetricsF metrics(qvariant_cast<QFont>(box->property("font")));
+        const QStringList texts = readoutTexts(control);
+        if (texts.isEmpty())
+            return QStringLiteral("%1: no texts").arg(name);
+        for (const QString& text : texts) {
+            const double start = std::round((box->width() - metrics.horizontalAdvance(text)) / 2);
+            const double ink = start + std::min(0.0, metrics.boundingRect(text).left());
+            if (text.isEmpty() || ink < 10.0)
+                return QStringLiteral("%1: \"%2\" from %3 px in %4 px").arg(name, text).arg(ink).arg(box->width());
+        }
+        return {};
+    }
+
+    // How wide these value boxes must be for every text they show (readoutTexts(), each number's figures after its
+    // first the font's widest, by advance) with 9.5 px at either side, and as far again as a text's ink starts left
+    // of its advance: the least that starts every text 10 px in (boxTextsProblem()), as EditorBoxWidth measures.
+    double boxesNeed(const QList<QQuickItem*>& controls) const {
+        double need = 0.0;
+        for (QQuickItem* control : controls) {
+            auto* box = qvariant_cast<QQuickItem*>(control->property("box"));
+            if (!box)
+                return 1e9;
+            const QFontMetricsF metrics(qvariant_cast<QFont>(box->property("font")));
+            QChar widestFigure = QLatin1Char('0');
+            for (char figure = '1'; figure <= '9'; ++figure) {
+                if (metrics.horizontalAdvance(QLatin1Char(figure)) > metrics.horizontalAdvance(widestFigure))
+                    widestFigure = QLatin1Char(figure);
+            }
+            for (const QString& text : readoutTexts(control)) {
+                const QString sample = formOf(text).replace(QLatin1Char('#'), widestFigure);
+                const double inkBefore = std::max(0.0, -metrics.boundingRect(sample).left());
+                need = std::max(need, std::ceil(metrics.horizontalAdvance(sample) + 2 * (inkBefore + 9.5)));
+            }
+        }
+        return need;
     }
 
     // --- Input -----------------------------------------------------------------------------

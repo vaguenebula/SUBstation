@@ -29,6 +29,14 @@ Column {
         }
     }
 
+    // What the cell shows, for an editor to size it by (an EditorTextsWidth measures them): its caption, and every
+    // form its readout's text takes across the knob's range (DeviceParam's textForms(): each number's figures after
+    // its first "#", any figure).
+    function texts() {
+        return cell.param && cell.param.valid ? [cell.title].concat(cell.param.textForms(cell.formatter))
+                                              : [cell.title]
+    }
+
     EditorCaption {
         width: parent.width
         text: cell.title

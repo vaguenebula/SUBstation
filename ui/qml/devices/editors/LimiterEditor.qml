@@ -25,55 +25,18 @@ Item {
     implicitHeight: 6 + Math.max(gainColumn.minimumHeight, releaseColumn.minimumHeight, sideColumn.minimumHeight,
                                  graph.implicitHeight) + 6
 
-    // The 8 pt font of the captions, boxes and readouts, measured.
-    FontMetrics {
-        id: metrics
-        font: Theme.uiFont(8)
-    }
-    // `pattern` written in each figure in turn ("-##.# dB": "-00.0 dB" to "-99.9 dB"): the widest of them is as
-    // wide as any value's text of that form, as a box or a Text lays it out (whichever figure is widest there).
-    function samples(pattern) {
-        return [..."0123456789"].map(figure => pattern.replace(/#/g, figure))
-    }
-    // The widest of `texts` as a box draws them (by advance, centred: FontMetrics, as ValueBoxItem measures).
-    function widest(texts) {
-        return texts.reduce((a, b) => metrics.advanceWidth(b) > metrics.advanceWidth(a) ? b : a)
-    }
-    // How wide `texts` need a caption, a readout or a button's name (a Text) to be, in whole pixels: as a Text
-    // lays them out (a hidden one, a line each, is as wide as the widest of them: a Text lays text out in the
-    // font's design metrics, which can be a pixel off what FontMetrics gives where the font is hinted), or as far
-    // as a glyph reaches past its advance if further.
-    component TextsWidth: Text {
-        id: measured
-        property var texts: []
-        readonly property int needed: Math.ceil(Math.max(implicitWidth, ...texts.map(text => {
-            const ink = inkMetrics.boundingRect(text)
-            return ink.x + ink.width
-        })))
-        visible: false
-        font: Theme.uiFont(8)
-        text: texts.join("\n")
-
-        FontMetrics {
-            id: inkMetrics
-            font: measured.font
-        }
-    }
-
-    // The knobs' columns: 64 px, or wider where a knob's name or widest value (Gain and Output ±24 dB, Release
-    // 0.10 ms to 3.00 s: "0.88 ms", "8.8 ms", "888 ms", "1000 ms" just under a second, "2.22 s") or Maximize's
-    // or Auto's text needs it.
-    TextsWidth {
+    // The knobs' columns: 64 px, or wider where a knob's caption or a text its readout takes (EditorKnob's texts(),
+    // as a Text lays them out: Gain and Output ±24 dB, Release 0.10 ms to 3.00 s) or Maximize's or Auto's text
+    // needs it.
+    EditorTextsWidth {
         id: knobTexts
-        texts: [qsTr("Gain"), qsTr("Output"), qsTr("Release")].concat(
-                   editor.samples("-2#.# dB"), editor.samples("0.## ms"), editor.samples("#.# ms"),
-                   editor.samples("### ms"), ["1000 ms"], editor.samples("#.## s"))
+        knobs: [gain, outputKnob, release]
     }
     readonly property int knobWidth: Math.ceil(Math.max(64, maximize.implicitWidth, autoRelease.implicitWidth,
                                                         knobTexts.needed))
     // The right column: 96 px, or wider where its captions, a list's longest name with its arrow, the Routing
     // buttons or Link's caption and box need it.
-    TextsWidth {
+    EditorTextsWidth {
         id: sideCaptions
         texts: [qsTr("Lookahead"), qsTr("Mode")]
     }
@@ -120,6 +83,7 @@ Item {
                 enabled: !editor.maximizeOn  // (its opacity is set here, so it doesn't dim)
             }
             EditorKnob {
+                id: outputKnob
                 objectName: "output"
                 width: parent.width
                 param: p.get("output")
@@ -165,11 +129,16 @@ Item {
     }
 
     // The line's value, in the display's header (over it, so declared after it). The caption is as
-    // wide as the wider of its two names (and 4 px), so the box stays put when Maximize swaps them.
-    TextsWidth {
+    // wide as the wider of its two names (and 4 px), so the box stays put when Maximize swaps them; the
+    // box as wide as the Ceiling's and the Threshold's texts need with the automation dot clear of them.
+    EditorTextsWidth {
         id: lineNames
         font: lineCaption.font
         texts: [qsTr("Ceiling"), qsTr("Threshold")]
+    }
+    EditorBoxWidth {
+        id: lineTexts
+        params: [p.get("ceiling"), p.get("threshold")]
     }
     EditorCaption {
         id: lineCaption
@@ -187,14 +156,12 @@ Item {
         objectName: "lineBox"
         x: lineCaption.x + lineCaption.width + 2
         y: graph.y + 2
-        // (its widest text, + 16, and 4 more: the automation dot, 3.5 to 8.5 px from the left, clears a
-        // centred minus sign)
-        width: implicitWidth + 4
+        width: lineTexts.needed
         param: editor.maximizeOn ? p.get("threshold") : p.get("ceiling")
         step: 0.1
         decimals: 1
         defaultValue: param ? param.defaultValue : undefined
-        sampleText: editor.widest(editor.samples("-2#.# dB"))  // (the Ceiling and the Threshold: -24 to 0 dB)
+        sampleText: lineTexts.sample
         formatter: v => param ? param.format(v) : ""
         parser: text => param ? param.parse(text) : null
         tooltip: editor.maximizeOn
@@ -329,12 +296,12 @@ Item {
             ParamBox {
                 id: linkBox
                 objectName: "link"
-                width: implicitWidth + 4  // (as the line's box)
+                width: linkTexts.needed
                 param: p.get("link")
                 step: 1
                 decimals: 0
                 defaultValue: param ? param.defaultValue : undefined
-                sampleText: editor.widest(["100 %"].concat(editor.samples("## %")))  // (0 to 100 %)
+                sampleText: linkTexts.sample
                 formatter: v => param ? param.format(v) : ""
                 parser: text => param ? param.parse(text) : null
                 tooltip: qsTr("Link: how much of one channel's gain reduction the other shares (100 %: both alike, "
@@ -342,13 +309,17 @@ Item {
             }
         }
     }
-    // The lists' names, in their font.
-    TextsWidth {
+    // Link's texts (0 to 100 %), as its box draws them; the lists' names, in their font.
+    EditorBoxWidth {
+        id: linkTexts
+        params: [p.get("link")]
+    }
+    EditorTextsWidth {
         id: lookaheadNames
         font: lookahead.button.font
         texts: lookahead.names
     }
-    TextsWidth {
+    EditorTextsWidth {
         id: modeNames
         font: mode.button.font
         texts: mode.names
