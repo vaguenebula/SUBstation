@@ -929,9 +929,9 @@ private Q_SLOTS:
         QCOMPARE(s.filter->glow(), 0.0);
         // And it stays at rest: no tick asks for a repaint again (none at all, the display clock's own between
         // these too: a tick that moves anything says so).
-        const QSignalSpy decayTicks(s.decay, &ReverbDecayGraph::levelsChanged);
-        const QSignalSpy filterTicks(pad, &ReverbFilterPad::levelsChanged);
-        const QSignalSpy spinTicks(s.spin, &ReverbSpinPad::levelsChanged);
+        QSignalSpy decayTicks(s.decay, &ReverbDecayGraph::levelsChanged);
+        QSignalSpy filterTicks(pad, &ReverbFilterPad::levelsChanged);
+        QSignalSpy spinTicks(s.spin, &ReverbSpinPad::levelsChanged);
         refreshes(25);
         QVERIFY2(decayTicks.isEmpty() && filterTicks.isEmpty() && spinTicks.isEmpty(),
                  qPrintable(QStringLiteral("decay %1 filter %2 spin %3")
