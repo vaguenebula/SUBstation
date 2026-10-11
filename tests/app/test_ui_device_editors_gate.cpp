@@ -294,8 +294,8 @@ private Q_SLOTS:
         QCOMPARE(inCaption.center().x(), display->inMeter().center().x());
         if (gateCaption.right() < display->width() - 3 - 1e-9)
             QCOMPARE(gateCaption.center().x(), display->gateMeter().center().x());
-        else
-            QVERIFY(gateCaption.center().x() < display->gateMeter().center().x());
+        else  // held off the edge: left of its meter's centre, or on it when the clamp lands there exactly
+            QVERIFY(gateCaption.center().x() <= display->gateMeter().center().x() + 1e-9);
         const double apart = gateCaption.left() - inCaption.right();
         QVERIFY2(apart >= 2 * space + 1 - 1e-9,
                  qPrintable(QStringLiteral("%1 px apart, a space %2").arg(apart).arg(space)));

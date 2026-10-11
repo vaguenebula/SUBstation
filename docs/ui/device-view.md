@@ -608,8 +608,9 @@ The editors:
   Stereo Link over Dry/Wet, Output and the Delta button); the knobs in cells as wide as their widest caption or
   readout ("Stereo Link"; every readout's widest form, "-#.# dB/oct", each "#" the font's widest figure, measured by a
   hidden `Text`, so a last glyph's overhang counts), 64 px at least; the Focus column as wide as its widest value (the
-  widest of its forms with the font's widest figures, measured with a `FontMetrics`, the font's hinted advances, as the box draws it: "20.00 kHz" in Inter) with 11 px
-  either side, 2 px clear of the automation dot, or as its captions, and Delta as its text; and between them a
+  widest of its forms with the font's widest figures, measured with a `FontMetrics`: the font's hinted advances, as
+  the box draws it; "20.00 kHz" in Inter) with 11 px either side, 2 px clear of the automation dot, or as its
+  captions, and Delta as its text; and between them a
   [SpectralGraph](../../ui/src/devices/SpectralGraph.h) (376 px, its own implicit width), the sections parted by
   `EditorDivider`s. It is 936 px under the default font (938 in DejaVu Sans). Tilt and Output are bipolar (symmetric
   about 0); Below is dimmed (0.55, still settable) while Upward is 1:1, when it does nothing.
