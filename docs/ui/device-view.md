@@ -170,7 +170,7 @@ The device view's clipboard is its own: the arrangement's clips, automation and 
 
 [DeviceFrame.qml](../../ui/qml/devices/DeviceFrame.qml) is what every device shares, with `DeviceInfo` (what the frame
 shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Left/Right, a plug-in's loading state
-and editor, its sidechain) reading the project again whenever that may have changed:
+and editor, its sidechain, its MIDI input) reading the project again whenever that may have changed:
 
 - **Frame**: `Theme::panelAlt()` in a 1 px line of its title bar's colour, 3 px corners. Its width is `DEVICE_WIDTH` (216 px),
   a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
@@ -179,8 +179,8 @@ and editor, its sidechain) reading the project again whenever that may have chan
   `DeviceInfo::setEnabled`, overriding the switch's automation while it plays; following that automation, with the
   automation dot: `enabled`, `enabledAutomation`; right-click: Show, Delete and Re-Enable Automation), the name
   (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
-  and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the sidechain button (a
-  device with a sidechain input), the page arrows and "n/m" (only with more than one page), or, for an editor that
+  and latency), a plug-in's editor button (`plugin_window` icon, lit while its editor shows), the MIDI From button
+  (a device that plays notes), the sidechain button (a device with a sidechain input), the page arrows and "n/m" (only with more than one page), or, for an editor that
   names its pages (`pageNames`: the Sampler's *Sample* and *Controls*, as Simpler's), a tab per page instead
   (`pageTab_<name>`, lit while it shows), the save button.
 - **Body**: a `Loader` taking all the height there is: a rack's `RackDeviceBody`, a plug-in's `PluginDeviceBody`,
@@ -210,6 +210,16 @@ and editor, its sidechain) reading the project again whenever that may have chan
   Post Mixer; devices with the same name in a chain are numbered). `tapOf()` shows a tap after a device that left the
   source as Post FX, and after its instrument as Pre FX, as the engine treats them. Choosing calls `editor.trySetDeviceSidechain`, which reports a refusal (the
   source went meanwhile) as a status message. Engine side: [engine/routing.md](../engine/routing.md).
+- **MIDI From** (`midiFromButton`, the `note` icon): the button exists when the device plays notes
+  (`DeviceInfo.acceptsMidi`, from `bridge.acceptsMidi(track, device)`: an instrument, or an effect with a MIDI input,
+  as a vocoder or a pitch corrector has; not while a plug-in isn't loaded). It is lit while the device takes another
+  track's notes (`midiFromOn`), its tooltip naming that track ("MIDI From: Keys (it plays that track's notes)", or
+  "MIDI From: its own track (click to take another track's notes)"). Its menu (`DevicePanel.showMidiFromMenu`, from
+  `DeviceInfo::midiFromMenu()`) is *Own Track*, then the MIDI tracks whose notes it could take
+  (`Project::midiSources`: every MIDI track but its own) under a search field that has the keyboard as it opens.
+  Choosing calls `DeviceInfo::setMidiFrom` → `editor.trySetDeviceMidiFrom` (one undo step). The tooltip follows the
+  source's renames. Model and engine sides: [app/model.md](../app/model.md#devices-racks-chains),
+  [engine/midi.md](../engine/midi.md#a-devices-midi-input-from-another-track).
 
 ### Built-in devices
 
@@ -1226,6 +1236,7 @@ The editors:
 | [test_ui_device_panel_presets.cpp](../../tests/app/test_ui_device_panel_presets.cpp) | The save button on every kind of device (asking before replacing), a rack taking the preset's name, presets dropped between devices and onto a device of their kind (outlined; one undo step) or of another, default presets |
 | [test_ui_device_panel_racks.cpp](../../tests/app/test_ui_device_panel_racks.cpp) | Ctrl+G and Ctrl+Shift+G, macros and chains, the chain list and the chain's devices shown when asked for, the chain clicked shown beside the rack and dropped into, chain mixers, macros added and taken away, renamed in place, automated, mapping to a macro, its ranges and unmapping, Ctrl+R on a chain (its list hidden too), a chain's menu, the view's height staying put |
 | [test_ui_device_panel_sidechain.cpp](../../tests/app/test_ui_device_panel_sidechain.cpp) | The sidechain button and its menu: sources, cycles greyed out, taps (after devices in racks too) |
+| [test_ui_device_panel_midi_from.cpp](../../tests/app/test_ui_device_panel_midi_from.cpp) | The MIDI From button (on an instrument and an effect with a MIDI input, not on one without), its tooltip (following its source's name) and menu, choosing a track and its own again, undo, its source deleted |
 | [test_ui_device_editors.cpp](../../tests/app/test_ui_device_editors.cpp) | The registry (every kind with an editor, and the generic knobs for the others); the Compressor's, Delay's, Disperser's, EQ's, Sidechain's and Sampler's editors, each loaded as the view loads it, driven with the mouse and keys, the project and (rendering offline) the engine checked; what the editors share (SgPainter's additions, the animation helpers, `EditorKnob` and `DeviceParamMap`); the parameter cell and its menu. Its host, and every editor test's, is [support/EditorHarness.h](../../tests/app/support/EditorHarness.h) |
 | [test_ui_device_editors_gate.cpp](../../tests/app/test_ui_device_editors_gate.cpp) | The Gate's editor: fitting the body in any font (the display at its own width; the knobs in equal cells and the column beside them, each as wide as its texts need as a Text lays them out in their font, and no wider; every caption and every text a readout takes whole, and the knobs' `texts()` every form of those), every control bound and undoable (the lookahead reaching the engine's latency; the list as wide as its longest choice; only the key EQ's Gain bipolar; the In meter's panel-grey well); the threshold and return lines' drags (relative, Shift, double-click, also of a line still easing, where it is drawn; one step each; either taken when they are one), their right-click menus, the meters not a control, their captions centred over them and apart by two of their font's word spaces and a pixel (as drawn too: the caption row blank for two word spaces between "In" and "Gate"); the displays reaching the graph (its rings holding all the plot draws, at any rate up to 384 kHz), its scrolling and rest, going idle, silence and a steady tone drawing nothing, listening while idle drawing nothing; the key dot's colour following the key's level now and the dot falling below the line within a few ticks, the passing shade showing over the levels; the sidechain section (fold, the type buttons' EQ faces, what is dimmed but settable and what is disabled, the source button naming itself for the menu, renames, every cell's texts whole and its width theirs, the source and EQ buttons as wide as their names need, the buttons along its top and the types at its right edge); the key curve being the engine's filter, its dot following the mouse, Ctrl and the wheel for the bell's Q |
 | [test_ui_device_editors_limiter.cpp](../../tests/app/test_ui_device_editors_limiter.cpp) | The Limiter's editor: fitting the view; whatever the font, its columns side by side, each as wide as its texts need and no wider (the boxes every text they show with the automation dot a pixel clear of it, the knobs' captions and every text their readouts take as a Text lays them out, and their `texts()` all of those, every button and caption, the line's caption both its names, the lists their longest name with the arrow), the editor as wide as they are; every control bound to its parameter and undoable (Gain bipolar; Release dimmed while Auto is on and still settable; the lookahead reaching the engine's latency; Maximize swapping Gain for Output and the line for the Threshold, a press mid-crossfade turning the knob coming in), the line dragged (one undo step, Shift finely, held to the parameter's range, double-click for the default, presses elsewhere ignored), the hover following the line as it moves, opening as the device is (nothing animating in), the displays reaching the graph (levels, gain reduction, Soft Clip's share in both figures and in the line's glow; with Maximize, the history's output in the line's domain and the Out meter in dBFS), the footer's figures, long ones too, each as wide as its text, apart and inside the graph, and the badges clear of the line's box (`figuresKeepApart`), its animation and its rest, the maths shared with the engine |

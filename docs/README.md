@@ -20,10 +20,10 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 |---|---|
 | [Arrangement](guide/arrangement.md) | timeline, clips, selection, tracks and their headers, groups, folding, the master |
 | [Mixing](guide/mixing.md) | solo and mute, return tracks and sends, sidechains, delay compensation |
-| [Devices](guide/devices.md) | the device view, built-in devices, racks, macros and presets |
+| [Devices](guide/devices.md) | the device view, built-in devices, racks, macros and presets, MIDI from another track |
 | [Plug-ins](guide/plugins.md) | VST3: finding, using, editors, presets, latency |
 | [Audio clips](guide/audio-clips.md) | the clip view, warping, transposing, tempo and key from file names |
-| [MIDI](guide/midi.md) | MIDI clips, the piano roll, MIDI input, the computer MIDI keyboard |
+| [MIDI](guide/midi.md) | MIDI clips, the piano roll, pitch bends and vibrato, MIDI input (MIDI 2.0 too), the computer MIDI keyboard |
 | [Recording](guide/recording.md) | arming, inputs, monitoring, count-in, takes, resampling |
 | [Automation](guide/automation.md) | lanes, editing envelopes, locking, overrides |
 | [Browser](guide/browser.md) | places, search, preview, ranking, finding similar sounds |
@@ -48,7 +48,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 | [Scheduler](engine/scheduler.md) | rendering the graph on several threads, deterministically |
 | [Audio devices](engine/audio-devices.md) | WASAPI and ASIO backends, driver events |
 | [Recording](engine/recording.md) | the recorder, take placement, input monitoring, resampling |
-| [MIDI](engine/midi.md) | MIDI playback and MIDI input |
+| [MIDI](engine/midi.md) | MIDI playback, per-note pitch bends (MIDI 2.0), MIDI input, devices taking another track's notes |
 | [Automation](engine/automation.md) | envelopes, normalized parameters, sample-accurate playback |
 | [Warping and sources](engine/warp.md) | time stretching, Re-Pitch, decoding, peaks |
 | [Devices](engine/devices.md) | the `Processor` interface and the built-in devices; adding one |
@@ -76,7 +76,7 @@ How SUBstation behaves, feature by feature: [guide/](guide/README.md).
 |---|---|
 | [UI overview](ui/README.md) | the main window, transport bar, dialogs, controls, the scene-graph painter, theme |
 | [Arrangement view](ui/arrangement.md) | ruler, lanes, headers, automation lanes |
-| [Piano roll](ui/piano-roll.md) | the piano roll: notes, keys, velocity lane, note tools |
+| [Piano roll](ui/piano-roll.md) | the piano roll: notes, keys, velocity lane, note tools, bend mode and vibrato |
 | [Device view](ui/device-view.md) | the device panel, racks, built-in devices' editors, the clip view |
 
 ### Platform

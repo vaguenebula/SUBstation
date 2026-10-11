@@ -1,17 +1,23 @@
-// SUBstation's test plug-ins: four tiny VST3 plug-ins whose output the tests
+// SUBstation's test plug-ins: five tiny VST3 plug-ins whose output the tests
 // can predict exactly. They cover the host's code paths rather than sounding
 // good:
 //
 //  * SUB Test Synth (instrument): a processor with a separate edit controller.
 //    Each held note adds velocity/127 (DC) or a sine at the note's pitch, times
-//    Gain. It reports the transport it was given in read-only parameters, and
-//    has ten Macro parameters that only its controller keeps (in its own state).
+//    Gain; a note expression "tuning" for a note (by its id) bends its sine.
+//    As a synth that reuses its voices can (Serum 2 appears to), a new note keeps
+//    the tuning of the last note to end until a tuning of its own comes. It
+//    reports the transport it was given in read-only parameters, and has ten
+//    Macro parameters that only its controller keeps (in its own state).
 //  * SUB Test Effect: a single-component effect (processor and controller in one
 //    object, like most JUCE plug-ins). Gain, a Latency parameter that delays the
 //    audio and reports it, a bypass parameter, state, and a Win32 editor that
 //    can resize itself and edit a parameter on request (on Windows; elsewhere
 //    it has no editor).
 //  * SUB Test Mono: mono in, mono out, no edit controller.
+//  * SUB Test Note Effect: an effect with an event input (as a vocoder or a
+//    pitch corrector has), no edit controller: its output is its input plus,
+//    for each held note, velocity/127 (DC).
 //  * SUB Test Sidechain: a single-component effect with a sidechain (a stereo
 //    aux input, inactive until the host activates it): its output is its input
 //    plus its sidechain, and a read-only parameter, Key Silent, says whether the
@@ -37,6 +43,7 @@
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivstnoteexpression.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/main/pluginfactory.h"
@@ -89,6 +96,7 @@ public:
 
     tresult PLUGIN_API setActive(TBool state) override {
         notes_.clear();
+        lastTuning_ = 0.0;
         return AudioEffect::setActive(state);
     }
 
@@ -125,11 +133,24 @@ public:
             position = until;
             if (e == numEvents) break;
             if (event.type == Event::kNoteOnEvent && event.noteOn.velocity > 0.f) {
-                notes_.push_back({event.noteOn.pitch, event.noteOn.velocity, 0.0});
+                notes_.push_back({event.noteOn.pitch, event.noteOn.velocity, 0.0, event.noteOn.noteId, lastTuning_});
             } else if (event.type == Event::kNoteOnEvent || event.type == Event::kNoteOffEvent) {
                 const int16 pitch = event.type == Event::kNoteOnEvent ? event.noteOn.pitch : event.noteOff.pitch;
-                auto it = std::find_if(notes_.begin(), notes_.end(), [pitch](const Note& n) { return n.pitch == pitch; });
-                if (it != notes_.end()) notes_.erase(it);
+                const int32 id = event.type == Event::kNoteOffEvent ? event.noteOff.noteId : -1;
+                auto it = std::find_if(notes_.begin(), notes_.end(), [&](const Note& n) {
+                    return id >= 0 ? n.noteId == id : n.pitch == pitch;
+                });
+                if (it != notes_.end()) {
+                    lastTuning_ = it->tuning;  // (what its voice is left with)
+                    notes_.erase(it);
+                }
+            } else if (event.type == Event::kNoteExpressionValueEvent &&
+                       event.noteExpressionValue.typeId == kTuningTypeID) {
+                for (Note& note : notes_) {
+                    if (note.noteId == event.noteExpressionValue.noteId) {
+                        note.tuning = 240.0 * (event.noteExpressionValue.value - 0.5);  // semitones
+                    }
+                }
             }
         }
         out.silenceFlags = notes_.empty() ? ((uint64(1) << out.numChannels) - 1) : 0;
@@ -158,6 +179,8 @@ private:
         int16 pitch;
         float velocity;
         double phase;
+        int32 noteId;
+        double tuning;  // semitones (its note expression)
     };
 
     void render(AudioBusBuffers& out, int32 from, int32 to) {
@@ -166,7 +189,7 @@ private:
             for (Note& note : notes_) {
                 if (sine_) {
                     sample += note.velocity * std::sin(2.0 * kPi * note.phase);
-                    note.phase += 440.0 * std::pow(2.0, (note.pitch - 69) / 12.0) / sampleRate_;
+                    note.phase += 440.0 * std::pow(2.0, (note.pitch + note.tuning - 69) / 12.0) / sampleRate_;
                     note.phase -= std::floor(note.phase);
                 } else {
                     sample += note.velocity;
@@ -177,6 +200,7 @@ private:
     }
 
     std::vector<Note> notes_;
+    double lastTuning_ = 0.0;  // the tuning of the last note to end, which the next one starts with
     double sampleRate_ = 48000.0;
     double gain_ = 1.0;
     bool sine_ = true;
@@ -271,6 +295,65 @@ public:
     }
 };
 
+// ---------------------------------------------------------------------------
+// SUB Test Note Effect
+
+class NoteEffect : public AudioEffect {
+public:
+    static FUnknown* createInstance(void*) { return static_cast<IAudioProcessor*>(new NoteEffect); }
+
+    tresult PLUGIN_API initialize(FUnknown* context) override {
+        const tresult result = AudioEffect::initialize(context);
+        if (result != kResultOk) return result;
+        addAudioInput(STR16("Input"), SpeakerArr::kStereo);
+        addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+        addEventInput(STR16("Notes"), 16);
+        return kResultOk;
+    }
+
+    tresult PLUGIN_API setActive(TBool state) override {
+        held_.clear();
+        return AudioEffect::setActive(state);
+    }
+
+    tresult PLUGIN_API process(ProcessData& data) override {
+        if (data.numInputs < 1 || data.numOutputs < 1 || data.numSamples <= 0) return kResultOk;
+        AudioBusBuffers& in = data.inputs[0];
+        AudioBusBuffers& out = data.outputs[0];
+        int32 position = 0;
+        IEventList* events = data.inputEvents;
+        const int32 numEvents = events ? events->getEventCount() : 0;
+        for (int32 e = 0; e <= numEvents; ++e) {
+            Event event{};
+            int32 until = data.numSamples;
+            if (e < numEvents) {
+                if (events->getEvent(e, event) != kResultOk) continue;
+                until = std::clamp(event.sampleOffset, position, data.numSamples);
+            }
+            double level = 0.0;
+            for (const auto& [pitch, velocity] : held_) level += velocity;
+            for (int32 c = 0; c < out.numChannels; ++c) {
+                const float* from = in.channelBuffers32[std::min(c, in.numChannels - 1)];
+                for (int32 i = position; i < until; ++i) out.channelBuffers32[c][i] = from[i] + static_cast<float>(level);
+            }
+            position = until;
+            if (e == numEvents) break;
+            if (event.type == Event::kNoteOnEvent && event.noteOn.velocity > 0.f) {
+                held_.push_back({event.noteOn.pitch, event.noteOn.velocity});
+            } else if (event.type == Event::kNoteOnEvent || event.type == Event::kNoteOffEvent) {
+                const int16 pitch = event.type == Event::kNoteOnEvent ? event.noteOn.pitch : event.noteOff.pitch;
+                auto it = std::find_if(held_.begin(), held_.end(), [pitch](const auto& n) { return n.first == pitch; });
+                if (it != held_.end()) held_.erase(it);
+            }
+        }
+        out.silenceFlags = 0;
+        return kResultOk;
+    }
+
+private:
+    std::vector<std::pair<int16, float>> held_;  // (pitch, velocity)
+};
+
 }  // namespace sub_test
 
 // ---------------------------------------------------------------------------
@@ -327,5 +410,9 @@ DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kMonoUID), PClassInfo::kManyInstances,
 
 DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kSidechainUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
            "SUB Test Sidechain", 0, "Fx|Dynamics", "1.0.0", kVstVersionString, sub_test::createTestSidechain)
+
+DEF_CLASS2(INLINE_UID_FROM_FUID(sub_test::kNoteEffectUID), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "SUB Test Note Effect", Vst::kDistributable, "Fx|Pitch Shift", "1.0.0", kVstVersionString,
+           sub_test::NoteEffect::createInstance)
 
 END_FACTORY

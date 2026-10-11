@@ -104,8 +104,12 @@ std::vector<RecordedTake> EngineBridge::stopRecording() {
         recorded.durationSec = static_cast<double>(take.frames) / rate;
         recorded.midi = take.midi;
         for (const sub::RecordedNote& note : take.notes) {
-            recorded.notes.push_back({static_cast<double>(note.start) / rate, static_cast<double>(note.end) / rate,
-                                      note.key, note.velocity});
+            RecordedTakeNote played{static_cast<double>(note.start) / rate, static_cast<double>(note.end) / rate,
+                                    note.key, note.velocity, {}};
+            for (const sub::RecordedBend& bend : note.bend) {
+                played.bend.emplace_back(static_cast<double>(bend.time) / rate, static_cast<double>(bend.semitones));
+            }
+            recorded.notes.push_back(std::move(played));
         }
         takes.push_back(std::move(recorded));
     }

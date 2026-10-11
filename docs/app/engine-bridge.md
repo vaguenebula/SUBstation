@@ -42,7 +42,7 @@ preferences ([AudioSettings.h](../../app/src/audio/AudioSettings.h)) and where t
   and queues (see [architecture.md](../architecture.md#real-time-rules-and-the-boundary-with-the-audio-thread) and
   [engine/README.md](../engine/README.md)).
 - The bridge only pushes what changed: it keeps the last value it gave the engine for mixers, inputs, outputs, sends,
-  sidechains, device on/off and rack chain mixers, and compares before calling.
+  sidechains, MIDI inputs, device on/off and rack chain mixers, and compares before calling.
 - Its slots never let an exception reach Qt: each runs inside `guarded()`, which logs what was thrown
   (`qWarning`) and goes on.
 
@@ -172,8 +172,8 @@ too, and loaded) and `engineChainId(chain)` (a rack chain's engine chain) give t
   what goes into an audio track as that track's input (`setTrackInMonitored`: Ableton's Track In); groups and returns
   are buses. Changed routes go to the master first, then where they go, so that no step closes a cycle (a group
   moving into what was in it); one the engine refuses for now comes with the change in its way. `pushRoutes` pushes
-  outputs, inputs and sidechains, in that order: after rearranging, a track's change, and device syncs (a device's
-  processor is new, or an instrument a Pre FX tap is taken after).
+  outputs, inputs, sidechains and devices' MIDI inputs, in that order: after rearranging, a track's change, and
+  device syncs (a device's processor is new, or an instrument a Pre FX tap is taken after).
 - **Returns and sends**: a track's sends are engine sends into the returns' engine tracks, at the send's gain, before
   or after the fader. `pushSends` removes the sends going away first, then sets the others; one the engine refuses (a
   cycle with a send another track hasn't given up yet) is skipped and comes with that track's turn. A send automated
@@ -195,7 +195,10 @@ too, and loaded) and `engineChainId(chain)` (a rack chain's engine chain) give t
   semitones. Every clip's file is requested for decoding first. A deactivated clip (`Clip::muted`) isn't among them
   (`clipDescs()`), but its file is decoded all the same (its waveform shows).
 - MIDI tracks: the track's clips are flattened into the notes they play (`Clip::heardNotes()` in timeline beats: none
-  of a deactivated clip, nor deactivated notes) and set with `setTrackNotes`. See [engine/midi.md](../engine/midi.md).
+  of a deactivated clip, nor deactivated notes) and set with `setTrackNotes`, each as `noteDesc()` makes it
+  ([EngineDescs.h](../../app/src/audio/EngineDescs.h)): with its bend (points and vibratos, MIDI 2.0's per-note pitch
+  bend) as the model has it, in beats from the note's start, the vibratos' rates in cycles a second. See
+  [engine/midi.md](../engine/midi.md).
 - A frozen track plays its frozen audio instead, as clips into the render: its segments (`Freeze::playing()`: all of
   it from beat 0 until a time selection over it is edited, then what the edits left, where they put it; see
   [model.md](model.md#freezing)); a MIDI track's notes go. Segments changing come as `clipsChanged` of the frozen
@@ -293,6 +296,17 @@ None for a device without a sidechain input (`processorInfo(...).hasSidechain`),
 master. Changing ones are cleared first (`clearProcessorSidechain`), then the rest set; one the engine refuses for now
 (a cycle with a route another change hasn't undone yet) comes with that change. `hasSidechainInput(track, device)`
 tells the device view whether to show the button.
+
+### Devices' MIDI inputs
+
+`pushMidiInputs` (after device syncs, outputs, track changes, a track added, a project opened) works out every
+device's MIDI input from another track (`Device::midiFrom`, racks' devices too) as (processor, the source's engine
+track), and sets those that changed with `Engine::setProcessorMidiInput` (0 for those that went: the device takes its
+own track's notes again). Only for a device whose processor plays notes (`processorInfo(...).acceptsMidi`: a plug-in
+that isn't loaded yet gets its input once it is) and a source the engine has. It keeps what it gave the engine in
+`midiInputs`; the engine itself lets go of the inputs from a track it removes, and the bridge forgets them too.
+`acceptsMidi(track, device)` tells the device view whether to show the MIDI From button. See
+[engine/midi.md](../engine/midi.md#a-devices-midi-input-from-another-track).
 
 ### Opening a project
 
@@ -480,8 +494,10 @@ what there is. See [engine/audio-devices.md](../engine/audio-devices.md).
   (the tests use it), else `SUBstation/Recordings` in the user's Music folder.
 - `liveTakes()` holds a `LiveTake` per track while it records, which the arrangement draws.
 - `stopRecording()` ends it (playing goes on), reports takes' errors and dropped samples, and emits
-  `takesRecorded(takes)`: `RecordedTake`s, start and length in seconds, a MIDI take's notes in seconds. The session
-  adds them as clips in one undo step, quantized to `recordQuantize()`, and selects them.
+  `takesRecorded(takes)`: `RecordedTake`s, start and length in seconds, a MIDI take's notes in seconds (with the
+  per-note bends played on each, MIDI 2.0's: `RecordedTakeNote::bend`, seconds from the note's start and semitones).
+  The session adds them as clips in one undo step, quantized to `recordQuantize()`, and selects them; a note's bends
+  become its bend.
 
 See [engine/recording.md](../engine/recording.md) and [guide/recording.md](../guide/recording.md).
 
@@ -578,6 +594,9 @@ same driver next time. Other parts keep their own keys: the session's (recent fi
   are made, undone, moved and deleted; chain automation and overrides; macros moving plug-in parameters, and their
   automation moving what is mapped to them (over its range, overridden, re-enabled); sidechains;
   presets.
+- [test_editor_midi_from.cpp](../../tests/app/test_editor_midi_from.cpp) and
+  [test_note_bends.cpp](../../tests/app/test_note_bends.cpp): an instrument and an effect with a MIDI input playing
+  another track's notes; bent notes playing at their bent pitch, recorded bends.
 - [test_bridge_plugins.cpp](../../tests/app/test_bridge_plugins.cpp): plug-in loading (after a project opens too),
   missing and moved plug-ins, editors, edits for undo, automating plug-in parameters.
 - [test_bridge_freeze.cpp](../../tests/app/test_bridge_freeze.cpp): frozen tracks in the engine (their frozen audio

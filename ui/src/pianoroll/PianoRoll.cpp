@@ -85,6 +85,7 @@ void PianoRoll::setClips(const app::ClipRefs& refs) {
     if (refs != clips_) {
         clips_ = refs;
         selected_.clear();
+        selectedBends_.clear();
         span_.reset();
         pasteBeat_.reset();
         toolsWanted_ = false;
@@ -164,8 +165,16 @@ void PianoRoll::refresh() {
         if (roll::contains(found->second, note.note)) kept.push_back(note);
     }
     selected_ = std::move(kept);
-    if (selected_.size() != count) {
-        span_.reset();
+    // Bend points whose note (or the point) is gone are let go.
+    const size_t bends = selectedBends_.size();
+    std::erase_if(selectedBends_, [&](const BendRef& ref) {
+        const app::Clip* c = clipAt(ref.note.clip);
+        if (!c) return true;
+        const auto found = std::find(c->notes.begin(), c->notes.end(), ref.note.note);
+        return found == c->notes.end() || ref.point < 0 || ref.point >= static_cast<int>(found->bend.size());
+    });
+    if (selected_.size() != count || selectedBends_.size() != bends) {
+        if (selected_.size() != count) span_.reset();
         Q_EMIT selectionChanged();
     }
     fitIfReady();
@@ -336,7 +345,7 @@ void PianoRoll::toggleSelectedActive() {
 // --- Note tools ------------------------------------------------------------------------
 
 void PianoRoll::placeTools() {
-    const bool shown = toolsWanted_ && !(grid_ && grid_->dragging()) && !selected_.empty();
+    const bool shown = toolsWanted_ && !bendView() && !(grid_ && grid_->dragging()) && !selected_.empty();
     if (shown) {
         QRectF area;
         for (const ClipNote& note : selected_) area = area.isNull() ? noteRect(note) : area.united(noteRect(note));
@@ -481,6 +490,172 @@ void PianoRoll::setHumanizeTimingAmount(double percent) {
     if (percent == humanizeTimingAmount_) return;
     humanizeTimingAmount_ = percent;
     Q_EMIT toolSettingsChanged();
+}
+
+// --- Bends ----------------------------------------------------------------------------------
+
+void PianoRoll::setBendMode(bool on) {
+    if (on == bendMode_) return;
+    bendMode_ = on;
+    if (on) bendTool_ = QString::fromLatin1(kDrawTool);  // (always drawing points first)
+    if (!on && !selectedBends_.empty()) {
+        selectedBends_.clear();
+        Q_EMIT selectionChanged();
+    }
+    Q_EMIT bendModeChanged();
+    placeTools();  // (the note tools stay out of the way of bends)
+    repaintAll();
+}
+
+void PianoRoll::setBendTool(const QString& tool) {
+    if (tool == bendTool_ || (tool != QLatin1String(kDrawTool) && tool != QLatin1String(kVibratoTool) &&
+                              tool != QLatin1String(kGlideTool)))
+        return;
+    bendTool_ = tool;
+    Q_EMIT bendModeChanged();
+    placeTools();  // (Shift held: the notes come back with Draw or Glide)
+    repaintAll();
+}
+
+void PianoRoll::setPeeking(bool held) {
+    if (held == peeking_) return;
+    const bool before = bendView();
+    peeking_ = held;
+    if (bendView() == before) return;
+    Q_EMIT bendModeChanged();
+    placeTools();
+    repaintAll();
+}
+
+void PianoRoll::setVibratoRate(double hz) {
+    hz = std::clamp(hz, notes::kMinVibratoRate, notes::kMaxVibratoRate);
+    if (hz == vibratoRate_) return;
+    vibratoRate_ = hz;
+    Q_EMIT toolSettingsChanged();
+}
+
+void PianoRoll::setVibratoDepth(double semitones) {
+    semitones = std::clamp(semitones, 0.05, 12.0);
+    if (semitones == vibratoDepth_) return;
+    vibratoDepth_ = semitones;
+    Q_EMIT toolSettingsChanged();
+}
+
+void PianoRoll::setGlideCurve(double percent) {
+    percent = std::clamp(percent, -100.0, 100.0);
+    if (percent == glideCurve_) return;
+    glideCurve_ = percent;
+    Q_EMIT toolSettingsChanged();
+}
+
+void PianoRoll::setVibratoFade(double percent) {
+    percent = std::clamp(percent, 0.0, 100.0);
+    if (percent == vibratoFade_) return;
+    vibratoFade_ = percent;
+    Q_EMIT toolSettingsChanged();
+}
+
+void PianoRoll::selectBends(std::vector<BendRef> points) {
+    std::sort(points.begin(), points.end(), [](const BendRef& a, const BendRef& b) {
+        if (!(a.note == b.note)) return roll::clipNoteLess(a.note, b.note);
+        return a.point < b.point;
+    });
+    points.erase(std::unique(points.begin(), points.end()), points.end());
+    if (points == selectedBends_) return;
+    selectedBends_ = std::move(points);
+    Q_EMIT selectionChanged();
+    repaintAll();
+}
+
+bool PianoRoll::isBendSelected(const ClipNote& note, int point) const {
+    return std::find(selectedBends_.begin(), selectedBends_.end(), BendRef{note, point}) != selectedBends_.end();
+}
+
+double PianoRoll::bendY(const ClipNote& note, double semitones) const {
+    return pitchTop(note.note.pitch) + rowHeight_ / 2.0 - semitones * rowHeight_;
+}
+
+double PianoRoll::bendSemitones(const ClipNote& note, double y) const {
+    return (pitchTop(note.note.pitch) + rowHeight_ / 2.0 - y) / rowHeight_;
+}
+
+double PianoRoll::bendAt(const ClipNote& note, double beat) const {
+    const app::Project* p = project();
+    return note.note.bendAt(beat - rollStart(note), p ? p->tempo() : 120.0);
+}
+
+ClipNote PianoRoll::commitBend(const ClipNote& from, const Note& to, const QString& text, const QString& mergeKey,
+                               const std::optional<std::vector<int>>& points) {
+    const ClipNote changed{from.clip, to};
+    std::vector<BendRef> bends;
+    for (const BendRef& ref : selectedBends_) {
+        if (!(ref.note == from)) bends.push_back(ref);
+        else if (!points && ref.point < static_cast<int>(to.bend.size())) bends.push_back({changed, ref.point});
+    }
+    if (points) {
+        for (const int point : *points) bends.push_back({changed, point});
+    }
+    commitBends({{from, to}}, text, mergeKey, bends);
+    return changed;
+}
+
+void PianoRoll::commitBends(const std::vector<std::pair<ClipNote, Note>>& changes, const QString& text,
+                            const QString& mergeKey, const std::vector<BendRef>& points) {
+    std::map<int, std::vector<Note>> lists;
+    std::vector<ClipNote> selected = selected_;
+    for (const auto& [from, to] : changes) {
+        const app::Clip* c = clipAt(from.clip);
+        if (!c) continue;
+        auto& list = lists.try_emplace(from.clip, c->notes).first->second;
+        list = notes::place(list, {from.note}, {to});
+        for (ClipNote& note : selected) {  // the selected notes follow theirs to their new selves
+            if (note == from) note = {from.clip, to};
+        }
+    }
+    if (lists.empty()) return;
+    std::vector<BendRef> kept;
+    for (const BendRef& ref : points) {
+        if (ref.point >= 0 && ref.point < static_cast<int>(ref.note.note.bend.size())) kept.push_back(ref);
+    }
+    selectBends(std::move(kept));
+    commitNotes(lists, text, mergeKey, selected);
+}
+
+void PianoRoll::deleteSelectedBends() {
+    if (selectedBends_.empty()) return;
+    // Each note's selected points, all in one step.
+    std::vector<std::pair<ClipNote, Note>> changes;
+    std::vector<int> points;
+    for (size_t i = 0; i < selectedBends_.size(); ++i) {
+        const BendRef& ref = selectedBends_[i];
+        points.push_back(ref.point);
+        if (i + 1 < selectedBends_.size() && selectedBends_[i + 1].note == ref.note) continue;
+        changes.emplace_back(ref.note, notes::withoutBendPoints(ref.note.note, points));
+        points.clear();
+    }
+    commitBends(changes, QStringLiteral("Delete Bend Points"), {}, {});
+}
+
+void PianoRoll::clearBends() {
+    std::map<int, std::vector<Note>> changes;
+    std::vector<ClipNote> selected;
+    for (const ClipNote& note : selected_.empty() ? allNotes() : selected_) {
+        Note plain = note.note;
+        plain.bend.clear();
+        plain.vibrato.clear();
+        if (!note.note.bent()) {
+            if (!selected_.empty()) selected.push_back(note);
+            continue;
+        }
+        const app::Clip* c = clipAt(note.clip);
+        if (!c) continue;
+        auto& list = changes.try_emplace(note.clip, c->notes).first->second;
+        list = notes::place(list, {note.note}, {plain});
+        if (!selected_.empty()) selected.push_back({note.clip, plain});
+    }
+    if (changes.empty()) return;
+    selectedBends_.clear();
+    commitNotes(changes, QStringLiteral("Clear Bends"), {}, selected);
 }
 
 bool PianoRoll::velocityModelAvailable() const { return session_ && session_->humanizer()->velocityAvailable(); }

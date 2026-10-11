@@ -50,6 +50,7 @@ Item {
     readonly property alias title: title
     readonly property alias editButton: editButton
     readonly property alias sidechainButton: sidechainButton
+    readonly property alias midiFromButton: midiFromButton
     readonly property alias previousButton: previousButton
     readonly property alias pageLabel: pageLabel
     readonly property alias nextButton: nextButton
@@ -266,6 +267,18 @@ Item {
                 Layout.preferredWidth: 16
                 Layout.preferredHeight: 16
                 onClicked: frame.panel.showSidechainMenu(frame, sidechainButton, 0, sidechainButton.height)
+            }
+            DeviceHeaderButton {
+                id: midiFromButton
+                objectName: "midiFromButton"
+                visible: deviceInfo.acceptsMidi
+                iconName: "note"
+                checkable: false
+                checked: deviceInfo.midiFromOn
+                tooltip: deviceInfo.midiFromToolTip
+                Layout.preferredWidth: 16
+                Layout.preferredHeight: 16
+                onClicked: frame.panel.showMidiFromMenu(frame, midiFromButton, 0, midiFromButton.height)
             }
             Repeater {
                 model: frame.pageNames

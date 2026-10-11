@@ -55,6 +55,7 @@
 #include "AudioSource.h"
 #include "Automation.h"
 #include "MidiInput.h"
+#include "NoteBend.h"
 #include "Processor.h"
 #include "Recorder.h"
 #include "RenderJob.h"
@@ -94,11 +95,15 @@ struct ClipDesc {
 
 // A note on a MIDI track, in timeline beats. The UI flattens MIDI clips into
 // these, keeping only what the clips play (notes cut at their clip's end).
+// Its bend (NoteBend.h: MIDI 2.0's per-note pitch bend) is in beats from its
+// start, its vibratos' rates in cycles a second (Hz).
 struct NoteDesc {
     double startBeat = 0.0;
     double lengthBeats = 0.25;
     int key = 60;  // MIDI note number; 60 = C3
     int velocity = 100;
+    std::vector<BendPoint> bend;       // sorted by time
+    std::vector<VibratoSpan> vibrato;
 };
 
 // A track to record, and the file its take goes to (a WAV file, created anew).
@@ -168,6 +173,7 @@ struct ProcessorInfo {
     int tail = 0;
     bool hasEditor = false;
     bool hasSidechain = false;  // it has a sidechain (aux) input: setProcessorSidechain()
+    bool acceptsMidi = false;   // it plays notes (an instrument, an effect with a MIDI input): setProcessorMidiInput()
 };
 
 // A ProcessorEvent and the processor it came from.
@@ -361,6 +367,12 @@ public:
     // hostTimeNs() clock; 0: now), e.g. from a computer keyboard or a test. 1-3
     // bytes, starting with a status byte. Dropped if no audio device runs.
     void sendMidiInput(const std::string& device, const std::vector<uint8_t>& message, int64_t hostTimeNs = 0);
+    // MIDI 2.0: Universal MIDI Packets (Ump.h) as if from the input `device`,
+    // as sendMidiInput() (and a MIDI 2.0 backend) hands them over. Channel voice
+    // messages play as MIDI 1.0's do; a per-note pitch bend bends the note it
+    // names, of those the input holds. Words after the last whole packet, and
+    // packets of other kinds, are ignored.
+    void sendUmp(const std::string& device, const std::vector<uint32_t>& words, int64_t hostTimeNs = 0);
     AudioClockStatus audioClock() const;
 
     // --- Automation -------------------------------------------------------------
@@ -437,6 +449,20 @@ public:
                                SidechainTap tap = SidechainTap::PostFader, uint32_t tapProcessorId = 0);
     void clearProcessorSidechain(uint32_t processorId);
     std::optional<SidechainInfo> processorSidechain(uint32_t processorId);
+    // A device's MIDI input from another track (acceptsMidi in its ProcessorInfo:
+    // an instrument, or an effect with a MIDI input, as a vocoder or a pitch
+    // corrector has): it hears that track's notes, its clips', those played on
+    // it by hand and its MIDI input as the track hears them (bends and all),
+    // instead of its own track's; 0 (the master's id: it has no notes) for its
+    // own track's again. Notes go to it when they play on the timeline, not
+    // delayed to line up with its audio. A MIDI input carries no audio, so it
+    // orders nothing and closes no cycle, and the source's mute and solo don't
+    // stop it. It stays with the device when the device moves; when its track
+    // goes, so does it. The device resets as its source changes (no note it
+    // heard hangs). Throws std::invalid_argument for an unknown device or
+    // track, or a device that takes no MIDI.
+    void setProcessorMidiInput(uint32_t processorId, uint32_t sourceTrackId);
+    uint32_t processorMidiInput(uint32_t processorId);  // 0: its own track's
     ProcessorInfo processorInfo(uint32_t processorId);
     std::vector<ParamInfo> processorParams(uint32_t processorId);
     int processorParamIndex(uint32_t processorId, const std::string& paramId);  // -1: no such parameter
@@ -578,6 +604,9 @@ private:
     void deviceEvent(DeviceEvent event) noexcept override;
     // Any thread: a MIDI message from input `port`, stamped and queued for the audio thread.
     void midiInput(uint16_t port, const uint8_t* message, int size, int64_t hostTimeNs) noexcept;
+    // The same for Universal MIDI Packets (MIDI 2.0), and for a message of either kind once decoded.
+    void umpInput(uint16_t port, const uint32_t* words, int count, int64_t hostTimeNs) noexcept;
+    void queueMidiInput(uint16_t port, MidiInputEvent event, int64_t hostTimeNs) noexcept;
     uint16_t midiPortLocked(const std::string& name);
     void discardMidiInputLocked();
 
@@ -611,6 +640,10 @@ private:
         // Its own signal's delay before it, lining it up with what comes into
         // its sidechain (its own, and tracks' outputs), kept across snapshots.
         std::shared_ptr<DelayLine> sidechainWait;
+        // The track whose notes it takes instead of its own track's (0: none),
+        // and its copy of them each chunk, kept across snapshots.
+        uint32_t midiSource = 0;
+        std::shared_ptr<MidiFeed> midiFeed;
         // Its latency (insertLatency) when the snapshot was last aligned: idle()
         // realigns when it differs, whatever the processor's own idle() says.
         int alignedLatency = 0;

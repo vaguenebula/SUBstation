@@ -110,6 +110,7 @@ struct EngineBridge::Private {
     QSet<QString> frozen;  // tracks the engine has frozen
     QMap<QString, QMap<QString, double>> sendLevels;  // track id -> {return id: level dB} the engine has
     std::map<quint32, SidechainState> sidechains;  // processor -> the sidechain the engine has
+    std::map<quint32, quint32> midiInputs;  // processor -> the engine track whose notes it takes, as the engine has it
     int busy = 0;  // > 0 while a plug-in (or driver) call may run a message loop that calls us back
     QMap<QString, QString> pluginErrors;  // device id -> why its plug-in isn't loaded
     QMap<QString, QString> knownPlugins;  // plug-in uid -> file, from the scan: finds moved plug-ins

@@ -74,6 +74,7 @@ prologue (serial, the rendering thread)
   2. ProcessContext for the chunk; the recording's device input (recordInput)
   3. per track, in snapshot order: monitored? recorded?, note events (preview, MIDI input, clips),
      stretch voices for its clips             -> its TrackBuffers
+     then each device fed another track's notes: a copy of that track's events -> its MidiFeed
   4. workOutSolo: which edges and tracks are heard
 graph (Scheduler: the rendering thread and the workers)
   renderTrack(t) for every track, each once all its incoming edges are done
@@ -131,7 +132,8 @@ clips playing without a re-seek ([warp.md](warp.md)).
 2. Its own audio: if monitored, its input (the device's channels, or another track's output on
    its input edge); otherwise its clips over each segment (`renderClips()`), unless it is being
    recorded (`TrackBuffers::recorded`: its take replaces them, so it plays none).
-3. Its devices (`processInserts()`), with their note events, sidechains and automation. Taps
+3. Its devices (`processInserts()`), with their note events (a device fed another track's notes
+   gets its `MidiFeed` instead), sidechains and automation. Taps
    after a device copy the signal into their edge's buffer as the chain goes along.
 4. Pre-fader taps copy the signal into their edges' own buffers.
 5. The fader (`applyFader()`): volume and pan, mute and solo, metering.
@@ -176,8 +178,16 @@ start, in the order they were played), then its MIDI input (`routeMidiInput()`),
 notes: note-ons for notes starting in each segment, chased notes where playback starts, and
 note-offs from the renderer's own record of sounding notes (`activeNotes_`, up to 512), not from
 the snapshot, so a note edited or deleted while it sounds still ends. Stopping, a jump and a
-removed track release notes. Events are sorted by offset, a note-off first at the same offset.
-See [midi.md](midi.md).
+removed track release notes. A bent note's bends (MIDI 2.0's per-note pitch bend) follow its
+note-on, one every 32 samples at most while its pitch moves. Events are sorted by offset, a
+note-off first at the same offset and a note's bends after its note-on. See [midi.md](midi.md).
+
+A device can take another track's notes instead of its own track's
+(`Engine::setProcessorMidiInput()`): once every track's events are built, the prologue copies
+the source track's into the device's own `MidiFeed` (`RenderSnapshot::midiFeeds`, allocated
+when the input is set), so the graph never reads another track's `TrackBuffers`. It is not an
+edge: it orders nothing and can't close a cycle. See
+[midi.md](midi.md#a-devices-midi-input-from-another-track).
 
 ## Strips, chains and racks
 

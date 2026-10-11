@@ -181,6 +181,9 @@ QStringList ProjectEditor::pasteDevices(const QString& trackId, const std::vecto
             if (sidechain && (!p.hasOwner(sidechain->trackId) || p.sidechainWouldCycle(trackId, sidechain->trackId))) {
                 inner[i]->sidechain.reset();
             }
+            // Notes from a MIDI track still there (onto that track itself: its own).
+            QString& midi = inner[i]->midiFrom;
+            if (!midi.isEmpty() && (!p.hasTrack(midi) || p.track(midi).kind != kMidiKind || midi == trackId)) midi.clear();
         }
         devices.push_back(std::move(holder.front()));
     }

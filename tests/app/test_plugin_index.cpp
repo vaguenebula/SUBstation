@@ -515,6 +515,7 @@ private Q_SLOTS:
         }
         QCOMPARE(found, QStringList({QStringLiteral("SUB Test Effect|SUBstation|Fx|Delay|0"),
                                      QStringLiteral("SUB Test Mono|SUBstation|Fx|0"),
+                                     QStringLiteral("SUB Test Note Effect|SUBstation|Fx|Pitch Shift|0"),
                                      QStringLiteral("SUB Test Sidechain|SUBstation|Fx|Dynamics|0"),
                                      QStringLiteral("SUB Test Synth|SUBstation|Instrument|Synth|1")}));
         QCOMPARE(result.failures.size(), size_t(1));

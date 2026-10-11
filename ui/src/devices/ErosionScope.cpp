@@ -129,11 +129,11 @@ void ErosionScope::paint(SgPainter& p) {
     if (radius < 4.0)
         return;
     const QRectF well(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius);
-    p.fillEllipse(well, Theme::kMeterBg);
-    p.drawEllipse(well, Theme::kBorder, 1.0);
+    p.fillEllipse(well, Theme::meterBg());
+    p.drawEllipse(well, Theme::border(), 1.0);
 
     // The axes: left (up to the right) and right (up to the left) on the diagonals, mid upright.
-    const QColor axis = withAlpha(Theme::kGridBeat, 160);
+    const QColor axis = withAlpha(Theme::gridBeat(), 160);
     const double d = (radius - 2.0) * std::sqrt(0.5);
     p.drawLine(QPointF(c.x() - d, c.y() + d), QPointF(c.x() + d, c.y() - d), axis);
     p.drawLine(QPointF(c.x() + d, c.y() + d), QPointF(c.x() - d, c.y() - d), axis);
@@ -155,7 +155,7 @@ void ErosionScope::paint(SgPainter& p) {
         points[size_t(k)] = QPointF(c.x() + side * scale, c.y() - mid * scale);
     }
     const double brightness = amount_ <= 0.0 ? 0.45 : 0.6 + 0.4 * activity_.value;
-    const QColor color = mixColor(Theme::kSoloOn, Theme::kAccent, noiseWeight_);
+    const QColor color = mixColor(Theme::soloOn(), Theme::accent(), noiseWeight_);
     // Under it, the cloud the modulation fills (two RMS out): an upright sliver in mono, round at full Stereo.
     const auto reach = [&](double rms) { return std::max(1.0, std::tanh(kGain * 2.0 * rms) * r); };
     const QRectF cloud(c.x() - reach(sideRms_.value), c.y() - reach(midRms_.value), 2 * reach(sideRms_.value),

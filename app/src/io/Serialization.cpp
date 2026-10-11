@@ -223,6 +223,46 @@ QString stemOf(const QString& path) {
 
 // --- Writing ---
 
+// A note's bend: {"bend": [[time, semitones, curve], ...], "vibrato": [[start,
+// length, depth, rate, fade], ...]}, either left out when it has none.
+QJsonObject bendToJson(const Note& note) {
+    QJsonObject data;
+    if (!note.bend.empty()) {
+        QJsonArray points;
+        for (const BendPoint& p : note.bend) points.append(QJsonArray{p.time, p.semitones, p.curve});
+        data[QStringLiteral("bend")] = points;
+    }
+    if (!note.vibrato.empty()) {
+        QJsonArray vibratos;
+        for (const Vibrato& v : note.vibrato) vibratos.append(QJsonArray{v.start, v.length, v.depth, v.rate, v.fade});
+        data[QStringLiteral("vibrato")] = vibratos;
+    }
+    return data;
+}
+
+void bendFromJson(const QJsonObject& data, Note& note) {
+    // (toFloat takes "nan" and "inf" as text: a bend holds neither, or the pitch played would.)
+    const auto finite = [](const QJsonValue& value) {
+        const double number = toFloat(value);
+        if (!std::isfinite(number)) damaged(QStringLiteral("a bend's value isn't a finite number"));
+        return number;
+    };
+    for (const QJsonValue& entry : listOr(data, QStringLiteral("bend"))) {
+        const QJsonArray p = entry.toArray();
+        if (!entry.isArray() || p.size() != 3) damaged(QStringLiteral("a bend's point isn't [time, semitones, curve]"));
+        note = notes::withBendPoint(note, {finite(p.at(0)), finite(p.at(1)), finite(p.at(2))});
+    }
+    for (const QJsonValue& entry : listOr(data, QStringLiteral("vibrato"))) {
+        const QJsonArray v = entry.toArray();
+        if (!entry.isArray() || v.size() != 5) damaged(QStringLiteral("a vibrato isn't [start, length, depth, rate, fade]"));
+        const Vibrato vibrato{finite(v.at(0)), finite(v.at(1)),
+                              std::clamp(finite(v.at(2)), -notes::kMaxBendSemitones, notes::kMaxBendSemitones),
+                              finite(v.at(3)), std::clamp(finite(v.at(4)), 0.0, 1.0)};
+        if (vibrato.length > 0 && vibrato.rate > 0) note.vibrato.push_back(vibrato);  // (as saved: past its end too)
+    }
+    std::sort(note.vibrato.begin(), note.vibrato.end(), [](const Vibrato& a, const Vibrato& b) { return a.start < b.start; });
+}
+
 QJsonObject clipToJson(const Clip& clip, const QString& base) {
     QJsonObject data;
     data[QStringLiteral("id")] = clip.id;
@@ -235,7 +275,8 @@ QJsonObject clipToJson(const Clip& clip, const QString& base) {
         QJsonArray notes;
         for (const Note& n : clip.notes) {
             QJsonArray note{n.pitch, n.start, n.length, n.velocity};
-            if (n.muted) note.append(true);  // (deactivated)
+            if (n.muted || n.bent()) note.append(n.muted);  // (deactivated)
+            if (n.bent()) note.append(bendToJson(n));
             notes.append(note);
         }
         data[QStringLiteral("notes")] = notes;
@@ -591,16 +632,19 @@ Clip midiClipFromJson(const QJsonValue& value) {
     const QJsonObject c = asObject(value);
     std::vector<Note> notes;
     for (const QJsonValue& entry : listOr(c, QStringLiteral("notes"))) {
-        if (!entry.isArray() || entry.toArray().size() < 4 || entry.toArray().size() > 5) {
-            damaged(QStringLiteral("a note isn't [pitch, start, length, velocity] (and deactivated)"));
+        if (!entry.isArray() || entry.toArray().size() < 4 || entry.toArray().size() > 6 ||
+            (entry.toArray().size() > 5 && !entry.toArray().at(5).isObject())) {
+            damaged(QStringLiteral("a note isn't [pitch, start, length, velocity] (and deactivated, and its bend)"));
         }
         const QJsonArray n = entry.toArray();
         const double length = toFloat(n.at(2));
         if (length > 0) {
-            notes.push_back(Note{static_cast<int>(std::clamp<long long>(toInt(n.at(0)), 0, 127)),
-                                 std::max(0.0, toFloat(n.at(1))), length,
-                                 static_cast<int>(std::clamp<long long>(toInt(n.at(3)), 1, 127)),
-                                 n.size() > 4 && truthy(n.at(4))});
+            Note note{static_cast<int>(std::clamp<long long>(toInt(n.at(0)), 0, 127)),
+                      std::max(0.0, toFloat(n.at(1))), length,
+                      static_cast<int>(std::clamp<long long>(toInt(n.at(3)), 1, 127)),
+                      n.size() > 4 && truthy(n.at(4))};
+            if (n.size() > 5) bendFromJson(n.at(5).toObject(), note);
+            notes.push_back(std::move(note));
         }
     }
     Clip clip;
@@ -729,6 +773,7 @@ QJsonObject deviceToJson(const Device& device) {
         data[QStringLiteral("sidechain")] = QJsonObject{{QStringLiteral("track"), device.sidechain->trackId},
                                                         {QStringLiteral("tap"), device.sidechain->tap}};
     }
+    if (!device.midiFrom.isEmpty()) data[QStringLiteral("midi_from")] = device.midiFrom;
     if (device.isRack()) {
         QJsonArray chains;
         for (const Chain& c : device.chains) {
@@ -778,6 +823,7 @@ Device deviceFromJson(const QJsonValue& value) {
     for (auto it = params.constBegin(); it != params.constEnd(); ++it) device.params.insert(it.key(), toFloat(*it));
     device.state = stringOrNone(d.value(QStringLiteral("state")));
     device.sidechain = sidechainFromJson(d.value(QStringLiteral("sidechain")));
+    device.midiFrom = d.value(QStringLiteral("midi_from")).toString();
     if (device.isRack()) {
         for (const QJsonValue& c : listOr(d, QStringLiteral("chains"))) device.chains.push_back(chainFromJson(c));
         const QSet<QString> inside = innerDeviceIds(device);
@@ -917,6 +963,19 @@ void repairRouting(std::vector<Track>& tracks, std::vector<Track>& returns, Trac
             entry.device->sidechain = entry.sidechain;
         }
     }
+    // A device's MIDI input names a MIDI track there (not its own: that is what it hears without one).
+    QSet<QString> midiTracks;
+    for (const Track& t : tracks) {
+        if (t.kind == kMidiKind) midiTracks.insert(t.id);
+    }
+    const auto repairMidi = [&](Track& owner) {
+        for (Device* device : iterDevices(owner.devices)) {
+            if (!midiTracks.contains(device->midiFrom) || device->midiFrom == owner.id) device->midiFrom.clear();
+        }
+    };
+    for (Track& t : tracks) repairMidi(t);
+    for (Track& t : returns) repairMidi(t);
+    if (master != nullptr) repairMidi(*master);
 }
 
 QJsonObject projectToJson(const Project& project, const QString& projectFile) {
@@ -1106,6 +1165,7 @@ void loadTemplate(Project& project, const QString& path) {
 QJsonObject deviceToPreset(const Device& device) {
     std::function<void(QJsonObject&)> strip = [&](QJsonObject& d) {
         d.remove(QStringLiteral("sidechain"));
+        d.remove(QStringLiteral("midi_from"));
         if (!d.contains(QStringLiteral("chains"))) return;
         QJsonArray chains = d.value(QStringLiteral("chains")).toArray();
         for (qsizetype c = 0; c < chains.size(); ++c) {
@@ -1146,7 +1206,10 @@ Device presetDevice(const QJsonValue& data) {
     if (rackHeight(device) > kMaxRackDepth) throw ProjectFileError(QStringLiteral("The preset nests racks too deep"));
     std::vector<Device> holder;
     holder.push_back(std::move(device));
-    for (Device* inner : iterDevices(holder)) inner->sidechain.reset();
+    for (Device* inner : iterDevices(holder)) {
+        inner->sidechain.reset();
+        inner->midiFrom.clear();
+    }
     refreshIds(holder.front());
     return std::move(holder.front());
 }

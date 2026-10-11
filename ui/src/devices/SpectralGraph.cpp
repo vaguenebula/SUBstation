@@ -753,8 +753,8 @@ void SpectralGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const double w = width(), h = height();
     const QRectF outer = QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5);
-    p.fillRoundedRect(outer, 4, 4, Theme::kMeterBg);
-    p.drawRoundedRect(outer, 4, 4, withAlpha(Theme::kGridBeat, 150));
+    p.fillRoundedRect(outer, 4, 4, Theme::meterBg());
+    p.drawRoundedRect(outer, 4, 4, withAlpha(Theme::gridBeat(), 150));
 
     const QRectF r = plot();
     const QFont font7 = uiFont(7), font8 = headerFont();
@@ -766,12 +766,12 @@ void SpectralGraph::paint(SgPainter& p) {
     drawDecadeGrid(p, r, frequencyAxis());
     for (double db = -72.0; db <= 12.0; db += 12.0) {
         const double y = yOfLevel(db);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, db == 0.0 ? 170 : 110));
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::gridBeat(), db == 0.0 ? 170 : 110));
     }
     for (const auto& [hz, label] : {std::pair{50.0, "50"}, std::pair{100.0, "100"}, std::pair{500.0, "500"},
                                     std::pair{1000.0, "1k"}, std::pair{5000.0, "5k"}, std::pair{10000.0, "10k"}}) {
         p.drawText(QRectF(xOf(hz) - 15, r.bottom() + 1, 30, h - r.bottom() - 2), Qt::AlignCenter, id(label),
-                   Theme::kTextDim, font7);
+                   Theme::textDim(), font7);
     }
 
     std::vector<QPointF> points(kPoints);
@@ -789,8 +789,8 @@ void SpectralGraph::paint(SgPainter& p) {
     spectrum(shownInput_);
     {
         QLinearGradient fill(QPointF(0, r.top()), QPointF(0, r.bottom()));
-        fill.setColorAt(0, withAlpha(Theme::kText, 72));
-        fill.setColorAt(1, withAlpha(Theme::kText, 14));
+        fill.setColorAt(0, withAlpha(Theme::text(), 72));
+        fill.setColorAt(1, withAlpha(Theme::text(), 14));
         p.fillToBaseline(points.data(), kPoints, r.bottom(), fill);
     }
 
@@ -799,12 +799,12 @@ void SpectralGraph::paint(SgPainter& p) {
         for (std::size_t j = 0; j < points.size(); ++j)
             points[j] = QPointF(xs[j], r.bottom() - depth(shownGain_[j]));
         QLinearGradient fill(QPointF(0, r.bottom()), QPointF(0, r.bottom() - kCurtain * r.height()));
-        fill.setColorAt(0, withAlpha(Theme::kPlayOn, 30));
-        fill.setColorAt(1, withAlpha(Theme::kPlayOn, 120));
+        fill.setColorAt(0, withAlpha(Theme::playOn(), 30));
+        fill.setColorAt(1, withAlpha(Theme::playOn(), 120));
         p.fillToBaseline(points.data(), kPoints, r.bottom(), fill);
         eachRun(
             points, [&](std::size_t j) { return shownGain_[j] > 0.01; },
-            [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), Theme::kPlayOn, 1.2); });
+            [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), Theme::playOn(), 1.2); });
     }
     // (With Delta on, the output line shows what is taken away: the curtain, its held line and the glow, which
     // show it too, fade back so the line reads.)
@@ -814,17 +814,17 @@ void SpectralGraph::paint(SgPainter& p) {
             points[j] = QPointF(xs[j], r.top() + depth(heldCut_[j]));
         eachRun(points, [&](std::size_t j) { return heldCut_[j] > kHeldDrawnDb; },
                 [&](const std::vector<QPointF>& run) {
-                    p.drawPolyline(run.data(), int(run.size()), withAlpha(Theme::kAccent, int(150 * shown)), 1.0);
+                    p.drawPolyline(run.data(), int(run.size()), withAlpha(Theme::accent(), int(150 * shown)), 1.0);
                 });
     }
     if (maxCut_.value > 0.05 || *std::min_element(shownGain_.begin(), shownGain_.end()) < -0.05) {
         for (std::size_t j = 0; j < points.size(); ++j)
             points[j] = QPointF(xs[j], r.top() + depth(-shownGain_[j]));
         QLinearGradient fill(QPointF(0, r.top()), QPointF(0, r.top() + kCurtain * r.height()));
-        fill.setColorAt(0, withAlpha(Theme::kAccent, int(110 * shown)));
-        fill.setColorAt(1, withAlpha(Theme::kAccent, int(24 * shown)));
+        fill.setColorAt(0, withAlpha(Theme::accent(), int(110 * shown)));
+        fill.setColorAt(1, withAlpha(Theme::accent(), int(24 * shown)));
         p.fillToBaseline(points.data(), kPoints, r.top(), fill);
-        const QColor edge = withAlpha(Theme::kAccent, int(255 * shown));
+        const QColor edge = withAlpha(Theme::accent(), int(255 * shown));
         eachRun(
             points, [&](std::size_t j) { return shownGain_[j] < -0.01; },
             [&](const std::vector<QPointF>& run) { p.drawPolyline(run.data(), int(run.size()), edge, 1.2); });
@@ -844,7 +844,7 @@ void SpectralGraph::paint(SgPainter& p) {
         }
         if (over) {
             const double dx = r.width() / (kPoints - 1);
-            p.fillBand(r.left() - dx / 2, dx, tops.data(), bottoms.data(), kPoints, withAlpha(Theme::kAccent, glow));
+            p.fillBand(r.left() - dx / 2, dx, tops.data(), bottoms.data(), kPoints, withAlpha(Theme::accent(), glow));
         }
     }
 
@@ -854,7 +854,7 @@ void SpectralGraph::paint(SgPainter& p) {
         QGradientStops stops;
         const double last = double(focusWeights_.size() - 1);
         for (int i = 0; i < focusWeights_.size(); ++i) {
-            stops.append({i / last, withAlpha(Theme::kMeterBg, focusDimAlpha(focusWeights_[i]))});
+            stops.append({i / last, withAlpha(Theme::meterBg(), focusDimAlpha(focusWeights_[i]))});
         }
         QLinearGradient dim(QPointF(r.left(), 0), QPointF(r.right(), 0));
         dim.setStops(stops);
@@ -866,7 +866,7 @@ void SpectralGraph::paint(SgPainter& p) {
         const double clear = figureShown(db);
         if (clear > 0.01)
             p.drawText(QRectF(r.left() + 9, yOfLevel(db) - 11, 40, 10), Qt::AlignLeft | Qt::AlignBottom,
-                       levelFigure(db), withAlpha(Theme::kTextDim, int(std::lround(255 * clear))), font7);
+                       levelFigure(db), withAlpha(Theme::textDim(), int(std::lround(255 * clear))), font7);
     }
 
     // The sidechain's levels (what is compared), dashed, while keyed; the output. (Each only where there is any:
@@ -874,11 +874,11 @@ void SpectralGraph::paint(SgPainter& p) {
     if (keyed_) {
         spectrum(shownKey_);
         eachRun(points, [&](std::size_t j) { return shownKey_[j] > kFloorDb; },
-                [&](const std::vector<QPointF>& run) { drawDashedPolyline(p, run, Theme::kMeterMid, 1.0); });
+                [&](const std::vector<QPointF>& run) { drawDashedPolyline(p, run, Theme::meterMid(), 1.0); });
     }
     // With Delta on it is what is taken away, in a red of its own (the threshold and the curtain are orange).
     spectrum(shownOutput_);
-    const QColor outputColor = mixColor(Theme::kFrozen, Theme::kMeterHigh, deltaShown_.value);
+    const QColor outputColor = mixColor(Theme::frozen(), Theme::meterHigh(), deltaShown_.value);
     eachRun(points, [&](std::size_t j) { return shownOutput_[j] > kFloorDb; },
             [&](const std::vector<QPointF>& run) { drawGlowPolyline(p, run, outputColor, 1.25); });
 
@@ -886,10 +886,10 @@ void SpectralGraph::paint(SgPainter& p) {
     // line steep enough leaves it.)
     if (belowOpacity > 0.001) {
         p.setOpacity(belowOpacity);
-        drawGlowPolyline(p, {belowLine.p1(), belowLine.p2()}, Theme::kPlayOn, 1.25);
+        drawGlowPolyline(p, {belowLine.p1(), belowLine.p2()}, Theme::playOn(), 1.25);
         p.setOpacity(1.0);
     }
-    const QColor lineColor = active_ ? Theme::kAccent : Theme::kTextDim;
+    const QColor lineColor = active_ ? Theme::accent() : Theme::textDim();
     drawGlowPolyline(p, {thresholdLine.p1(), thresholdLine.p2()}, lineColor, 1.5);
     p.restore();
 
@@ -897,7 +897,7 @@ void SpectralGraph::paint(SgPainter& p) {
     const double low = focusLowShown(), high = focusHighShown();
     for (const int which : {int(FocusLowEdge), int(FocusHighEdge)}) {
         const double grow = handleGrow_[std::size_t(which)].value;
-        const QColor color = withAlpha(Theme::kText, int(50 + 110 * grow));
+        const QColor color = withAlpha(Theme::text(), int(50 + 110 * grow));
         const double x = edgeX(which);
         const bool open = which == FocusLowEdge ? low <= kLow * 1.001 : high >= kHigh * 0.999;
         if (!open)
@@ -907,7 +907,7 @@ void SpectralGraph::paint(SgPainter& p) {
 
     // The handles, ringed in the background's colour so they stand off the lines.
     auto circle = [&](const QPointF& at, double radius, const QColor& color) {
-        p.fillEllipse(at, radius + 1.0, radius + 1.0, Theme::kMeterBg);
+        p.fillEllipse(at, radius + 1.0, radius + 1.0, Theme::meterBg());
         p.fillEllipse(at, radius, radius, color);
     };
     auto diamond = [&](const QPointF& at, double radius, const QColor& color) {
@@ -916,16 +916,16 @@ void SpectralGraph::paint(SgPainter& p) {
                                     {at.x() - ring, at.y()}};
         const QPointF inside[4] = {{at.x(), at.y() - radius}, {at.x() + radius, at.y()}, {at.x(), at.y() + radius},
                                    {at.x() - radius, at.y()}};
-        p.fillPolygon(outline, 4, Theme::kMeterBg);
+        p.fillPolygon(outline, 4, Theme::meterBg());
         p.fillPolygon(inside, 4, color);
     };
     if (belowOpacity > 0.001) {
         p.setOpacity(belowOpacity);
-        circle(handle(BelowHandle), 4.0 + 1.5 * handleGrow_[std::size_t(BelowHandle)].value, Theme::kPlayOn);
+        circle(handle(BelowHandle), 4.0 + 1.5 * handleGrow_[std::size_t(BelowHandle)].value, Theme::playOn());
         p.setOpacity(1.0);
     }
     if (dragged_ == ThresholdHandle)
-        p.fillEllipse(handle(ThresholdHandle), 11, 11, withAlpha(Theme::kAccent, 60));
+        p.fillEllipse(handle(ThresholdHandle), 11, 11, withAlpha(Theme::accent(), 60));
     diamond(handle(TiltLow), 4.0 + handleGrow_[std::size_t(TiltLow)].value, lineColor);
     diamond(handle(TiltHigh), 4.0 + handleGrow_[std::size_t(TiltHigh)].value, lineColor);
     circle(handle(ThresholdHandle), 5.0 + 2.0 * handleGrow_[std::size_t(ThresholdHandle)].value, lineColor);
@@ -936,7 +936,7 @@ void SpectralGraph::paint(SgPainter& p) {
     drawLevelMeter(p, meterOut, meterOut_.level, meterOut_.peak, kMeterFloorDb, 0.0);
     for (const auto& [meter, label] : {std::pair{meterIn, "I"}, std::pair{meterOut, "O"}})
         p.drawText(QRectF(meter.center().x() - 6, r.bottom() + 1, 12, h - r.bottom() - 2), Qt::AlignCenter, id(label),
-                   Theme::kTextDim, font7);
+                   Theme::textDim(), font7);
 
     // The header: the deepest cut (and the biggest lift) now, right; the value hovered or dragged, left.
     const double cut = maxCut_.value, lift = maxLift_.value;
@@ -944,16 +944,16 @@ void SpectralGraph::paint(SgPainter& p) {
     const double cutWidth = SgPainter::textWidth(cutText, font8);
     const double cutRight = w - kHeaderInset;
     p.drawText(QRectF(cutRight - cutWidth - 2, 1, cutWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter, cutText,
-               cut >= 0.05 ? Theme::kAccent : Theme::kTextDim, font8);
+               cut >= 0.05 ? Theme::accent() : Theme::textDim(), font8);
     if (belowShown()) {
         const QString liftText = QStringLiteral("+%1 dB").arg(std::max(lift, 0.0), 0, 'f', 1);
         const double liftWidth = SgPainter::textWidth(liftText, font8), liftRight = cutRight - cutWidth - kHeaderGap;
         p.drawText(QRectF(liftRight - liftWidth - 2, 1, liftWidth + 2, 14), Qt::AlignRight | Qt::AlignVCenter,
-                   liftText, lift >= 0.05 ? Theme::kPlayOn : Theme::kTextDim, font8);
+                   liftText, lift >= 0.05 ? Theme::playOn() : Theme::textDim(), font8);
     }
     if (readoutOpacity_.value > 0.001 && !readoutText_.isEmpty()) {
         p.setOpacity(readoutOpacity_.value);
-        p.drawText(readoutRect(), Qt::AlignLeft | Qt::AlignVCenter, readoutText_, Theme::kText, font8);
+        p.drawText(readoutRect(), Qt::AlignLeft | Qt::AlignVCenter, readoutText_, Theme::text(), font8);
         p.setOpacity(1.0);
     }
 }

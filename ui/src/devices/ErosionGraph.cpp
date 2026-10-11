@@ -383,18 +383,18 @@ void ErosionGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
     const QFont font = stripFont();  // (the axis' figures' too)
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
 
     // The grid: a line per decade across, every quarter of the Amount up.
     drawDecadeGrid(p, r, frequencyAxis());
     for (const double amount : {25.0, 50.0, 75.0}) {
         const double y = yOfAmount(amount);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, 110));
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::gridBeat(), 110));
     }
     const std::pair<double, const char*> figures[] = {{100.0, "100"}, {1000.0, "1k"}, {10000.0, "10k"}};
     for (const auto& [freq, text] : figures)
         p.drawText(QRectF(xOf(freq) + 3, r.bottom() - 12, 30, 11), Qt::AlignLeft | Qt::AlignVCenter,
-                   QString::fromLatin1(text), Theme::kTextDim, font);
+                   QString::fromLatin1(text), Theme::textDim(), font);
 
     p.save();
     p.setClipRect(r);
@@ -420,10 +420,10 @@ void ErosionGraph::paint(SgPainter& p) {
     if (columns > 0 && inColumns_.size() == columns) {
         const std::vector<QPointF> line = spectrumLine(inColumns_);
         QLinearGradient fill(r.topLeft(), r.bottomLeft());
-        fill.setColorAt(0.0, withAlpha(Theme::kText, 64));
-        fill.setColorAt(1.0, withAlpha(Theme::kText, 12));
+        fill.setColorAt(0.0, withAlpha(Theme::text(), 64));
+        fill.setColorAt(1.0, withAlpha(Theme::text(), 12));
         p.fillToBaseline(line.data(), int(line.size()), r.bottom(), fill);
-        p.drawPolyline(line.data(), int(line.size()), withAlpha(Theme::kTextDim, 120), 1.0);
+        p.drawPolyline(line.data(), int(line.size()), withAlpha(Theme::textDim(), 120), 1.0);
     }
 
     // The noise's band, filled and shimmering while it erodes: in Stereo a second layer parts from the first.
@@ -439,15 +439,15 @@ void ErosionGraph::paint(SgPainter& p) {
                        withAlpha(color, int(std::lround(alpha))));
         };
         const double alpha = (24.0 + 44.0 * activity) * noiseWeight_;
-        layer(shimmerL_, Theme::kAccent, alpha);
+        layer(shimmerL_, Theme::accent(), alpha);
         if (stereo_ > 0.5)
-            layer(shimmerR_, Theme::kScopeLine, alpha * stereo_ / 100.0);
+            layer(shimmerR_, Theme::scopeLine(), alpha * stereo_ / 100.0);
     }
 
     // The output's spectrum, a line over it all: the fizz Erosion adds shows at the top.
     if (columns > 0 && outColumns_.size() == columns) {
         const std::vector<QPointF> line = spectrumLine(outColumns_);
-        p.drawPolyline(line.data(), int(line.size()), withAlpha(Theme::kText, 150), 1.0);
+        p.drawPolyline(line.data(), int(line.size()), withAlpha(Theme::text(), 150), 1.0);
     }
 
     // The band's outline, the engine's filter, with its -3 dB edges.
@@ -455,12 +455,12 @@ void ErosionGraph::paint(SgPainter& p) {
         std::vector<QPointF> outline(frequencies_.size());
         for (size_t i = 0; i < frequencies_.size(); ++i)
             outline[i] = QPointF(xOf(frequencies_[i]), r.bottom() - magnitudes_[i] * h);
-        drawGlowPolyline(p, outline, withAlpha(Theme::kAccent, int(std::lround(255 * noiseWeight_))), 1.5);
+        drawGlowPolyline(p, outline, withAlpha(Theme::accent(), int(std::lround(255 * noiseWeight_))), 1.5);
     }
     // Its -3 dB edges: a short whisker out from each, level with where the outline crosses it (an upright
     // tick would lie along a narrow band's steep outline).
     if (noiseWeight_ > 0.05 && h >= 1.0) {
-        const QColor tick = withAlpha(altHeld_ || drag_ == Drag::Width ? Theme::kText : Theme::kTextDim,
+        const QColor tick = withAlpha(altHeld_ || drag_ == Drag::Width ? Theme::text() : Theme::textDim(),
                                       int(std::lround(255 * noiseWeight_)));
         const double y = r.bottom() - 0.70710678 * h;
         const std::pair<double, double> whiskers[] = {{edges_.first, -1.0}, {edges_.second, 1.0}};
@@ -491,11 +491,11 @@ void ErosionGraph::paint(SgPainter& p) {
         }
         const int count = int(spike.size());
         p.drawPolyline(spike.data(), count,
-                       withAlpha(Theme::kSoloOn, int(std::lround((25 + 35 * activity) * sineWeight_))), 7.0,
+                       withAlpha(Theme::soloOn(), int(std::lround((25 + 35 * activity) * sineWeight_))), 7.0,
                        Qt::RoundCap);
-        p.drawPolyline(spike.data(), count, withAlpha(Theme::kSoloOn, int(std::lround(60 * sineWeight_))), 3.0,
+        p.drawPolyline(spike.data(), count, withAlpha(Theme::soloOn(), int(std::lround(60 * sineWeight_))), 3.0,
                        Qt::RoundCap);
-        p.drawPolyline(spike.data(), count, withAlpha(Theme::kSoloOn, int(std::lround(255 * sineWeight_))), 1.5,
+        p.drawPolyline(spike.data(), count, withAlpha(Theme::soloOn(), int(std::lround(255 * sineWeight_))), 1.5,
                        Qt::FlatCap);
     }
     p.restore();
@@ -503,19 +503,19 @@ void ErosionGraph::paint(SgPainter& p) {
     // The dot: a halo while it erodes, dim at Amount 0.
     if (activity > 0.0) {
         const double halo = kDotRadius + kHaloGrowth * activity;
-        p.fillEllipse(at, halo, halo, withAlpha(Theme::kAccent, int(std::lround(60 * activity))));
+        p.fillEllipse(at, halo, halo, withAlpha(Theme::accent(), int(std::lround(60 * activity))));
     }
-    p.fillEllipse(at, kDotRadius - 0.5, kDotRadius - 0.5, Theme::kPanelAlt);
+    p.fillEllipse(at, kDotRadius - 0.5, kDotRadius - 0.5, Theme::panelAlt());
     p.drawEllipse(QRectF(at.x() - kDotRadius, at.y() - kDotRadius, 2 * kDotRadius, 2 * kDotRadius),
-                  amount_ > 0.0 ? Theme::kAccent : Theme::kTextDim, 2);
+                  amount_ > 0.0 ? Theme::accent() : Theme::textDim(), 2);
 
     // What modulates, and where and how far.
     const Strip texts = strip();
     const double left = texts.sourceRect.left(), right = texts.readoutRect.right();
     p.drawText(QRectF(left, 0, std::max(0.0, texts.readoutRect.left() - kStripGap - left), topStrip_),
-               Qt::AlignLeft | Qt::AlignVCenter, texts.source, Theme::kTextDim, font);
+               Qt::AlignLeft | Qt::AlignVCenter, texts.source, Theme::textDim(), font);
     p.drawText(QRectF(left, 0, right - left, topStrip_), Qt::AlignRight | Qt::AlignVCenter, texts.readout,
-               amount_ > 0.0 ? Theme::kText : Theme::kTextDim, font);
+               amount_ > 0.0 ? Theme::text() : Theme::textDim(), font);
 }
 
 QFont ErosionGraph::stripFont() { return uiFont(7); }

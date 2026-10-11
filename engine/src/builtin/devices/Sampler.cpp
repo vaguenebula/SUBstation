@@ -53,6 +53,7 @@
 #include <utility>
 #include <vector>
 
+#include "NoteBend.h"
 #include "Warp.h"
 #include "builtin/BuiltinProcessor.h"
 #include "builtin/BuiltinRegistry.h"
@@ -207,6 +208,7 @@ public:
 
     std::string typeId() const override { return "builtin:sampler"; }
     std::string name() const override { return "Sampler"; }
+    bool acceptsMidi() const override { return true; }
 
     void prepare(double sampleRate, int maxBlockSize) override;
     void reset() override;
@@ -242,6 +244,9 @@ private:
         bool classic = true;   // its envelope: ADSR, else fades
         bool killing = false;  // cut short: fading out
         uint8_t key = 0;
+        int32_t noteId = -1;   // its note's (-1: known by its key)
+        double bend = 0.0;     // its note's bend in semitones, gliding to bendTarget
+        double bendTarget = 0.0;
         uint64_t started = 0;  // note counter, for stealing the oldest voice
         float gain = 0.f;      // velocity
         double position = 0.0; // the frame it plays, as the sample plays
@@ -287,12 +292,15 @@ private:
 
     void readBlock(const ProcessContext& ctx);
     int64_t snap(int64_t frame) const noexcept;
-    void noteOn(uint8_t key, uint8_t velocity);
-    void noteOff(uint8_t key);
+    void noteOn(uint8_t key, uint8_t velocity, int32_t noteId = -1);
+    void noteOff(uint8_t key, int32_t noteId = -1);
+    // A note's bend (MIDI 2.0's per-note pitch bend): the voice playing it, by
+    // its id, else the newest on its key, glides there.
+    void noteBend(const ProcessEvent& event);
     // The keys held, newest last (for legato), kept even while nothing can play.
     void holdKey(uint8_t key) noexcept;
     void releaseKey(uint8_t key) noexcept;
-    Voice* startVoice(uint8_t key, uint8_t velocity, int64_t from, int64_t end, double pitch);
+    Voice* startVoice(uint8_t key, uint8_t velocity, int64_t from, int64_t end, double pitch, int32_t noteId);
     void makeRoom(int limit);
     void killAll();
     void kill(Voice& voice) noexcept;
@@ -722,7 +730,7 @@ void SamplerProcessor::glideTo(Voice& voice, double pitch) noexcept {
 }
 
 SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t velocity, int64_t from, int64_t end,
-                                                      double pitch) {
+                                                      double pitch, int32_t noteId) {
     // A free slot; else the quietest voice fading out.
     Voice* target = nullptr;
     for (Voice& voice : voices_) {
@@ -744,6 +752,7 @@ SamplerProcessor::Voice* SamplerProcessor::startVoice(uint8_t key, uint8_t veloc
     voice = Voice{};
     voice.active = true;
     voice.key = key;
+    voice.noteId = noteId;
     voice.classic = block_.mode == Mode::Classic;
     voice.started = ++noteCounter_;
     voice.gain = 1.f - sensitivity * (1.f - static_cast<float>(velocity) / 127.f);
@@ -785,7 +794,7 @@ void SamplerProcessor::releaseKey(uint8_t key) noexcept {
     }
 }
 
-void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
+void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity, int32_t noteId) {
     holdKey(key);
     const Block& b = block_;
     if (b.end <= b.start) return;  // nothing to play
@@ -797,6 +806,8 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
                 Voice* playing = monoVoice();
                 if (b.glideSamples >= 1.0 && playing && playing->held && playing->classic) {
                     playing->key = key;
+                    playing->noteId = noteId;  // (its bends from now on)
+                    playing->bendTarget = 0.0;
                     glideTo(*playing, pitch);
                     return;
                 }
@@ -804,12 +815,12 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
             } else {
                 makeRoom(b.voices);
             }
-            startVoice(key, velocity, b.start, -1, pitch);
+            startVoice(key, velocity, b.start, -1, pitch, noteId);
             break;
         }
         case Mode::OneShot:
             killAll();
-            startVoice(key, velocity, b.start, -1, key - b.root);
+            startVoice(key, velocity, b.start, -1, key - b.root, noteId);
             break;
         case Mode::Slice: {
             const int index = key - slicing::kFirstSliceKey;
@@ -835,13 +846,13 @@ void SamplerProcessor::noteOn(uint8_t key, uint8_t velocity) {
             if (to <= from) return;
             if (b.playback == Playback::Poly) makeRoom(b.voices);
             else killAll();
-            startVoice(key, velocity, from, to, 0.0);
+            startVoice(key, velocity, from, to, 0.0, noteId);
             break;
         }
     }
 }
 
-void SamplerProcessor::noteOff(uint8_t key) {
+void SamplerProcessor::noteOff(uint8_t key, int32_t noteId) {
     releaseKey(key);
     const Block& b = block_;
     if (b.mode == Mode::Classic && b.voices == 1 && b.glideSamples >= 1.0) {
@@ -849,21 +860,44 @@ void SamplerProcessor::noteOff(uint8_t key) {
         Voice* playing = monoVoice();
         if (playing && playing->held && playing->key == key && heldCount_ > 0) {
             playing->key = heldKeys_[static_cast<size_t>(heldCount_ - 1)];
+            playing->noteId = -1;  // (that note's bends find it by its key)
             glideTo(*playing, playing->key - b.root);
             return;
         }
     }
-    // With the same key held twice, the older note ends first.
+    // Its note's voice; with the same key held twice (and no ids), the older note ends first.
     Voice* target = nullptr;
     for (Voice& voice : voices_) {
-        if (voice.active && !voice.killing && voice.held && voice.key == key &&
-            (!target || voice.started < target->started)) {
-            target = &voice;
+        if (noteId >= 0 && voice.active && !voice.killing && voice.held && voice.noteId == noteId) target = &voice;
+    }
+    if (!target) {
+        for (Voice& voice : voices_) {
+            if (noteId >= 0 && voice.noteId >= 0) continue;  // another note of that key
+            if (voice.active && !voice.killing && voice.held && voice.key == key &&
+                (!target || voice.started < target->started)) {
+                target = &voice;
+            }
         }
     }
     if (!target) return;
     target->held = false;
     if (target->classic || b.gate) target->stage = Stage::Release;  // (Trigger: it plays on)
+}
+
+void SamplerProcessor::noteBend(const ProcessEvent& event) {
+    Voice* target = nullptr;
+    if (event.noteId >= 0) {
+        for (Voice& voice : voices_) {
+            if (voice.active && voice.noteId == event.noteId) target = &voice;
+        }
+    }
+    if (!target) {
+        for (Voice& voice : voices_) {
+            if (!voice.active || voice.key != event.key() || (event.noteId >= 0 && voice.noteId >= 0)) continue;
+            if (!target || voice.started > target->started) target = &voice;
+        }
+    }
+    if (target) target->bendTarget = std::clamp(static_cast<double>(event.bend), -kMaxBendSemitones, kMaxBendSemitones);
 }
 
 // --- Rendering -------------------------------------------------------------------
@@ -1063,7 +1097,12 @@ void SamplerProcessor::renderChunk(const ProcessContext& ctx, int from, int to, 
             voice.pitch = voice.pitch < voice.pitchTarget ? std::min(voice.pitchTarget, voice.pitch + step)
                                                           : std::max(voice.pitchTarget, voice.pitch - step);
         }
-        renderVoice(voice, from, to, voice.pitch + block_.transpose + vibrato, left, mixRight);
+        if (voice.bend != voice.bendTarget) {  // its note's bend, gliding (a chunk at a time)
+            const double glide = 1.0 - onePoleCoefficient(dsp::kBendGlideSeconds, sampleRate_, frames);
+            voice.bend += (voice.bendTarget - voice.bend) * glide;
+            if (std::abs(voice.bendTarget - voice.bend) < 1e-6) voice.bend = voice.bendTarget;
+        }
+        renderVoice(voice, from, to, voice.pitch + voice.bend + block_.transpose + vibrato, left, mixRight);
     }
 
     if (isOn(FilterOn)) filterChunk(from, to, left, right, lfoOn ? lfoMiddle : 0.f);
@@ -1116,7 +1155,9 @@ void SamplerProcessor::render(const ProcessContext& ctx, float* const* channels,
     readBlock(ctx);
     dsp::renderBetweenNotes(
         ctx.inEvents, numFrames, [&](int from, int to) { advance(ctx, from, to, left, right); },
-        [&](uint8_t key, uint8_t velocity) { noteOn(key, velocity); }, [&](uint8_t key) { noteOff(key); });
+        [&](const ProcessEvent& event) { noteOn(event.key(), event.velocity(), event.noteId); },
+        [&](const ProcessEvent& event) { noteOff(event.key(), event.noteId); },
+        [&](const ProcessEvent& event) { noteBend(event); });
 }
 
 void SamplerProcessor::advance(const ProcessContext& ctx, int from, int to, float* left, float* right) {

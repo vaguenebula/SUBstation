@@ -123,12 +123,19 @@ struct RecordingTake {
 };
 
 // A recorded note, in timeline samples.
+// A recorded note's bend at a moment (MIDI 2.0's per-note pitch bend, as it played).
+struct RecordedBend {
+    int64_t time = 0;        // samples from the note's start
+    float semitones = 0.f;   // from its key
+};
+
 struct RecordedNote {
     int64_t start = 0;
     int64_t end = -1;  // -1: still held
     uint8_t key = 60;
     uint8_t velocity = 100;
     uint8_t channel = 0;
+    std::vector<RecordedBend> bend;  // in time order; none if it was never bent
 };
 
 // One MIDI track's take while it records.
@@ -137,7 +144,9 @@ struct MidiRecordingTake {
         int64_t time = 0;  // timeline sample where it played (before placement)
         uint8_t channel = 0;
         uint8_t key = 0;
-        uint8_t velocity = 0;  // 0: a note-off
+        uint8_t velocity = 0;  // 0: a note-off (or a bend)
+        bool bend = false;     // the note held on this key and channel bends to `semitones`
+        float semitones = 0.f;
     };
 
     explicit MidiRecordingTake(uint32_t trackId) : trackId(trackId) {}

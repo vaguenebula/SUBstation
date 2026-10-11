@@ -307,17 +307,17 @@ void SaturatorCurve::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
     const double cx = r.center().x(), cy = r.center().y();
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
 
     // The grid: the axes, the half-scale lines, full scale up and down, the border; the straight line dashed.
-    p.drawLine(QPointF(xOf(-0.5), r.top()), QPointF(xOf(-0.5), r.bottom()), Theme::kGridSub);
-    p.drawLine(QPointF(xOf(0.5), r.top()), QPointF(xOf(0.5), r.bottom()), Theme::kGridSub);
+    p.drawLine(QPointF(xOf(-0.5), r.top()), QPointF(xOf(-0.5), r.bottom()), Theme::gridSub());
+    p.drawLine(QPointF(xOf(0.5), r.top()), QPointF(xOf(0.5), r.bottom()), Theme::gridSub());
     for (const double level : {-1.0, -0.5, 0.5, 1.0})
-        p.drawLine(QPointF(r.left(), yOf(level)), QPointF(r.right(), yOf(level)), Theme::kGridSub);
-    p.drawLine(QPointF(cx, r.top()), QPointF(cx, r.bottom()), withAlpha(Theme::kGridBar, 170));
-    p.drawLine(QPointF(r.left(), cy), QPointF(r.right(), cy), withAlpha(Theme::kGridBar, 170));
-    p.drawRect(r, Theme::kGridBeat);
-    drawDashedPolyline(p, {QPointF(xOf(-1.0), yOf(-1.0)), QPointF(xOf(1.0), yOf(1.0))}, Theme::kScopeAxis, 1.0);
+        p.drawLine(QPointF(r.left(), yOf(level)), QPointF(r.right(), yOf(level)), Theme::gridSub());
+    p.drawLine(QPointF(cx, r.top()), QPointF(cx, r.bottom()), withAlpha(Theme::gridBar(), 170));
+    p.drawLine(QPointF(r.left(), cy), QPointF(r.right(), cy), withAlpha(Theme::gridBar(), 170));
+    p.drawRect(r, Theme::gridBeat());
+    drawDashedPolyline(p, {QPointF(xOf(-1.0), yOf(-1.0)), QPointF(xOf(1.0), yOf(1.0))}, Theme::scopeAxis(), 1.0);
 
     p.save();
     p.setClipRect(r);
@@ -326,11 +326,11 @@ void SaturatorCurve::paint(SgPainter& p) {
     // on the axis would say nothing.)
     if (bass() && thresholdInput_ < 1.0 && xOf(thresholdInput_) - cx >= kThresholdMarkerGap) {
         for (const double x : {xOf(-thresholdInput_), xOf(thresholdInput_)})
-            drawDashedPolyline(p, {QPointF(x, r.top()), QPointF(x, r.bottom())}, withAlpha(Theme::kAccent, 110), 1.0);
+            drawDashedPolyline(p, {QPointF(x, r.top()), QPointF(x, r.bottom())}, withAlpha(Theme::accent(), 110), 1.0);
     }
     if (shape_.clip != 0) {
         for (const double y : {yOf(1.0), yOf(-1.0)})
-            drawDashedPolyline(p, {QPointF(r.left(), y), QPointF(r.right(), y)}, withAlpha(Theme::kMeterHigh, 80), 1.0);
+            drawDashedPolyline(p, {QPointF(r.left(), y), QPointF(r.right(), y)}, withAlpha(Theme::meterHigh(), 80), 1.0);
     }
 
     // The curve, filled towards the middle.
@@ -339,7 +339,7 @@ void SaturatorCurve::paint(SgPainter& p) {
     for (std::size_t i = 0; i < n; ++i)
         curve[i] = QPointF(xOf(inputs_[i]), yOf(drawn_[i]));
     const bool heard = mix_ > 0.0;
-    const QColor line = heard ? Theme::kScopeLine : Theme::kTextDisabled;
+    const QColor line = heard ? Theme::scopeLine() : Theme::textDisabled();
     if (n >= 2) {
         QLinearGradient fill(QPointF(0, r.top()), QPointF(0, r.bottom()));
         fill.setColorAt(0.0, withAlpha(line, 48));
@@ -350,7 +350,7 @@ void SaturatorCurve::paint(SgPainter& p) {
     }
 
     // The signal on it: the stretch it reaches lit, the afterglow beyond, the dots.
-    const QColor hot = mixColor(Theme::kScopeLine, Theme::kMeterHigh, sat_.value);
+    const QColor hot = mixColor(Theme::scopeLine(), Theme::meterHigh(), sat_.value);
     const double dot = std::min(dot_, 1.0);
     const double alpha = dotAlpha_.value;
     if (alpha > 0.0 && n >= 2) {
@@ -375,14 +375,14 @@ void SaturatorCurve::paint(SgPainter& p) {
             const double radius = 5.0 + 5.0 * sat;
             p.fillEllipse(at, radius, radius, withAlpha(hot, int(55 + 80 * sat)));
             p.drawEllipse(QRectF(at.x() - 6, at.y() - 6, 12, 12), withAlpha(hot, 120), 1.0);
-            p.fillEllipse(at, 3.2, 3.2, Theme::kPlayhead);
+            p.fillEllipse(at, 3.2, 3.2, Theme::playhead());
         }
         p.restore();
     }
 
     // Over full scale: the sides flash.
     if (over_ > 0.01) {
-        const QColor flash = withAlpha(Theme::kMeterHigh, int(140 * over_));
+        const QColor flash = withAlpha(Theme::meterHigh(), int(140 * over_));
         p.fillRect(QRectF(r.left(), r.top(), 3, r.height()), flash);
         p.fillRect(QRectF(r.right() - 3, r.top(), 3, r.height()), flash);
     }
@@ -395,7 +395,7 @@ void SaturatorCurve::paint(SgPainter& p) {
     const QRectF outStrip(r.right() + kGap, r.top(), kStrip, r.height());
     const double yellow = std::pow(10.0, -12.0 / 20.0), red = std::pow(10.0, -3.0 / 20.0);
     auto strip = [&](const QRectF& well, bool across, double level, double peakDb) {
-        p.fillRect(well, Theme::kPanel);
+        p.fillRect(well, Theme::panel());
         const double unit = across ? well.width() / 2 : well.height() / 2 / kOutputRange;  // pixels per 1.0
         const double half = across ? well.width() / 2 : well.height() / 2;
         const double reach = std::min(level * unit, half);
@@ -412,18 +412,18 @@ void SaturatorCurve::paint(SgPainter& p) {
                 p.fillRect(QRectF(well.left(), mid.y() + a, well.width(), b - a), color);
             }
         };
-        band(0.0, yellow, Theme::kMeterLow);
-        band(yellow, red, Theme::kMeterMid);
-        band(red, kOutputRange * 2, Theme::kMeterHigh);
+        band(0.0, yellow, Theme::meterLow());
+        band(yellow, red, Theme::meterMid());
+        band(red, kOutputRange * 2, Theme::meterHigh());
         if (peakDb > kMeterFloorDb) {
             const double at = std::min(std::pow(10.0, peakDb / 20.0) * unit, half - 1);
             if (at >= 1.0) {
                 if (across) {
-                    p.fillRect(QRectF(mid.x() + at, well.top(), 1, well.height()), Theme::kText);
-                    p.fillRect(QRectF(mid.x() - at - 1, well.top(), 1, well.height()), Theme::kText);
+                    p.fillRect(QRectF(mid.x() + at, well.top(), 1, well.height()), Theme::text());
+                    p.fillRect(QRectF(mid.x() - at - 1, well.top(), 1, well.height()), Theme::text());
                 } else {
-                    p.fillRect(QRectF(well.left(), mid.y() - at - 1, well.width(), 1), Theme::kText);
-                    p.fillRect(QRectF(well.left(), mid.y() + at, well.width(), 1), Theme::kText);
+                    p.fillRect(QRectF(well.left(), mid.y() - at - 1, well.width(), 1), Theme::text());
+                    p.fillRect(QRectF(well.left(), mid.y() + at, well.width(), 1), Theme::text());
                 }
             }
         }
@@ -442,12 +442,12 @@ void SaturatorCurve::paint(SgPainter& p) {
     auto corner = [&](double bottom, const QString& text, const QColor& color) {
         const double w = SgPainter::textWidth(text, font);
         const QRectF at(r.right() - 3 - w, bottom - 12, w, 12);
-        p.fillRoundedRect(at.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::kMeterBg, 200));
+        p.fillRoundedRect(at.adjusted(-2, 0, 2, 0), 2, 2, withAlpha(Theme::meterBg(), 200));
         p.drawText(at, Qt::AlignRight | Qt::AlignVCenter | Qt::TextDontClip, text, color, font);
     };
-    corner(r.bottom() - 1, driveText, std::abs(drive) > 1e-9 ? Theme::kText : Theme::kTextDim);
+    corner(r.bottom() - 1, driveText, std::abs(drive) > 1e-9 ? Theme::text() : Theme::textDim());
     if (hq_)
-        corner(r.bottom() - 13, QStringLiteral("HQ"), Theme::kAccent);
+        corner(r.bottom() - 13, QStringLiteral("HQ"), Theme::accent());
 }
 
 }  // namespace sub::ui

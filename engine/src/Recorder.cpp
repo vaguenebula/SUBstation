@@ -281,8 +281,16 @@ std::vector<RecordedNote> RecordingSession::midiNotes(MidiRecordingTake& take) {
 void MidiRecordingTake::collect() {
     Event event;
     while (events.pop(event)) {
+        if (event.bend) {  // the latest note held on its key and channel bends (none: it is lost)
+            for (auto it = notes.rbegin(); it != notes.rend(); ++it) {
+                if (it->end >= 0 || it->key != event.key || it->channel != event.channel) continue;
+                it->bend.push_back({std::max<int64_t>(0, event.time - it->start), event.semitones});
+                break;
+            }
+            continue;
+        }
         if (event.velocity > 0) {
-            notes.push_back({event.time, -1, event.key, event.velocity, event.channel});
+            notes.push_back({event.time, -1, event.key, event.velocity, event.channel, {}});
             continue;
         }
         // A note-off ends the earliest note held on its key (one whose note-on

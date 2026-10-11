@@ -582,6 +582,11 @@ public:
     // take (the master, its own track, or one its track feeds: a cycle) or a
     // tap after a device that isn't on the source.
     void setDeviceSidechain(const QString& trackId, const QString& deviceId, const std::optional<Sidechain>& sidechain);
+    // A device's MIDI input: the MIDI track whose notes it plays instead of its
+    // own track's ("" or its own track: its own track's). EditError for a source
+    // that isn't a MIDI track. (Whether the device plays notes at all is its
+    // processor's: EngineBridge::acceptsMidi.)
+    void setDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId);
 
     // --- Automation (EditorAutomation.cpp) ---
     // Envelopes are normalized (see model/Automation.h); an owner is a track id
@@ -687,6 +692,8 @@ public:
     // sourceTrackId "": none. tap: kPostFader, kPreFader, kPreFx or a device id.
     Q_INVOKABLE bool trySetDeviceSidechain(const QString& trackId, const QString& deviceId,
                                            const QString& sourceTrackId, const QString& tap = QStringLiteral("post"));
+    // sourceId "": its own track's notes.
+    Q_INVOKABLE bool trySetDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId);
     Q_INVOKABLE QString tryAddRackChain(const QString& trackId, const QString& rackId, int index = -1,
                                         const QString& name = {});
     Q_INVOKABLE bool tryMapMacro(const QString& trackId, const QString& rackId, int index, const QString& deviceId,
@@ -734,6 +741,8 @@ private:
     // tracks), go into their groups.
     void dropOutputs(const QSet<QString>& trackIds, const QSet<QString>& deviceIds, const QString& text);
     void dropSidechains(const QSet<QString>& sourceIds, const QString& text);
+    // Devices taking these tracks' notes take their own track's again.
+    void dropMidiInputs(const QSet<QString>& sourceIds, const QString& text);
     Clip recordedMidiClip(const RecordedTake& take, double quantize) const;
 
     // Settings.

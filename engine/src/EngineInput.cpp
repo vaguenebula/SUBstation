@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "Routing.h"
+#include "Ump.h"
 
 namespace sub {
 
@@ -250,19 +251,43 @@ void Engine::sendMidiInput(const std::string& device, const std::vector<uint8_t>
     midiInput(port, message.data(), static_cast<int>(message.size()), hostTime != 0 ? hostTime : hostTimeNs());
 }
 
+void Engine::sendUmp(const std::string& device, const std::vector<uint32_t>& words, int64_t hostTime) {
+    uint16_t port = 0;
+    {
+        std::lock_guard lock(mutex_);
+        port = midiPortLocked(device);
+    }
+    umpInput(port, words.data(), static_cast<int>(words.size()), hostTime != 0 ? hostTime : hostTimeNs());
+}
+
 void Engine::midiInput(uint16_t port, const uint8_t* message, int size, int64_t hostTime) noexcept {
-    // Where on the device's clock this arrived, from the last callback's start;
-    // it plays one MIDI delay (a buffer) later, in the next block.
-    const AudioClock::Reading clock = shared_.clock.read();
-    if (!clock.running || size < 1) return;
-    const double elapsed = static_cast<double>(hostTime - clock.hostTimeNs) * 1e-9;
+    if (size < 1) return;
     MidiInputEvent event;
-    event.time = clock.sampleTime + std::llround(elapsed * shared_.midiSampleRate.load(std::memory_order_relaxed)) +
-                 shared_.midiInputDelay.load(std::memory_order_relaxed);
-    event.port = port;
     event.status = message[0];
     event.data1 = size > 1 ? message[1] : 0;
     event.data2 = size > 2 ? message[2] : 0;
+    queueMidiInput(port, event, hostTime);
+}
+
+void Engine::umpInput(uint16_t port, const uint32_t* words, int count, int64_t hostTime) noexcept {
+    for (int i = 0; i < count;) {
+        const int size = ump::packetWords(words[i]);
+        if (i + size > count) return;  // (not a whole packet)
+        MidiInputEvent event;
+        if (ump::decode(words + i, size, event)) queueMidiInput(port, event, hostTime);
+        i += size;
+    }
+}
+
+void Engine::queueMidiInput(uint16_t port, MidiInputEvent event, int64_t hostTime) noexcept {
+    // Where on the device's clock this arrived, from the last callback's start;
+    // it plays one MIDI delay (a buffer) later, in the next block.
+    const AudioClock::Reading clock = shared_.clock.read();
+    if (!clock.running) return;
+    const double elapsed = static_cast<double>(hostTime - clock.hostTimeNs) * 1e-9;
+    event.time = clock.sampleTime + std::llround(elapsed * shared_.midiSampleRate.load(std::memory_order_relaxed)) +
+                 shared_.midiInputDelay.load(std::memory_order_relaxed);
+    event.port = port;
     std::lock_guard lock(shared_.midiInputMutex);  // the producers' side only: the audio thread never waits
     shared_.midiInput.push(event);                  // full: dropped
 }

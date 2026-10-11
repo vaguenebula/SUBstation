@@ -31,6 +31,8 @@ Each device has a title bar, as in Ableton (teal while the device is selected), 
 - a plug-in's **editor window** button (see [plugins.md](plugins.md));
 - the **sidechain** button, on devices with a sidechain input (see
   [mixing.md](mixing.md#sidechains));
+- the **MIDI From** button (a note), on devices that play notes: instruments, and effects
+  with a MIDI input (see [MIDI from another track](#midi-from-another-track));
 - the **parameter page arrows** ‹ ›;
 - a **save** button: saves the device as a preset (see [Presets](#presets)).
 
@@ -62,13 +64,42 @@ Each device has a title bar, as in Ableton (teal while the device is selected), 
 - Delete a device with the **Delete** key or its right-click menu.
 - **Ctrl+Alt drag** anywhere on the chain scrolls it, as in the arrangement.
 
+### MIDI from another track
+
+A device that plays notes can take them from another MIDI track instead of its own:
+an effect with a MIDI input, such as a vocoder, a harmonizer or a pitch corrector
+(Zynaptiq's Pitchmap, a "chroma" or scale-mapping plug-in), on a vocal or any audio
+track, playing along with the chords of a MIDI track; or an instrument layered from
+another track's part.
+
+- The **MIDI From** button (a note) in the title bar of such a device opens its menu:
+  *Own Track* (what it hears without one), then the project's MIDI tracks (a search
+  field over them has the keyboard as the menu opens). The button is lit while it takes
+  another track's notes, and its tooltip names that track.
+- It hears that track's notes as the track plays them: its clips' notes, with their
+  bends and vibrato; the notes you play on the track in the piano roll; and its MIDI input
+  while it monitors (armed, or *In*). A MIDI track with no instrument of its own can
+  just feed such a device.
+- Built-in instruments (Synth, Sampler) and plug-ins with a MIDI (event) input have the
+  button; built-in effects play no notes and have none.
+- The notes reach the device when they play on the timeline: plug-in latency on the
+  device's own track before it (delay compensation) doesn't delay them. A track's mute
+  and solo don't stop its notes reaching a device elsewhere, and a frozen MIDI track
+  still plays its notes there (its own devices are in its frozen audio).
+- It stays with the device: moved to another track, or copied with it (a copy taking
+  the notes of a track copied with it takes the copy's). Deleting the source track, or
+  flattening it into audio, gives the device its own track's notes again, in the same
+  undo step. Presets don't keep it. Changing it is an undo step, and it is saved with the
+  project.
+
 ## Built-in devices
 
 ### Synth
 
 A polyphonic subtractive synth (16 voices) with sine, triangle, saw and square
 oscillators (band-limited saw and square), an ADSR envelope, a resonant low-pass
-filter and volume. Velocity sets the level. New MIDI tracks come with it.
+filter and volume. Velocity sets the level; each voice follows its note's bend
+([midi.md](midi.md#pitch-bends-vibrato-and-slides)). New MIDI tracks come with it.
 
 | Parameter | Range |
 |---|---|
@@ -83,7 +114,8 @@ filter and volume. Velocity sets the level. New MIDI tracks come with it.
 ### Sampler
 
 An instrument that plays one audio file, as Ableton's Simpler does, in one of three
-modes (the tabs at its left):
+modes (the tabs at its left). Each note follows its bend
+([midi.md](midi.md#pitch-bends-vibrato-and-slides)), in every mode:
 
 - **Classic**: played across the keyboard, pitched from its root key (up to 32 notes at
   once, *Voices*), with an ADSR envelope; it plays from Start to End, or with **Loop**
@@ -1133,7 +1165,7 @@ one undo step.
   that leave with them). Dropped onto another kind of device, the preset goes in beside
   it as a new device.
 - Loading a preset is one undo step. Loaded devices are new ones (a preset loaded twice
-  makes two), without sidechains.
+  makes two), without sidechains or MIDI inputs from other tracks.
 - A rack is titled with the name of the preset it was saved as or loaded from (loaded
   into another rack, that rack takes the name too). A rack that never was a preset is
   called *Audio Effect Rack* or *Instrument Rack*. The name is saved with the project.
@@ -1171,7 +1203,8 @@ one undo step.
   are selected. They are new devices with the same settings: plug-ins in their state
   when copied, racks with everything in them, folded if they were.
 - Sidechains are kept, unless their source is gone or would close a cycle on the track
-  pasted onto.
+  pasted onto; MIDI inputs from other tracks are kept while their source is there (onto
+  their source itself, they take its notes as their own track's).
 - An instrument pasted goes first on a MIDI track (replacing its instrument), and not
   onto an audio track.
 - To paste onto another track, select it, click beside its devices, and press Ctrl+V.

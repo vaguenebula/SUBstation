@@ -12,8 +12,11 @@
 // where it is taken, and the menu (No Sidechain, the tracks, groups and returns
 // it can come from, those that would close a cycle greyed out; then where it is
 // taken along the source: Pre FX, after each of its effects (those in its racks
-// too), Post FX, Post Mixer). It reads the project again whenever what it shows
-// may have changed.
+// too), Post FX, Post Mixer); and for a device that plays notes (an
+// instrument, an effect with a MIDI input) its MIDI input: the button lit while
+// it takes another track's notes, the tooltip naming that track, and the menu
+// (Own Track, then the MIDI tracks). It reads the project again whenever what
+// it shows may have changed.
 //
 //   DeviceInfo { id: info; session: Session; trackId: ...; deviceId: ... }
 //   Text { text: info.name }
@@ -70,6 +73,10 @@ class DeviceInfo : public QObject {
     Q_PROPERTY(bool hasSidechainInput READ hasSidechainInput NOTIFY changed)
     Q_PROPERTY(bool sidechainOn READ sidechainOn NOTIFY changed)
     Q_PROPERTY(QString sidechainToolTip READ sidechainToolTip NOTIFY changed)
+    // It plays notes; it takes another track's; the MIDI From button's tooltip.
+    Q_PROPERTY(bool acceptsMidi READ acceptsMidi NOTIFY changed)
+    Q_PROPERTY(bool midiFromOn READ midiFromOn NOTIFY changed)
+    Q_PROPERTY(QString midiFromToolTip READ midiFromToolTip NOTIFY changed)
 
 public:
     explicit DeviceInfo(QObject* parent = nullptr);
@@ -103,6 +110,9 @@ public:
     bool hasSidechainInput() const { return state_.hasSidechainInput; }
     bool sidechainOn() const { return state_.sidechainOn; }
     QString sidechainToolTip() const { return state_.sidechainToolTip; }
+    bool acceptsMidi() const { return state_.acceptsMidi; }
+    bool midiFromOn() const { return state_.midiFromOn; }
+    QString midiFromToolTip() const { return state_.midiFromToolTip; }
 
     // The on/off switch. Switched while its automation plays, that stops (it is overridden).
     Q_INVOKABLE void setEnabled(bool enabled);
@@ -126,6 +136,12 @@ public:
     // setSidechain(source, tap) (source "": no sidechain).
     Q_INVOKABLE QVariantList sidechainMenu() const;
     Q_INVOKABLE void setSidechain(const QString& sourceTrackId, const QString& tap);
+    // The MIDI From menu's entries: {text, checkable, checked, enabled,
+    // source}: Own Track (source ""), then the MIDI tracks whose notes it
+    // could take, under a search field ({search: true, children}).
+    // Choosing one is setMidiFrom(source).
+    Q_INVOKABLE QVariantList midiFromMenu() const;
+    Q_INVOKABLE void setMidiFrom(const QString& sourceTrackId);
 
     // Where a sidechain from a track can be taken, along its signal, as in
     // Ableton: before its devices, after each (in its racks' chains too, before
@@ -168,6 +184,9 @@ private:
         bool hasSidechainInput = false;
         bool sidechainOn = false;
         QString sidechainToolTip;
+        bool acceptsMidi = false;
+        bool midiFromOn = false;
+        QString midiFromToolTip;
 
         bool operator==(const State&) const = default;
     };
@@ -186,6 +205,7 @@ private:
     QString deviceId_;
     State state_;
     QString sidechainSource_;  // the track its sidechain comes from ("": none)
+    QString midiSource_;       // the track whose notes it takes ("": its own)
     QList<QMetaObject::Connection> connections_;
 };
 

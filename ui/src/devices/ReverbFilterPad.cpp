@@ -230,7 +230,7 @@ void ReverbFilterPad::dragTo(const QPointF& pos, Qt::KeyboardModifiers modifiers
 void ReverbFilterPad::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
     drawDecadeGrid(p, r, LogAxis{kLow, kHigh, r.left(), r.width()});
 
     // What goes into the reverb, behind the curve.
@@ -243,8 +243,8 @@ void ReverbFilterPad::paint(SgPainter& p) {
             const double h = std::clamp((columns_[std::size_t(i)] - floor) / -floor, 0.0, 1.0) * r.height();
             shape.emplace_back(r.left() + (i + 0.5) * r.width() / columns, r.bottom() - h);
         }
-        p.fillToBaseline(shape.data(), int(shape.size()), r.bottom(), withAlpha(Theme::kTextDim, 46));
-        p.drawPolyline(shape.data(), int(shape.size()), withAlpha(Theme::kTextDim, 90), 1.0);
+        p.fillToBaseline(shape.data(), int(shape.size()), r.bottom(), withAlpha(Theme::textDim(), 46));
+        p.drawPolyline(shape.data(), int(shape.size()), withAlpha(Theme::textDim(), 90), 1.0);
     }
 
     // The band: filled while it glows with the input, its line glowing.
@@ -259,29 +259,29 @@ void ReverbFilterPad::paint(SgPainter& p) {
         p.setClipRect(r);
         if (on) {
             p.fillToBaseline(curve.data(), int(curve.size()), r.bottom(),
-                             withAlpha(Theme::kScopeLine, int(18 + 30 * glow)));
-            drawGlowPolyline(p, curve, Theme::kScopeLine, 1.5);
+                             withAlpha(Theme::scopeLine(), int(18 + 30 * glow)));
+            drawGlowPolyline(p, curve, Theme::scopeLine(), 1.5);
         } else {
-            p.drawPolyline(curve.data(), int(curve.size()), Theme::kTextDisabled, 1.5);
+            p.drawPolyline(curve.data(), int(curve.size()), Theme::textDisabled(), 1.5);
         }
         p.restore();
     }
 
     p.drawText(QRectF(r.left() + 3, r.top() + 1, r.width() - 6, 12), Qt::AlignLeft | Qt::AlignVCenter,
-               QStringLiteral("Input"), Theme::kTextDim, uiFont(7));
+               QStringLiteral("Input"), Theme::textDim(), uiFont(7));
 
     // The dot: faint crosshairs through it, a halo breathing with the input, the ring (in the pad).
     p.save();
     p.setClipRect(QRectF(0, 0, width(), height()));
     const QPointF at = dot();
-    p.drawLine(QPointF(r.left(), at.y()), QPointF(r.right(), at.y()), withAlpha(Theme::kText, 30));
-    p.drawLine(QPointF(at.x(), r.top()), QPointF(at.x(), r.bottom()), withAlpha(Theme::kText, 30));
-    const QColor ring = on ? Theme::kAccent : Theme::kTextDim;
+    p.drawLine(QPointF(r.left(), at.y()), QPointF(r.right(), at.y()), withAlpha(Theme::text(), 30));
+    p.drawLine(QPointF(at.x(), r.top()), QPointF(at.x(), r.bottom()), withAlpha(Theme::text(), 30));
+    const QColor ring = on ? Theme::accent() : Theme::textDim();
     if (on) {
         const double halo = 6.0 + 6.0 * glow;
-        p.fillEllipse(at, halo, halo, withAlpha(Theme::kAccent, int(40 + 120 * glow)));
+        p.fillEllipse(at, halo, halo, withAlpha(Theme::accent(), int(40 + 120 * glow)));
     }
-    p.fillEllipse(at, 4.0, 4.0, Theme::kMeterBg);
+    p.fillEllipse(at, 4.0, 4.0, Theme::meterBg());
     p.drawEllipse(QRectF(at.x() - 5, at.y() - 5, 10, 10), ring, 2);
     p.restore();
 }

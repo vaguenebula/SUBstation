@@ -24,7 +24,9 @@ includes the engine's headers.
 | [EngineDevice.cpp](../../engine/src/EngineDevice.cpp) | Opening and closing the audio device, device events, input meters, the master scope, and `audioCallback()`. See [audio-devices.md](audio-devices.md). |
 | [EngineTracks.cpp](../../engine/src/EngineTracks.cpp) | Tracks, their mixer, routing (outputs, sends, the list of edges, cycle checks), meters, `setTrackAutomation`. See [routing.md](routing.md). |
 | [EngineInput.cpp](../../engine/src/EngineInput.cpp) | Track inputs (device channels or another track's output), monitoring, arming, recording, MIDI input. See [recording.md](recording.md) and [midi.md](midi.md). |
-| [EngineChains.cpp](../../engine/src/EngineChains.cpp) | Device chains, racks, sidechains, and the processor calls (parameters, state, editors, events). See [routing.md](routing.md), [devices.md](devices.md), [plugins.md](plugins.md). |
+| [EngineChains.cpp](../../engine/src/EngineChains.cpp) | Device chains, racks, sidechains, devices' MIDI inputs from other tracks (`setProcessorMidiInput`), and the processor calls (parameters, state, editors, events). See [routing.md](routing.md), [devices.md](devices.md), [plugins.md](plugins.md), [midi.md](midi.md). |
+| [NoteBend.h](../../engine/src/NoteBend.h) | A note's bend (MIDI 2.0's per-note pitch bend): `BendPoint`, `VibratoSpan`, and its rules (`sub::bend::curveAt`, `vibratoAt`, `at`), in any unit of time. Header-only; the application layer draws and edits with the same rules. See [midi.md](midi.md#bends-midi-20s-per-note-pitch-bend). |
+| [Ump.h](../../engine/src/Ump.h) | MIDI 2.0's Universal MIDI Packets: their lengths, decoding channel voice messages into `MidiInputEvent`s, the per-note pitch bend's 32 bits as semitones, and packets to send (tests). See [midi.md](midi.md#midi-20-input). |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | Building the `RenderSnapshot` from the edit model, and publishing it. See [rendering.md](rendering.md) and [routing.md](routing.md). |
 | [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `renderOffline()` and `exportWav()` (`exportFile()`: WAV or MP3): suspending live output, a separate `Renderer`, fresh delay lines and stretch voices; renders in the background (`startExport()`, `startTrackRender()`) and `RenderJob`. |
 | [RenderJob.h](../../engine/src/RenderJob.h) | A render on a thread of its own: its progress, `cancel()`, `finish()`. |
@@ -96,7 +98,8 @@ only tracks and the edges between them.
   the strip whose signal it processes (`stripId`) and the rack it belongs to (`parentRack`, 0
   for a main chain).
 - **`ProcessorEntry`** (in `processors_`, by processor id): the chain a device is in, the
-  `Processor`, its sidechain (`SidechainModel`, if any), and for a rack its chains in order.
+  `Processor`, its sidechain (`SidechainModel`, if any), the track whose notes it takes
+  (`midiSource`, with its `MidiFeed`), and for a rack its chains in order.
   Processor ids are unique across chains, so a device can move from one chain to another (on
   any strip) and keep its state: a plug-in isn't loaded again.
 - **`StripSlot`** (built on demand by `stripSlotsLocked()`): a strip's devices depth first,
@@ -135,8 +138,10 @@ converted to samples at the current tempo and sample rate. In order:
    sidechains into each strip's devices, the taps after devices, and the `TaskGraph` the
    scheduler runs.
 5. The master strip and each track (`TrackRender`): its chain and racks (`buildChainLocked()`,
-   recursively), automation in samples (`buildAutomationLocked()`), notes and clips in samples
-   (with their fades), its input, monitoring and MIDI route.
+   recursively, with the devices' MIDI feeds), automation in samples (`buildAutomationLocked()`),
+   notes (and their bends) and clips in samples (with their fades), its input, monitoring and
+   MIDI route. A track left out (frozen, or in a frozen group) keeps its notes while a
+   device elsewhere takes them.
 6. Stretch voices: enough for the clips that need stretching, at most 64 per configuration
    (`ensureWarpVoicesLocked()`); they only grow until the sample rate changes.
 

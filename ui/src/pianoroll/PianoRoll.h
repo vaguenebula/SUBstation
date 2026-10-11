@@ -51,6 +51,16 @@
 // Where each clip's content beats are on the roll (origin(), shift()) is
 // worked out on refresh() (every change of the clips shown), not looked up for
 // each note: drawing and hit-testing ask for it note by note.
+//
+// Bends (MIDI 2.0's per-note pitch bend): in bend mode (B, or the bend button)
+// every note shows its bend as a curve over the rows, a semitone a row, and the
+// note grid edits it as an automation lane is edited: points added on the line,
+// dragged, clicked away, segments bent. Its vibrato tool (V) draws vibrato onto
+// a note over the stretch dragged across, at the rate, depth and ramp set in
+// the bend bar (Shift and Alt change its rate and ramp as it is drawn); it swings around the curve drawn by hand, so the two go
+// together. A bend edit replaces the note with its new self (commitBend()),
+// the selections following it. Out of bend mode, bent notes show their curve
+// faintly.
 
 #include "editor/ClipRef.h"
 #include "model/Clip.h"
@@ -134,6 +144,21 @@ class PianoRoll : public QObject {
     Q_PROPERTY(QRectF toolsArea READ toolsArea NOTIFY toolsChanged)
     Q_PROPERTY(int toolsCount READ toolsCount NOTIFY toolsChanged)
     Q_PROPERTY(bool hasCopiedNotes READ hasCopiedNotes NOTIFY copiedChanged)
+    // Bend mode (B): notes' bend curves shown to edit; the tool, "draw" (points:
+    // what B starts with), "vibrato" (V) or "glide" (G: slides); whether the
+    // curves show now (bend mode, but for while Shift is held with the Draw or
+    // Glide tool: the notes then, to edit as out of it); a new vibrato's rate
+    // (Hz), depth (semitones) and ramp (percent of its length); a new slide's
+    // curve (percent, -100..100: positive arrives later; the last one set with
+    // Alt as one was drawn); how many bend points are selected.
+    Q_PROPERTY(bool bendMode READ bendMode WRITE setBendMode NOTIFY bendModeChanged)
+    Q_PROPERTY(QString bendTool READ bendTool WRITE setBendTool NOTIFY bendModeChanged)
+    Q_PROPERTY(bool bendView READ bendView NOTIFY bendModeChanged)
+    Q_PROPERTY(double vibratoRate READ vibratoRate WRITE setVibratoRate NOTIFY toolSettingsChanged)
+    Q_PROPERTY(double vibratoDepth READ vibratoDepth WRITE setVibratoDepth NOTIFY toolSettingsChanged)
+    Q_PROPERTY(double vibratoFade READ vibratoFade WRITE setVibratoFade NOTIFY toolSettingsChanged)
+    Q_PROPERTY(double glideCurve READ glideCurve WRITE setGlideCurve NOTIFY toolSettingsChanged)
+    Q_PROPERTY(int selectedBendCount READ selectedBendCount NOTIFY selectionChanged)
 
 public:
     static constexpr int kKeysWidth = 64;
@@ -148,6 +173,9 @@ public:
     static constexpr const char* kDefaultGrid = "1/16";
     static constexpr double kDefaultHumanizeVelocity = 100.0;  // %: the model's velocities
     static constexpr double kDefaultHumanizeTiming = 25.0;     // %
+    static constexpr const char* kDrawTool = "draw";
+    static constexpr const char* kVibratoTool = "vibrato";
+    static constexpr const char* kGlideTool = "glide";
 
     // A stretch of roll beats.
     using Span = std::pair<double, double>;
@@ -296,6 +324,59 @@ public:
     static double humanizeBeats() { return app::notes::kHumanizeBeats; }
     bool velocityModelAvailable() const;
 
+    // --- Bends (MIDI 2.0's per-note pitch bend) ------------------------------------
+
+    bool bendMode() const { return bendMode_; }
+    void setBendMode(bool on);  // (on: with the Draw tool)
+    Q_INVOKABLE void toggleBendMode() { setBendMode(!bendMode_); }
+    QString bendTool() const { return bendTool_; }
+    void setBendTool(const QString& tool);  // kDrawTool, kVibratoTool or kGlideTool
+    // Shift held in bend mode (the note grid says): the notes show to edit as
+    // out of it, but with the vibrato tool (whose Shift sets its speed).
+    void setPeeking(bool held);
+    bool peeking() const { return peeking_ && bendMode_ && bendTool_ != QLatin1String(kVibratoTool); }
+    // The bend curves are what the grid shows and edits.
+    bool bendView() const { return bendMode_ && !peeking(); }
+    double vibratoRate() const { return vibratoRate_; }
+    void setVibratoRate(double hz);
+    double vibratoDepth() const { return vibratoDepth_; }
+    void setVibratoDepth(double semitones);
+    double vibratoFade() const { return vibratoFade_; }
+    double glideCurve() const { return glideCurve_; }
+    void setGlideCurve(double percent);
+    void setVibratoFade(double percent);
+
+    // A point of a note's bend: the note and the point's place in its bend.
+    struct BendRef {
+        ClipNote note;
+        int point = 0;
+        friend bool operator==(const BendRef&, const BendRef&) = default;
+    };
+    const std::vector<BendRef>& selectedBends() const { return selectedBends_; }
+    void selectBends(std::vector<BendRef> points);
+    bool isBendSelected(const ClipNote& note, int point) const;
+    int selectedBendCount() const { return static_cast<int>(selectedBends_.size()); }
+    // The y of a note's pitch plus `semitones` (the middle of its row, a row a
+    // semitone), and the semitones from its pitch at `y`.
+    double bendY(const ClipNote& note, double semitones) const;
+    double bendSemitones(const ClipNote& note, double y) const;
+    // A note's bend (semitones) at roll beat `beat`, at the project's tempo.
+    double bendAt(const ClipNote& note, double beat) const;
+    // Make `to` (a note with its bend edited) the note `from` was: committed
+    // (one undo step per `mergeKey`), the selected notes following it; its
+    // selected points are `points` (none given: those it had, where they are).
+    // Returns it as a ClipNote.
+    ClipNote commitBend(const ClipNote& from, const app::Note& to, const QString& text, const QString& mergeKey = {},
+                        const std::optional<std::vector<int>>& points = std::nullopt);
+    // The same for several notes at once, each (from, to); the selected points
+    // become `points` (of the new notes).
+    void commitBends(const std::vector<std::pair<ClipNote, app::Note>>& changes, const QString& text,
+                     const QString& mergeKey, const std::vector<BendRef>& points);
+    // Delete (in bend mode): the selected points go. One undo step.
+    void deleteSelectedBends();
+    // The selected notes' bends (every note's with none selected) taken away. One undo step.
+    Q_INVOKABLE void clearBends();
+
     // --- Harmony -------------------------------------------------------------------
 
     // A chord of the song over the part the clips play, in roll beats.
@@ -414,6 +495,7 @@ Q_SIGNALS:
     void playheadChanged();
     void auditionChanged();
     void previewChanged();
+    void bendModeChanged();
     void toolSettingsChanged();
     void toolsChanged();
     void copiedChanged();
@@ -488,6 +570,14 @@ private:
     QPointer<NoteGrid> grid_;
     std::vector<RollChord> chords_;
     std::optional<app::Key> scaleKey_;
+    bool bendMode_ = false;
+    QString bendTool_ = QString::fromLatin1(kDrawTool);
+    bool peeking_ = false;  // Shift held (bend mode or not)
+    double vibratoRate_ = app::notes::kDefaultVibratoRate;
+    double vibratoDepth_ = app::notes::kDefaultVibratoDepth;
+    double vibratoFade_ = app::notes::kDefaultVibratoFade * 100.0;
+    double glideCurve_ = 0.0;  // percent
+    std::vector<BendRef> selectedBends_;
 };
 
 }  // namespace sub::ui

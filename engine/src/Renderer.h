@@ -250,6 +250,10 @@ private:
         uint32_t trackId;
         uint8_t key;
         int64_t end;  // timeline sample of its note-off
+        int32_t noteId;  // what its events carry
+        int64_t start;   // timeline sample of its note-on (finds its NoteRender again, in any snapshot)
+        int index;       // where its NoteRender was last found in its track's notes (a hint)
+        float bend;      // the bend last sent (semitones)
     };
     struct InputEvent {  // a MIDI input message due in this chunk
         int offset;
@@ -257,12 +261,20 @@ private:
         uint8_t status;
         uint8_t data1;
         uint8_t data2;
+        uint8_t kind;    // MidiInputEvent::Kind
+        uint32_t value;  // a MIDI 2.0 per-note pitch bend's
     };
     struct LiveNote {  // a note a track's MIDI input started, not released yet
         uint32_t trackId;
         uint16_t port;
         uint8_t channel;
         uint8_t key;
+        int32_t noteId;
+    };
+    struct HeldPreview {  // a note played by hand (the piano roll's), not released yet
+        uint32_t trackId;
+        uint8_t key;
+        int32_t noteId;
     };
     static constexpr int kMaxSegments = 16;
     static constexpr int kMaxTicks = 64;
@@ -272,6 +284,12 @@ private:
     static constexpr int kMaxPendingInput = 2048;  // MIDI input not due yet
     static constexpr int kMaxInputEvents = 512;    // MIDI input in one chunk
     static constexpr int kMaxLiveNotes = 512;      // across all tracks
+    // Bends: a sounding note's bend is sent every kBendStep samples along its
+    // own grid (from its start) where it moved by kBendEpsilon semitones or
+    // more, as long as kBendHeadroom of a track's events stay free (for note-offs).
+    static constexpr int kBendStep = 32;
+    static constexpr float kBendEpsilon = 0.001f;
+    static constexpr int kBendHeadroom = 64;
 
     void renderChunk(const RenderSnapshot& snap, int frames, ChunkFlags flags) noexcept;
     // The graph's job: track `node` of the chunk's snapshot, on thread `worker`.
@@ -378,6 +396,19 @@ private:
     void buildNoteEvents(const TrackRender& track, TrackBuffers& out, bool hearsInput, bool clipNotes,
                          MidiRecordingTake* take) noexcept;
     void releaseNotes(uint32_t trackId, int offset, TrackBuffers& out) noexcept;
+    // A note-on for a note of the track's clips (and its bend where it starts
+    // sounding, `from` samples into it), remembered as an active note.
+    bool startNote(const TrackRender& track, size_t index, int32_t offset, int64_t from, TrackBuffers& out) noexcept;
+    // The bends of the track's sounding notes over the segment, along each one's curve.
+    void bendNotes(const TrackRender& track, const Segment& segment, TrackBuffers& out) noexcept;
+    // An active note's NoteRender in the track's notes (it may have been edited away: null).
+    const NoteRender* findNote(const TrackRender& track, ActiveNote& note) const noexcept;
+    // A fresh id for a note's events (never negative).
+    int32_t newNoteId() noexcept {
+        const int32_t id = nextNoteId_;
+        nextNoteId_ = nextNoteId_ == std::numeric_limits<int32_t>::max() ? 0 : nextNoteId_ + 1;
+        return id;
+    }
     void drainMidiInput(SharedState& shared) noexcept;
     void gatherMidiInput(int frames) noexcept;
     bool hearsMidiInput(const TrackRender& track, ChunkFlags flags) const noexcept;
@@ -385,7 +416,8 @@ private:
     bool isRecorded(uint32_t trackId) const noexcept;
     MidiRecordingTake* midiTake(uint32_t trackId) const noexcept;
     void routeMidiInput(const TrackRender& track, bool hears, MidiRecordingTake* take, TrackBuffers& out) noexcept;
-    void recordMidi(MidiRecordingTake* take, int offset, uint8_t channel, uint8_t key, uint8_t velocity) noexcept;
+    void recordMidi(MidiRecordingTake* take, int offset, uint8_t channel, uint8_t key, uint8_t velocity,
+                    bool bend = false, float semitones = 0.f) noexcept;
     int findLiveNote(uint32_t trackId, uint16_t port, uint8_t channel, uint8_t key) const noexcept;
     void forgetNotesOfRemovedTracks(const RenderSnapshot& snap) noexcept;
 
@@ -436,10 +468,13 @@ private:
     int64_t outputTime_ = 0;  // output samples rendered so far
 
     // Notes. Sized in prepare(); the counts say how much is in use.
+    int32_t nextNoteId_ = 0;
     std::vector<ActiveNote> activeNotes_;
     int numActiveNotes_ = 0;
     std::vector<PreviewNote> previewNotes_;
     int numPreviewNotes_ = 0;
+    std::vector<HeldPreview> heldPreviews_;  // their ids, for their note-offs (the oldest go when full)
+    int numHeldPreviews_ = 0;
 
     // MIDI input (live renders only).
     std::vector<MidiInputEvent> pendingInput_;  // arrived, not due yet; in arrival order

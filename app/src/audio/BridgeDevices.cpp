@@ -340,6 +340,40 @@ void EngineBridge::dropSidechain(quint32 processorId) {
     if (d_->sidechains.erase(processorId) > 0) engine_.clearProcessorSidechain(processorId);
 }
 
+bool EngineBridge::acceptsMidi(const QString& trackId, const QString& deviceId) {
+    const auto processorId = engineDeviceId(trackId, deviceId);
+    return processorId && engine_.processorInfo(*processorId).acceptsMidi;
+}
+
+// Every device's MIDI input from another track to the engine (devices in racks
+// too): those whose processor plays notes, from tracks the engine has.
+void EngineBridge::pushMidiInputs() {
+    Private& d = *d_;
+    std::map<quint32, quint32> wanted;  // processor -> its source's engine track
+    for (const Track* track : project_->allTracks()) {
+        for (const Device* device : iterDevices(track->devices)) {
+            if (device->midiFrom.isEmpty()) continue;
+            const auto processorId = engineDeviceId(track->id, device->id);
+            const auto source = engineTrackId(device->midiFrom);
+            if (processorId && source && engine_.processorInfo(*processorId).acceptsMidi) wanted[*processorId] = *source;
+        }
+    }
+    for (auto it = d.midiInputs.begin(); it != d.midiInputs.end();) {
+        if (wanted.count(it->first) > 0) {
+            ++it;
+            continue;
+        }
+        engine_.setProcessorMidiInput(it->first, 0);
+        it = d.midiInputs.erase(it);
+    }
+    for (const auto& [processorId, source] : wanted) {
+        const auto had = d.midiInputs.find(processorId);
+        if (had != d.midiInputs.end() && had->second == source) continue;
+        engine_.setProcessorMidiInput(processorId, source);
+        d.midiInputs[processorId] = source;
+    }
+}
+
 // The devices switched on or off as the model has them; those whose switch's
 // automation plays are on (their lanes switch them). One switched by hand while
 // its switch is automated overrides that automation.
@@ -514,6 +548,7 @@ void EngineBridge::forgetProcessor(const QString& deviceId, std::optional<quint3
     }
     d.enabled.remove(id);
     d.sidechains.erase(id);
+    d.midiInputs.erase(id);
     d.paramIds.remove(id);
     d.paramInfos.remove(id);
     d.paramSpecs.remove(id);

@@ -577,7 +577,7 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot(), axis = axisRect();
     const QFont font = captionFont();
-    p.fillRect(QRectF(0, 0, width(), height()), Theme::kMeterBg);
+    p.fillRect(QRectF(0, 0, width(), height()), Theme::meterBg());
 
     // The curve and the shelves' guides, worked out first: the axis' figures keep clear of them (of where the
     // curve rests: its ripple would flip a figure to and fro). Frozen, the curve no longer settles onto the
@@ -610,7 +610,7 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     std::vector<std::pair<QRectF, QString>> chipped;
     for (std::size_t k = 0; k < kDecades.size(); ++k) {
         const double y = yOf(kDecades[k]);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, 120));
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::gridBeat(), 120));
         const QString text = axisText(kDecades[k]);
         QRectF box = underBox(kDecades[k]);
         if (crosses(inkOf(box, text, metrics))) {
@@ -624,7 +624,7 @@ void ReverbDecayGraph::paint(SgPainter& p) {
             }
             box = over;
         }
-        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::kTextDisabled, font);
+        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::textDisabled(), font);
     }
 
     // The tail's spectrum as it dies away.
@@ -638,18 +638,18 @@ void ReverbDecayGraph::paint(SgPainter& p) {
             shape.emplace_back(r.left() + (i + 0.5) * r.width() / columns, axis.bottom() - fraction * axis.height());
         }
         QLinearGradient gradient(QPointF(0, axis.top()), QPointF(0, r.bottom()));
-        gradient.setColorAt(0, withAlpha(Theme::kScopeLine, 70));
-        gradient.setColorAt(1, withAlpha(Theme::kScopeLine, 0));
+        gradient.setColorAt(0, withAlpha(Theme::scopeLine(), 70));
+        gradient.setColorAt(1, withAlpha(Theme::scopeLine(), 0));
         p.fillToBaseline(shape.data(), int(shape.size()), r.bottom(), gradient);
     }
 
     // Frozen: the plot takes the frozen tint.
     if (frozen > 0.0)
-        p.fillRect(r, withAlpha(Theme::kFrozen, int(34 * frozen)));
+        p.fillRect(r, withAlpha(Theme::frozen(), int(34 * frozen)));
 
     // The curve: filled, glowing while the tail sounds, rippling with the chorus.
     const double glow = glow_.value;
-    const QColor color = dry_ ? Theme::kTextDisabled : mixColor(Theme::kScopeLine, Theme::kFrozen, frozen);
+    const QColor color = dry_ ? Theme::textDisabled() : mixColor(Theme::scopeLine(), Theme::frozen(), frozen);
     const double ripple = kRipplePx * depth_.value * glow;
     if (ripple > 0.0) {
         for (std::size_t i = 0; i < curve.size(); ++i) {
@@ -663,21 +663,21 @@ void ReverbDecayGraph::paint(SgPainter& p) {
     }
 
     // The shelves' guides: how long their bands ring, level out to their edges.
-    const QColor accent = dry_ ? Theme::kTextDisabled : Theme::kAccent;
+    const QColor accent = dry_ ? Theme::textDisabled() : Theme::accent();
     for (const std::vector<QPointF>& line : guides)
         drawDashedPolyline(p, line, withAlpha(accent, guide), 1.0);
 
     for (const auto& [box, text] : chipped) {
-        p.fillRoundedRect(inkOf(box, text, metrics).adjusted(-2, -2, 2, 2), 2, 2, withAlpha(Theme::kMeterBg, 220));
-        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::kTextDisabled, font);
+        p.fillRoundedRect(inkOf(box, text, metrics).adjusted(-2, -2, 2, 2), 2, 2, withAlpha(Theme::meterBg(), 220));
+        p.drawText(box, Qt::AlignLeft | Qt::AlignVCenter, text, Theme::textDisabled(), font);
     }
     p.restore();
 
     // The captions: what it shows, and the handle under the mouse (else Decay, or Frozen).
-    p.drawText(captionRect(), Qt::AlignLeft | Qt::AlignVCenter, captionText(), Theme::kTextDim, font);
+    p.drawText(captionRect(), Qt::AlignLeft | Qt::AlignVCenter, captionText(), Theme::textDim(), font);
     const bool lit = pressed_ != None || hovered_ != None;
     p.drawText(readoutRect(), Qt::AlignRight | Qt::AlignVCenter, readout(),
-               lit ? Theme::kText : frozen > 0.5 ? Theme::kFrozen : Theme::kTextDim, font);
+               lit ? Theme::text() : frozen > 0.5 ? Theme::frozen() : Theme::textDim(), font);
 
     // The handles: rings, growing under the mouse, filled while held; a switched-off shelf's hollow and dim;
     // all of them dimmed while frozen (unless held or hovered).
@@ -686,9 +686,9 @@ void ReverbDecayGraph::paint(SgPainter& p) {
         const double grown = grow_[std::size_t(handle)].value;
         const double radius = 4.0 + 2.0 * grown;
         const bool on = shelfOn(handle);
-        QColor ring = on ? accent : Theme::kTextDim;
+        QColor ring = on ? accent : Theme::textDim();
         ring.setAlphaF(float(ring.alphaF() * (1.0 - 0.6 * frozen * (1.0 - grown))));
-        p.fillEllipse(at, radius, radius, handle == pressed_ && on ? ring : Theme::kMeterBg);
+        p.fillEllipse(at, radius, radius, handle == pressed_ && on ? ring : Theme::meterBg());
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), ring, on ? 2.0 : 1.2);
         if (handle == Decay && pressed_ != Decay)
             p.fillEllipse(at, 1.5, 1.5, ring);

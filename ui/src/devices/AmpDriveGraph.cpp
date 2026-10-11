@@ -244,23 +244,23 @@ void AmpDriveGraph::refreshDisplays() {
 void AmpDriveGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const QRectF r = plot();
-    p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::kMeterBg);
+    p.fillRoundedRect(QRectF(0, 0, width(), height()), 4, 4, Theme::meterBg());
     // The grid: half scale either way and the axes through the middle, short of the texts.
     const QString peak = peakText();
     for (const GridLine& line : grid(peak))
-        p.drawLine(line.line.p1(), line.line.p2(), withAlpha(line.axis ? Theme::kGridBeat : Theme::kGridSub, 200));
+        p.drawLine(line.line.p1(), line.line.p2(), withAlpha(line.axis ? Theme::gridBeat() : Theme::gridSub(), 200));
 
     p.save();
     p.setClipRect(r);
     // The clean gain carried on: the bend away from it is the distortion.
     const double reach = range_ / std::max(std::abs(slope_), 1e-9);  // the input where it leaves the plot
-    p.drawLine(QPointF(xOf(-reach), yOf(-range_)), QPointF(xOf(reach), yOf(range_)), withAlpha(Theme::kGridBar, 150));
+    p.drawLine(QPointF(xOf(-reach), yOf(-range_)), QPointF(xOf(reach), yOf(range_)), withAlpha(Theme::gridBar(), 150));
 
     std::vector<QPointF> points;
     points.reserve(curve_.size());
     for (const QPointF& v : curve_) points.emplace_back(xOf(v.x()), yOf(v.y()));
     if (points.size() >= 2)
-        p.drawPolyline(points.data(), int(points.size()), withAlpha(Theme::kAccent, 170), 1.5);
+        p.drawPolyline(points.data(), int(points.size()), withAlpha(Theme::accent(), 170), 1.5);
 
     // The part the signal uses glows; the dots ride its ends, the trail behind them.
     const double a = amplitude(input_.level);
@@ -273,26 +273,26 @@ void AmpDriveGraph::paint(SgPainter& p) {
                 used.emplace_back(xOf(v.x()), yOf(v.y()));
         }
         used.push_back(QPointF(xOf(a), yOf(curveAt(a))));
-        drawGlowPolyline(p, used, withAlpha(Theme::kAccent.lighter(120), int(255 * shown)), 2.0);
+        drawGlowPolyline(p, used, withAlpha(Theme::accent().lighter(120), int(255 * shown)), 2.0);
         for (int k = kTrail - 1; k >= 1; --k) {
             const double t = trail_[size_t(k)];
             if (t == a)
                 continue;
-            const QColor color = withAlpha(Theme::kAccent, int(110.0 * (1.0 - double(k) / kTrail) * shown));
+            const QColor color = withAlpha(Theme::accent(), int(110.0 * (1.0 - double(k) / kTrail) * shown));
             p.fillEllipse(QPointF(xOf(t), yOf(curveAt(t))), 2.0, 2.0, color);
             p.fillEllipse(QPointF(xOf(-t), yOf(curveAt(-t))), 2.0, 2.0, color);
         }
         for (const double x : {-a, a}) {
             const QPointF at(xOf(x), yOf(curveAt(x)));
-            p.fillEllipse(at, 4.5, 4.5, withAlpha(Theme::kAccent, int(255 * shown)));
+            p.fillEllipse(at, 4.5, 4.5, withAlpha(Theme::accent(), int(255 * shown)));
             p.fillEllipse(at, 2.5, 2.5, withAlpha(Qt::white, int(255 * shown)));
         }
     }
     p.restore();
 
     const QFont font = textFont();
-    p.drawText(captionPen(), captionText(), Theme::kTextDim, font);
-    p.drawText(peakPen(peak), peak, Theme::kText, font);
+    p.drawText(captionPen(), captionText(), Theme::textDim(), font);
+    p.drawText(peakPen(peak), peak, Theme::text(), font);
 }
 
 }  // namespace sub::ui

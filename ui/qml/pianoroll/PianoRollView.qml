@@ -6,11 +6,13 @@ import SUBstation
 // keys on the left, the notes in the middle with the song's chords along their
 // top (while the harmony shows: C) and the note tools floating over them, the
 // velocities below, and scroll bars. The headphones button turns hearing notes
-// off. The clips it shows are the roll's (`roll.setClips(refs)`, or
+// off; the bend button (B) shows the notes' bend curves to edit (MIDI 2.0's
+// per-note pitch bend), with the bend bar at the grid's top right. The clips
+// it shows are the roll's (`roll.setClips(refs)`, or
 // `roll.setClip(trackId, clipId)`; the clip view sets them).
 //
 //   ┌──────────┬────────────────────────────┬───┐
-//   │ preview  │ PianoRuler (24 px)         │   │
+//   │ hear bend│ PianoRuler (24 px)         │   │
 //   ├──────────┼────────────────────────────┼───┤
 //   │ PianoKeys│ NoteGrid, ChordLane on top │ v │
 //   │ (64 px)  │             ┌───────────┐  │ b │
@@ -32,6 +34,8 @@ Item {
     readonly property alias tools: noteTools
     readonly property alias chords: chordLane
     readonly property alias preview: previewButton
+    readonly property alias bend: bendButton
+    readonly property alias bendTools: bendTools
 
     readonly property int keysWidth: 64
     readonly property int rulerHeight: 24
@@ -52,19 +56,31 @@ Item {
         onLocateRequested: beat => view.locateRequested(beat)
     }
 
-    Item {
-        width: view.keysWidth
-        height: view.rulerHeight
+    Row {
+        x: Math.round((view.keysWidth - width) / 2)
+        y: Math.round((view.rulerHeight - height) / 2)
+        spacing: 2
 
         ToggleButton {
             id: previewButton
             objectName: "preview"
-            anchors.centerIn: parent
             role: "tool"
             iconName: "headphones"
             tooltip: qsTr("Hear notes as you click, add and move them")
             checked: pianoRoll.preview
             onToggled: pianoRoll.preview = checked
+        }
+        ToggleButton {
+            id: bendButton
+            objectName: "bendMode"
+            role: "tool"
+            iconName: "bend"
+            tooltip: qsTr("Edit the notes' pitch bends: curves with points, vibrato and slides (B);\nhold Shift there for the notes")
+            checked: pianoRoll.bendMode
+            onToggled: {
+                pianoRoll.bendMode = checked
+                checked = Qt.binding(() => pianoRoll.bendMode)
+            }
         }
     }
 
@@ -124,6 +140,12 @@ Item {
         NoteTools {
             id: noteTools
             objectName: "noteTools"
+            roll: pianoRoll
+        }
+
+        BendTools {
+            id: bendTools
+            objectName: "bendTools"
             roll: pianoRoll
         }
     }

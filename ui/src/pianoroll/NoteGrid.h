@@ -22,6 +22,24 @@
 // has shortcuts for most of them too (for clips): the grid accepts their
 // ShortcutOverride, so they come to it as key presses instead of firing the
 // window's actions while it has the focus.
+//
+// Bends (NoteGridBends.cpp; B, or the bend button, turns bend mode on and off,
+// with the Draw tool): every note shows its bend as a curve (a semitone a row)
+// to edit as an automation envelope is: click on the line to add a point (press
+// and drag to place it), click a point to delete it, drag points (Ctrl-click
+// selects several) in time and pitch (on the grid and whole semitones; Alt:
+// freely), Alt-drag a segment to bend it, drag in empty space to select points,
+// double-click to put one at the pitch clicked. Delete deletes the selected
+// points; Ctrl+A selects every point. The vibrato tool (V) draws vibrato: drag
+// across a note for the stretch it covers (on the grid; Ctrl: anywhere; up
+// deepens it, and sideways with Shift held makes it faster or slower, with Alt
+// its ramp longer or shorter), click a note for vibrato from there to its end,
+// click a vibrato to take it away. The glide tool (G) draws a slide into the
+// note after it: from the press (on the grid; Ctrl: anywhere) over the stretch
+// dragged across (a click: to the note's end), sideways with Alt held bending
+// it (right: it arrives later). While Shift is held (but with the vibrato
+// tool), the notes show and are edited as out of bend mode. Out of bend mode,
+// bent notes show their curves faintly.
 
 #include "model/Clip.h"
 #include "pianoroll/NoteSet.h"
@@ -49,6 +67,18 @@ public:
     static constexpr double kEdgeGrab = 5.0;  // pixels inside each end of a note that resize it
     static constexpr double kDragThreshold = 3.0;
     static constexpr double kPasteDash = 4.0;  // the paste marker's dashes (and gaps), in pixels
+    // Bends, as automation's envelopes.
+    static constexpr double kPointRadius = 3.0;
+    static constexpr double kPointGrab = 6.0;     // pixels around a bend point that grab it
+    static constexpr double kLineGrab = 5.0;      // pixels around a curve that count as on it
+    static constexpr double kSegmentGrab = 14.0;  // pixels around a segment that Alt-grab it
+    static constexpr double kCurvePixels = 150.0;  // an Alt-drag this far bends a segment from straight to its most
+    // Drawing vibrato: a Shift-drag this far sideways doubles its rate (or
+    // halves it); an Alt-drag this far takes its ramp from none to all of it.
+    static constexpr double kVibratoRatePixels = 100.0;
+    static constexpr double kVibratoRampPixels = 200.0;
+    // Drawing a slide: an Alt-drag this far sideways bends it from straight to its most.
+    static constexpr double kGlideCurvePixels = 150.0;
 
     // Where a note was hit: its ends resize it, its body moves it.
     enum class Zone { Start, End, Body };
@@ -69,6 +99,27 @@ public:
     // The keys the grid takes, before the window's shortcuts.
     static bool handles(const QKeyEvent* event);
 
+    // In bend mode, what is under the mouse: a note's bend point (`point`), its
+    // curve (a click adds a point at `beat`, `semitones`: on the grid, on the
+    // curve drawn by hand), or with Alt a segment between two points (`point`:
+    // the first).
+    struct BendHit {
+        enum class Kind { Point, Line, Segment };
+        Kind kind = Kind::Line;
+        ClipNote note;
+        int point = -1;
+        double beat = 0.0;  // roll beats
+        double semitones = 0.0;
+    };
+    std::optional<BendHit> bendHitAt(const QPointF& pos, Qt::KeyboardModifiers modifiers) const;
+    // The note whose curve passes nearest `pos` where it is (of the notes
+    // sounding at its x), within `grab` pixels of it (< 0: however far).
+    std::optional<ClipNote> curveNear(const QPointF& pos, double grab) const;
+    // The note the vibrato and glide tools act on: the one whose curve is near
+    // `pos`, else the one under it. A slide from a note goes to slideTarget().
+    std::optional<ClipNote> toolNote(const QPointF& pos) const;
+    std::optional<app::Note> slideTarget(const ClipNote& note) const;
+
     class Gesture;
 
 protected:
@@ -85,21 +136,38 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
     void geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) override;
     void itemChange(ItemChange change, const ItemChangeData& value) override;
     void rollConnected(PianoRoll* roll) override;
 
 private:
     void drawNote(SgPainter& painter, const app::Note& note, const QRectF& rect, const QColor& color,
-                  const QFont& font, bool selected, bool playing, bool outOfKey) const;
+                  const QFont& font, bool selected, bool playing, bool outOfKey, bool dim = false) const;
+    // Bends (NoteGridBends.cpp): the curves (to edit in bend mode, faint
+    // otherwise), presses and double-clicks in bend mode, and its cursor.
+    void paintBends(SgPainter& painter, const QRectF& visible) const;
+    std::unique_ptr<Gesture> bendPress(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    void bendDoubleClick(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    Qt::CursorShape bendCursor(const QPointF& pos, Qt::KeyboardModifiers modifiers);
+    // Bend-mode keys: B, V, G, and with the curves shown Delete and Ctrl+A. True if taken.
+    bool bendKey(QKeyEvent* event);
     void updateCursor(const QPointF& pos, Qt::KeyboardModifiers modifiers);
-    // Show the hand as soon as Ctrl+Alt is held, without moving the mouse.
+    // Show the hand as soon as Ctrl+Alt is held, without moving the mouse; in
+    // bend mode, the notes while Shift is (not during a drag of the curves).
     void onModifiers(Qt::KeyboardModifiers modifiers);
+    void syncPeek(Qt::KeyboardModifiers modifiers);
+    // A gesture's modifiers: one on the notes in bend mode (Shift held) sees no Shift.
+    Qt::KeyboardModifiers gestureModifiers(Qt::KeyboardModifiers modifiers) const {
+        return peekGesture_ ? modifiers & ~Qt::ShiftModifier : modifiers;
+    }
 
     std::unique_ptr<Gesture> gesture_;
+    bool peekGesture_ = false;  // it began on the notes with Shift held in bend mode
     // What a click selects when the mouse comes up without dragging.
     std::optional<std::vector<ClipNote>> selectOnClick_;
     std::optional<QPointF> hover_;  // where the mouse is over the grid
+    std::optional<BendHit> bendHover_;  // in bend mode, what is under the mouse (a ghost point, a hovered one)
 };
 
 }  // namespace sub::ui

@@ -42,14 +42,14 @@ session's ([session.md](session.md)).
 | [Project.h](../../app/src/model/Project.h) | `Project` (QObject: queries, mutators, signals), `ProjectContents` (everything replaced at once), `ChainField`/`ChainValue` and `SettingsField`/`SettingsValue` (what `updateChain` and `updateSettings` change), `DeviceParam`, `LaneRef` |
 | [Track.h](../../app/src/model/Track.h) | `Track`, `Freeze`, `MidiInput`, `Send`, `SendMap`, `EnvelopeMap`; `TrackField`/`TrackValue` (what `updateTrack` changes) and `trackFieldName`; the kinds (`kAudioKind`, `kMidiKind`, `kGroupKind`, `kReturnKind`, `kMasterKind`), `kMonitorModes`, `kTrackColors`, track heights; `newMaster`, `returnLetter` |
 | [TrackNames.h](../../app/src/model/TrackNames.h) | Track names: `#` for its number (`numberedName`), audio and MIDI tracks named by what they hold (`contentsLabel`, `contentsName`, `namedByContents`), names older projects had (`hasPlainName`, `plainNameTemplate`), `takeName` |
-| [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
+| [Clip.h](../../app/src/model/Clip.h) | `Clip` (audio and MIDI alike), `Note`, `BendPoint`, `Vibrato`, `PlayedNote`; `kWarpModes`, `legacyWarpMode`, `kMinSegmentBpm`, `kMaxSegmentBpm` |
 | [Device.h](../../app/src/model/Device.h) | `Device`, `Chain`, `PluginRef`, `Sidechain`, `MacroMapping`; the device-tree helpers (`iterDevices`, `iterChains`, `devicePath`, `deviceAt`, `findDevice`, `findChain`, `chainIndex`, `chainDevices`, `containerOf`, `rackDepth`, `rackHeight`, `refreshIds`); `kPluginKind`, `kRackKind`, `kMaxRackDepth`, `kDefaultMacroCount`, `kMaxMacroCount`, `macroParam`, `macroIndex`, `macroCount`, `macroName`, the taps `kPostFader`, `kPreFader`, `kPreFx` |
 | [Devices.h](../../app/src/model/Devices.h) | Kinds of devices: `builtinDevices()`, `builtinDevice()`, `builtinCategories()` (from the engine), `kDefaultInstrument`; `isInstrument`, `deviceIsInstrument`, `loadsInto`, `deviceName`, `kindName`; `newDevice`, `newRack`, `newChain`; `builtinParamInfo`, `deviceIdsOf`, `deviceIdsOfList`, `addDeviceIds` (into a set of many lists' ids), `innerDeviceIds` (what is in a rack) |
 | [Routing.h](../../app/src/model/Routing.h) | The group tree (`TreeEntry`, `TrackTree`, `treeProblem`, `repairTree`) and the routing graph (`routingGraph`, `feeds`, `wouldCycle`, `inputWouldCycle`, `sidechainWouldCycle`); `isDefaultOutput` (an output that goes where the default does: its own group, or the master from outside a group) |
 | [Automation.h](../../app/src/model/Automation.h) | `AutomationPoint`, `Envelope`, `AutomationView`, `kMaster`; in `sub::app::automation`: target keys, the mixer's normalized mappings, evaluation (`valueAt`, `leftValue`, `shape`), every envelope edit |
 | [ParamSpec.h](../../app/src/model/ParamSpec.h) | `ParamSpec`: any automatable parameter described alike, with the engine's normalized mapping; `mixerSpecs`, `sendSpec`, `chainSpecs`, `formatValue` |
 | [Edits.h](../../app/src/model/Edits.h) | `sub::app::edits`: pure clip maths for audio and MIDI clips alike: overlaps, cuts, trims, splits, ranges, tempo fitting, consolidating, reversing, stretching, slipping, fades; `sortByStart`, how clip lists are kept |
-| [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize timing; note names |
+| [Notes.h](../../app/src/model/Notes.h) | `sub::app::notes`: pure note maths for the piano roll: overlaps on a key, moves, resizes, velocity, legato, ×2/÷2, quantize, humanize timing, bends and vibratos; note names |
 | [Commands.h](../../app/src/model/Commands.h) | The `QUndoCommand` subclasses and what they share: `ValueCommand` (a target, its old and new value), `MergeableCommand` (one that merges continuous gestures: `kMergeId`, `mergeId`), `InsertCommand`/`RemoveCommand` (a track into or out of the tracks or the returns) |
 | [Timebase.h](../../app/src/model/Timebase.h) | `TimeSignature`, beats and seconds, bar.beat.sixteenth formatting and parsing, dB and pan text |
 | [Keys.h](../../app/src/model/Keys.h) | Musical keys (`Key`), tempo and key from file names (`parseFilename`), what a dropped clip starts with (`clipSettings`) |
@@ -109,6 +109,19 @@ both kinds are edited alike.
 - `Note`: `pitch` (60 = C3, Ableton's octave numbering), `start` and `length` in beats from the clip's content start,
   `velocity` 1..127, and `muted`: deactivated (0 in the piano roll), kept and edited as any other but not heard.
   `notes::withActive()` deactivates (or activates) some of a clip's notes where they are.
+- A note's **bend** (MIDI 2.0's per-note pitch bend): `bend`, a list of `BendPoint`s (`time` in beats from the
+  note's start, `semitones` from its pitch, `curve` -1..1 bending the segment from it to the next as an automation
+  breakpoint's does), sorted by time, and `vibrato`, `Vibrato`s on top of it (`start` and `length` in beats from the
+  note's start, `depth` semitones either way, `rate` cycles a second, `fade` the share of its length it swells in
+  over), in time order and not overlapping. The curve starts at the note's pitch at its start, goes through the
+  points, then holds the last one's value; a point at (or before) the start sets where it starts. A vibrato swells
+  in and dies away over its last tenth, so it begins and ends on the curve: drawn over a bend, it follows it.
+  `bent()` says whether it has either; `bendAt(beat, tempo)` is what it sounds like there (the vibratos' rates are in
+  seconds, so it takes the tempo) and `curveAt(beat)` the points' curve alone. Both are the engine's own rules,
+  `sub::bend` in [engine/src/NoteBend.h](../../engine/src/NoteBend.h) (header-only, no engine types), so what the
+  piano roll draws is what plays. The bend's times are the note's own, so it moves, copies and transposes with the
+  note; points or vibratos past its end are kept, not heard. Bends are held to ±48 semitones
+  (`notes::kMaxBendSemitones`, MIDI 2.0's per-note range).
 - `kWarpModes` is in the engine's `WarpMode` order: Transients, Standard, Smooth, Formants, Re-Pitch.
   `legacyWarpMode()` maps the earlier Ableton-style names (Beats, Tones, Complex, Texture, Complex Pro) to the mode
   that plays the same way; loading applies it.
@@ -143,7 +156,13 @@ tracks, the returns, then the master; `owners()` the same ids; `senders()` the t
 ### Devices, racks, chains
 
 `Device` ([Device.h](../../app/src/model/Device.h)): `id`, `kind`, `enabled`, `params` (param id → plain value),
-`plugin`, `state`, `sidechain`, and for a rack `chains`, `macros` and `name`.
+`plugin`, `state`, `sidechain`, `midiFrom`, and for a rack `chains`, `macros` and `name`.
+
+`midiFrom` is a MIDI track whose notes the device plays instead of its own track's (`""`: its own track's), for a
+device that plays notes: an instrument, or an effect with a MIDI input (a vocoder, a pitch corrector: whether it has
+one is its processor's, `EngineBridge::acceptsMidi`). It is no edge of the routing graph: notes carry no audio, so
+no MIDI input closes a cycle, and a device on any track (a return, the master) may take any MIDI track's but its own.
+`Project::midiSources(track)` lists those, in order.
 
 - **Built-in** (`kind` `"synth"`, `"utility"`, ...): its state is its `params`, and `state` for what isn't a
   parameter (see `DeviceState.h`). The engine follows the model. The list of built-in devices, their names,
@@ -360,7 +379,7 @@ chain's devices don't show beside them: shown by default) (ids, view state), and
 | `trackChanged(id)` | name (renamed; renumbered by a track coming, going or moving above it, after that track's signal; renamed by what it holds, after `clipsChanged` or `devicesChanged`), colour, mixer, sends, input, monitoring, arming, height, folding (`kMaster`: the master's mixer) |
 | `tracksArranged()` | the order or groups changed (not which tracks there are) |
 | `clipsChanged(track id)` | a track's clips were replaced, or what of its frozen audio plays |
-| `devicesChanged(track id)` | devices added, removed, moved, toggled (in racks too), a sidechain, macros or a rack's name changed |
+| `devicesChanged(track id)` | devices added, removed, moved, toggled (in racks too), a sidechain, a MIDI input, macros or a rack's name changed |
 | `chainChanged(track id, chain id)` | a rack chain's name or mixer |
 | `deviceParamChanged(track id, device id, param id)` | one parameter |
 | `deviceStateChanged(track id, device id)` | a device's state was set (a preset, a sample) |
@@ -421,7 +440,7 @@ The session owns one `QUndoStack` and one `ProjectEditor(project, undoStack)`. T
 | `UpdateChainCommand`, `SetMacrosCommand`, `SetDeviceNameCommand` | a rack chain's name or mixer; a rack's macro mappings, with the values of the parameters a range change moves (merging per gesture); a rack's name |
 | `SetDeviceStateCommand` | a device's state (a plug-in preset, a sampler's sample) |
 | `ReplaceFilesCommand` | other files in some files' place: the clip lists of the tracks playing them and the states of the built-in devices naming them (`DeviceStates`), together; merging per hot swap (the same tracks and devices); `relink` for files only found somewhere else (frozen tracks take those) |
-| `SetDeviceEnabledCommand`, `SetDeviceSidechainCommand` | on/off; sidechain |
+| `SetDeviceEnabledCommand`, `SetDeviceSidechainCommand`, `SetDeviceMidiFromCommand` | on/off; sidechain; MIDI input (`Device::midiFrom`, "Change MIDI Input" / "Remove MIDI Input") |
 | `SetEnvelopeCommand`, `SetEnvelopesCommand` | one envelope; several (a range moved on several lanes) |
 
 How it fits together:
@@ -477,9 +496,9 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
 - **Tracks**: `addAudioTrack` [Q], `addMidiTrack` [Q] (with the default instrument, as its default preset has it; C++
   forms take a built-in instrument or a plug-in and a parent), `addMidiTrackWith` (a new MIDI track with an instrument
   preset, one step), `insertionPoint`, `deleteTracks` [Q] (a group with what is in it, a return with the sends into
-  it and their automation; inputs and sidechains from them go: one step), `duplicateTracks` [Q] (new ids for tracks,
-  clips, devices and rack chains; automation keys, automation view, sidechains and inputs among the copied tracks
-  renamed to the copies; not armed), `copyTracks`, `cutTracks`, `pasteTracks` (`CopiedTracks`; a copy's name without a `#` is made unique),
+  it and their automation; inputs, sidechains and MIDI inputs from them go: one step), `duplicateTracks` [Q] (new ids for tracks,
+  clips, devices and rack chains; automation keys, automation view, sidechains, inputs and MIDI inputs among the
+  copied tracks renamed to the copies; not armed), `copyTracks`, `cutTracks`, `pasteTracks` (`CopiedTracks`; a copy's name without a `#` is made unique),
   `renameTrack` [Q] (its name template: `"# Lead"`),
   `setTrackColor` [Q], `setTrackParam` / `setTracksParam` (mixer; the master only volume and pan), `soloTracks` [Q],
   `armTracks` [Q], `setTrackHeight` [Q], `setFolded` [Q].
@@ -493,7 +512,7 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   `setLoop` [Q], `setLoopEnabled` [Q], `setAutomationLocked` [Q].
 - **Clips**: `commitClips`, `addClips` (audio files one after another, set up by `clipSettings`; a new audio track if
   needed), `addMidiClip`, `addMidiClipsOver`, `midiClipSpan`, `setClipNotes` (and `setClipsNotes`: several clips' notes in one
-  undo step, for the piano roll editing them together), `moveClips` (with `clampTrackDelta`:
+  undo step, for the piano roll editing them together, bends too), `moveClips` (with `clampTrackDelta`:
   only onto tracks of the same kind), `replaceClip`, `updateClips`, `deleteClips`, `splitClips`, `duplicateClips`,
   `consolidateClips` (Ctrl+J), time selections (`deleteRange` [Q], `duplicateRange`, `copyRange`, `cutRange`,
   `paste`, `pasteTargets`, `moveRange`, `movedRange` (what `moveRange` would make of the clips, and of frozen
@@ -501,7 +520,8 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   copies of their files, given by the
   caller; split at the range's edges), `setRangeActive` (0: the clips in a range deactivated, or activated again;
   split at the range's edges), `clipsArea`, `clipsInRange`, `clipsAt`), and `addRecordings` (takes become
-  clips in one step; MIDI takes quantized to the record grid).
+  clips in one step; MIDI takes quantized to the record grid; the per-note bends played on a note, MIDI 2.0's, become
+  its bend, drawn with as few points as keep its shape: `notes::simplifiedBend`).
 - **A time selection is everything in it**: unless `automationLocked`, deleting, moving, copying, duplicating,
   cutting and pasting a range acts on the automation of every track in it as on its clips, whether the track has
   clips there or not (a group's too): only envelopes with breakpoints in the range; across tracks only the mixer's (a
@@ -510,7 +530,7 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
   `duplicateRange`, `cutRange` and `paste` none, and `moveRange` where the range still is.
 - **Devices**: `addDevice` [Q], `insertDevice(s)` (an instrument only on a MIDI track, first, replacing the one there;
   effects never before it), `copyDevices`, `pasteDevices` (sidechains kept unless the source is gone or would close a
-  cycle; folded copies stay folded), `moveDevice(s)` [Q], `moveDevicesToTrack` [Q] (the same devices, so plug-ins
+  cycle; MIDI inputs kept unless the source is gone or is the track pasted onto; folded copies stay folded), `moveDevice(s)` [Q], `moveDevicesToTrack` [Q] (the same devices, so plug-ins
   keep their state; their automation moves with them in the same step), `removeDevice(s)` [Q], `setDevicesFolded`
   [Q], `setChainListShown` [Q], `setRackDevicesShown` [Q] (view state), `setDeviceDefaults` (where new devices come
   from: default presets). Changing a track's devices deletes the automation of devices (and rack chains) that left
@@ -519,7 +539,10 @@ Main operations, by area (`[Q]`: `Q_INVOKABLE`, callable from QML):
 - **A device's settings**: `setDeviceParam` [Q] (a C++ form takes `old` for plug-ins, whose values the model doesn't
   hold), `setDeviceParams` [Q] (several of a built-in device's at once: one step, merging per gesture while the same
   parameters change), `touchParameter` [Q], `setDeviceState`, `loadPresetInto` (a preset into a device of its kind:
-  `loadsInto`), `renameRack` [Q], `setDeviceEnabled` [Q], `setDeviceSidechain`.
+  `loadsInto`), `renameRack` [Q], `setDeviceEnabled` [Q], `setDeviceSidechain`, `setDeviceMidiFrom` (`EditError`
+  for a source that isn't a MIDI track; its own track, or `""`, is its own track's notes), `dropMidiInputs` (devices
+  taking these tracks' notes take their own track's again: deleting tracks, and flattening them, which makes them
+  audio tracks, do it in the same step).
 - **Racks**: `groupDevices` [Q] (Ctrl+G: devices of one chain into a new rack), `ungroupRack` [Q] (refused if several
   instruments would come out), `addRackChain`, `removeRackChains` [Q], `duplicateRackChain` [Q], `moveRackChain` [Q],
   `renameChain` [Q], `setChainParam` [Q], `mapMacro`, `unmapMacro` [Q], `macroOf`, `macroTargets`, `setMacro` [Q]
@@ -555,7 +578,7 @@ throws `EditError` ([Errors.h](../../app/src/model/Errors.h)) with a message for
 callable from QML throws: the throwing operations have `try*` forms, `Q_INVOKABLE`, which report the message on
 `refused` and return `false` (or `""`): `trySetTrackParam(track, field, value, key)` (field by its file name:
 `"volume_db"`, `"pan"`, `"mute"`, `"solo"`), `trySetSendLevel`, `trySetSendPreFader`, `trySetTrackInput`,
-`trySetTrackInputTrack`, `trySetTrackMonitor`, `trySetTrackMidiInput`, `trySetDeviceSidechain`, `tryAddRackChain`,
+`trySetTrackInputTrack`, `trySetTrackMonitor`, `trySetTrackMidiInput`, `trySetDeviceSidechain`, `trySetDeviceMidiFrom`, `tryAddRackChain`,
 `tryMapMacro`. The `Q_INVOKABLE` operations also do nothing for ids that are gone (QML may hold stale ones). Edits
 refused because of frozen audio are said on `refused` too. The session shows `refused` in the status line.
 
@@ -594,6 +617,16 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   (starts only, by up to `kHumanizeBeats` = a 32nd at 100 %; a triangular random, more often a little than a lot,
   from the `QRandomGenerator` given). Humanized velocities are the velocity model's
   ([intelligence.md](../intelligence.md#humanizing-velocities-by-machine-learning)).
+- Bends, for the piano roll's bend mode: `withBendPoint` (a point added, kept sorted, after any other at its time;
+  says where it went), `withBendPointsMoved` (points moved together stay in order between those not moved, and
+  within the note), `withoutBendPoints`, `withBendCurve`, `withVibrato` (a new vibrato takes the stretch it covers
+  from those already there: they are shortened, split, or go; held to the note, at least `kMinVibratoBeats`),
+  `withoutVibrato`, `nextNote` (the note a slide goes to: the next to start after it, of a chord the nearest in
+  pitch), `withSlide` (a slide over a stretch as two points, from the curve's value at its start to an interval at
+  its end, replacing the points it covers), and `simplifiedBend` (Ramer-Douglas-Peucker: a recorded bend's many
+  points drawn with few, within 0.05 semitones). Note edits carry bends: `withStart` (a trimmed start keeps the bend where it was in time:
+  `resized` and `resolveOverlaps` use it), `timeScaled` scales them, and `lessFull` orders notes alike but for
+  their bends (the piano roll's note sets are keyed by it).
 
 ## Invariants
 
@@ -610,6 +643,11 @@ refused because of frozen audio are said on `refused` too. The session shows `re
 - Racks never nest deeper than `kMaxRackDepth`.
 - Macro mappings only name devices inside their rack, and macros the rack has.
 - A rack has 1 to 16 macros, and a value for each.
+- A device's `midiFrom` names a MIDI track other than its own, or is empty: deleting or flattening the source takes
+  it away in the same step, and loading repairs edited files.
+- A note's bend points are sorted by time and its vibratos by start; edits keep vibratos from overlapping (each at
+  least `kMinVibratoBeats` long) and every value within ±48 semitones, and loading sorts both and holds them to
+  the range.
 
 ## Extending it
 
@@ -664,12 +702,18 @@ refused because of frozen audio are said on `refused` too. The session shows `re
   [test_editor_sends.cpp](../../tests/app/test_editor_sends.cpp),
   [test_editor_resampling.cpp](../../tests/app/test_editor_resampling.cpp),
   [test_editor_sidechain.cpp](../../tests/app/test_editor_sidechain.cpp),
+  [test_editor_midi_from.cpp](../../tests/app/test_editor_midi_from.cpp),
   [test_editor_racks.cpp](../../tests/app/test_editor_racks.cpp),
   [test_editor_presets.cpp](../../tests/app/test_editor_presets.cpp),
   [test_editor_freeze.cpp](../../tests/app/test_editor_freeze.cpp): each feature's rules, undo, cycles refused.
 - [test_editor_frozen_areas.cpp](../../tests/app/test_editor_frozen_areas.cpp): time selections over frozen tracks
   and groups (delete, move, copy, duplicate, cut, paste) with their frozen audio, in one undo step; what is refused;
   unfreezing and flattening afterwards.
+- [test_note_bends.cpp](../../tests/app/test_note_bends.cpp): bends and vibratos, the pure functions (order, moves,
+  vibratos taking their stretch, slides into the next note, note edits carrying bends), the model bending as the
+  engine does, recorded bends
+  drawn with few points and becoming the notes' bends, project files (and damaged bends refused), and bent notes
+  playing at their bent pitch.
 - [test_file_manager.cpp](../../tests/app/test_file_manager.cpp): files replaced and relinked (the pure functions,
   the editor's one step, a hot swap's merging and its baseline, frozen tracks), the File Manager and hot swaps.
 - [test_session_engine.cpp](../../tests/app/test_session_engine.cpp) and the `test_bridge_*` tests: the engine

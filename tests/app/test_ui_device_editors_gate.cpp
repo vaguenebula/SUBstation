@@ -308,7 +308,7 @@ private Q_SLOTS:
             bool ink = false;  // (well off the display's black)
             for (int y = int(std::ceil(row.top())); y < int(std::floor(row.bottom())) && !ink; ++y) {
                 const QColor c = shot.pixelColor(x, y);
-                ink = std::max({c.red(), c.green(), c.blue()}) > Theme::kMeterBg.red() + 40;
+                ink = std::max({c.red(), c.green(), c.blue()}) > Theme::meterBg().red() + 40;
             }
             if (ink && x < between)
                 lastIn = x;

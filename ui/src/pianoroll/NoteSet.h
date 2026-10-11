@@ -31,11 +31,9 @@ struct ClipNote {
 
 namespace sub::ui::roll {
 
-// A total order on notes: start, pitch, length, velocity, deactivated last.
-inline bool noteLess(const app::Note& a, const app::Note& b) {
-    return std::tie(a.start, a.pitch, a.length, a.velocity, a.muted) <
-           std::tie(b.start, b.pitch, b.length, b.velocity, b.muted);
-}
+// A total order on notes: start, pitch, length, velocity, deactivated last,
+// then their bends (the model's, app::notes::lessFull).
+inline bool noteLess(const app::Note& a, const app::Note& b) { return app::notes::lessFull(a, b); }
 
 inline std::vector<app::Note> noteSet(std::vector<app::Note> notes) {
     std::sort(notes.begin(), notes.end(), noteLess);

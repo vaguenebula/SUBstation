@@ -257,6 +257,14 @@ void SetDeviceSidechainCommand::redo() { project_->setDeviceSidechain(trackId(),
 
 void SetDeviceSidechainCommand::undo() { project_->setDeviceSidechain(trackId(), deviceId(), old_); }
 
+SetDeviceMidiFromCommand::SetDeviceMidiFromCommand(Project* project, const QString& trackId, const QString& deviceId,
+                                                   QString old, QString nw, const QString& text)
+    : ValueCommand(project, text, {trackId, deviceId}, std::move(old), std::move(nw)) {}
+
+void SetDeviceMidiFromCommand::redo() { project_->setDeviceMidiFrom(trackId(), deviceId(), new_); }
+
+void SetDeviceMidiFromCommand::undo() { project_->setDeviceMidiFrom(trackId(), deviceId(), old_); }
+
 // --- Automation ---
 
 SetEnvelopesCommand::SetEnvelopesCommand(Project* project, QMap<LaneRef, Envelope> old, QMap<LaneRef, Envelope> nw,

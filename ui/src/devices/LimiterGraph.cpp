@@ -427,8 +427,8 @@ void LimiterGraph::paint(SgPainter& p) {
     p.setAntialiasing(true);
     const double w = width(), h = height();
     const QRectF outer = QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5);
-    p.fillRoundedRect(outer, 5, 5, Theme::kMeterBg);
-    p.drawRoundedRect(outer, 5, 5, withAlpha(Theme::kGridBeat, 150));
+    p.fillRoundedRect(outer, 5, 5, Theme::meterBg());
+    p.drawRoundedRect(outer, 5, 5, withAlpha(Theme::gridBeat(), 150));
 
     const QRectF r = plot();
     const QFont font7 = uiFont(7), font8 = uiFont(8);
@@ -437,18 +437,18 @@ void LimiterGraph::paint(SgPainter& p) {
     // The level's grid (0 dB a little brighter), which the reduction's 6, 12 and 18 dB share.
     for (const double db : {12.0, 0.0, -12.0, -24.0}) {
         const double y = yOf(db);
-        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::kGridBeat, db == 0.0 ? 255 : 150));
+        p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y), withAlpha(Theme::gridBeat(), db == 0.0 ? 255 : 150));
     }
 
     // Soft Clip's knee: where it starts rounding off up to where it reaches the line.
     if (soft_.value > 0.004) {
         const double top = yOf(line_.value + softTopDb_), bottom = yOf(line_.value + softKneeDb_);
         QLinearGradient band(QPointF(0, bottom), QPointF(0, top));
-        band.setColorAt(0, withAlpha(Theme::kAccent, 0));
-        band.setColorAt(1, withAlpha(Theme::kAccent, int(45 * soft_.value)));
+        band.setColorAt(0, withAlpha(Theme::accent(), 0));
+        band.setColorAt(1, withAlpha(Theme::accent(), int(45 * soft_.value)));
         p.fillRect(QRectF(r.left(), top, r.width(), bottom - top), band);
         drawDashedPolyline(p, {QPointF(r.left(), top), QPointF(r.right(), top)},
-                           withAlpha(Theme::kAccent, int(90 * soft_.value)), 1.0);
+                           withAlpha(Theme::accent(), int(90 * soft_.value)), 1.0);
     }
 
     // The history: the input (red over the line), the output inside it, the gain reduction from the top.
@@ -456,33 +456,33 @@ void LimiterGraph::paint(SgPainter& p) {
     if (n >= 2) {
         p.save();
         p.setClipRect(r);
-        p.fillToBaseline(inPoints_.data(), n, r.bottom(), withAlpha(Theme::kTextDim, 85));
+        p.fillToBaseline(inPoints_.data(), n, r.bottom(), withAlpha(Theme::textDim(), 85));
         if (ly > r.top()) {
             p.save();
             p.setClipRect(QRectF(r.left(), r.top(), r.width(), ly - r.top()));
-            p.fillToBaseline(inPoints_.data(), n, r.bottom(), withAlpha(Theme::kMeterHigh, 130));
+            p.fillToBaseline(inPoints_.data(), n, r.bottom(), withAlpha(Theme::meterHigh(), 130));
             p.restore();
         }
-        p.fillToBaseline(outPoints_.data(), n, r.bottom(), withAlpha(Theme::kText, 40));
-        p.drawPolyline(outPoints_.data(), n, withAlpha(Theme::kText, 95), 1.0);
+        p.fillToBaseline(outPoints_.data(), n, r.bottom(), withAlpha(Theme::text(), 40));
+        p.drawPolyline(outPoints_.data(), n, withAlpha(Theme::text(), 95), 1.0);
         if (!grRuns_.empty()) {
             QLinearGradient reduction(QPointF(0, r.top()), QPointF(0, r.bottom()));
-            reduction.setColorAt(0, withAlpha(Theme::kAccent, 30));
-            reduction.setColorAt(1, withAlpha(Theme::kAccent, 150));
+            reduction.setColorAt(0, withAlpha(Theme::accent(), 30));
+            reduction.setColorAt(1, withAlpha(Theme::accent(), 150));
             p.fillToBaseline(grPoints_.data(), n, r.top(), reduction);
             if (anyClip_) {  // Soft Clip's share: what the knee rounded off rather than turned down
-                p.fillBand(binX0_, 1.0, grTops_.data(), clipBottoms_.data(), n, withAlpha(Theme::kAccent, 60));
-                p.drawPolyline(clipPoints_.data(), n, withAlpha(Theme::kAccent, 130), 1.0);
+                p.fillBand(binX0_, 1.0, grTops_.data(), clipBottoms_.data(), n, withAlpha(Theme::accent(), 60));
+                p.drawPolyline(clipPoints_.data(), n, withAlpha(Theme::accent(), 130), 1.0);
             }
             for (const auto& [from, to] : grRuns_) {
                 const std::vector<QPointF> run(grPoints_.begin() + from, grPoints_.begin() + to);
-                drawGlowPolyline(p, run, Theme::kAccent, 1.25);
+                drawGlowPolyline(p, run, Theme::accent(), 1.25);
             }
         }
         // The oldest end fades into the well.
         QLinearGradient fade(QPointF(r.left(), 0), QPointF(r.left() + kFadeWidth, 0));
-        fade.setColorAt(0, Theme::kMeterBg);
-        fade.setColorAt(1, withAlpha(Theme::kMeterBg, 0));
+        fade.setColorAt(0, Theme::meterBg());
+        fade.setColorAt(1, withAlpha(Theme::meterBg(), 0));
         p.fillRect(QRectF(r.left(), r.top(), kFadeWidth, r.height()), fade);
         p.restore();
     }
@@ -490,43 +490,43 @@ void LimiterGraph::paint(SgPainter& p) {
     for (const double db : {12.0, 0.0, -12.0, -24.0}) {
         p.drawText(QRectF(r.left() + 3, yOf(db) + 1, 30, 10), Qt::AlignLeft | Qt::AlignTop,
                    db > 0 ? QStringLiteral("+%1").arg(int(db)) : QString::number(int(db)),
-                   withAlpha(Theme::kTextDim, 190), font7);
+                   withAlpha(Theme::textDim(), 190), font7);
     }
 
     // The meters, in wells: In and Out on the level axis (In red over the line, as the history), GR on
     // the reduction's (the knee's share under it).
     for (const double x : kMeterX)
-        p.fillRoundedRect(QRectF(x - 2, r.top() - 2, 2 * kBarWidth + 1 + 4, r.height() + 4), 2, 2, Theme::kPanel);
+        p.fillRoundedRect(QRectF(x - 2, r.top() - 2, 2 * kBarWidth + 1 + 4, r.height() + 4), 2, 2, Theme::panel());
     for (int c = 0; c < 2; ++c) {
         const std::size_t i = std::size_t(c);
         const QRectF in(kMeterX[0] + c * kBarPitch, r.top(), kBarWidth, r.height());
         drawLevelMeter(p, in, meterIn_[i].level, meterIn_[i].peak, kFloorDb, kTopDb);
         const double top = yOf(meterIn_[i].level);
         if (top < ly)
-            p.fillRect(QRectF(in.left(), top, in.width(), std::min(ly, in.bottom()) - top), Theme::kMeterHigh);
+            p.fillRect(QRectF(in.left(), top, in.width(), std::min(ly, in.bottom()) - top), Theme::meterHigh());
         const QRectF gr(kMeterX[1] + c * kBarPitch, r.top(), kBarWidth, r.height());
         drawReductionMeter(p, gr, meterGr_[i].level, kGrRangeDb);
         if (meterClip_.level > 0.0 && meterGr_[i].level < kGrRangeDb) {
             const double from = grY(meterGr_[i].level), to = grY(meterGr_[i].level + meterClip_.level);
-            p.fillRect(QRectF(gr.left(), from, gr.width(), to - from), withAlpha(Theme::kAccent, 90));
+            p.fillRect(QRectF(gr.left(), from, gr.width(), to - from), withAlpha(Theme::accent(), 90));
         }
         const QRectF out(kMeterX[2] + c * kBarPitch, r.top(), kBarWidth, r.height());
         drawLevelMeter(p, out, meterOut_[i].level, meterOut_[i].peak, kFloorDb, kTopDb);
     }
 
     // The line, across the plot and the meters, warming with the gain reduction; its handle.
-    const QColor lineColor = mixColor(Theme::kText, Theme::kAccent, glow_.value);
+    const QColor lineColor = mixColor(Theme::text(), Theme::accent(), glow_.value);
     drawGlowPolyline(p, {QPointF(r.left(), ly), QPointF(kHandleX, ly)}, lineColor, 1.5 + hover_.value);
     const QPointF handle[3] = {{kHandleX, ly}, {kHandleX + kHandleSize, ly - kHandleSize / 2},
                                {kHandleX + kHandleSize, ly + kHandleSize / 2}};
-    p.fillPolygon(handle, 3, mixColor(Theme::kAccent, QColor(255, 236, 200), 0.6 * hover_.value));
+    p.fillPolygon(handle, 3, mixColor(Theme::accent(), QColor(255, 236, 200), 0.6 * hover_.value));
 
     // The reduction's figures beside its meters, over the line (which passes behind them: at the
     // default ceiling it runs right through the 6).
     for (const double db : {6.0, 12.0, 18.0}) {
         const QRectF box(kMeterX[1] - 16, grY(db) - 5, 13, 10);
-        p.fillRect(box, Theme::kMeterBg);
-        p.drawText(box, Qt::AlignRight | Qt::AlignVCenter, QString::number(int(db)), withAlpha(Theme::kAccent, 140),
+        p.fillRect(box, Theme::meterBg());
+        p.drawText(box, Qt::AlignRight | Qt::AlignVCenter, QString::number(int(db)), withAlpha(Theme::accent(), 140),
                    font7);
     }
 
@@ -534,17 +534,17 @@ void LimiterGraph::paint(SgPainter& p) {
     const char* names[3] = {"In", "GR", "Out"};
     for (int m = 0; m < 3; ++m) {
         const double cx = kMeterX[m] + (kBarPitch + kBarWidth) / 2;
-        p.drawText(QRectF(cx - 12, 2, 24, 11), Qt::AlignCenter, QString::fromLatin1(names[m]), Theme::kTextDim,
+        p.drawText(QRectF(cx - 12, 2, 24, 11), Qt::AlignCenter, QString::fromLatin1(names[m]), Theme::textDim(),
                    font7);
         const QString channels = m == 1 && routing_ == 1 ? QStringLiteral("M S") : QStringLiteral("L R");
-        p.drawText(QRectF(cx - 12, 11, 24, 10), Qt::AlignCenter, channels, Theme::kTextDisabled, font7);
+        p.drawText(QRectF(cx - 12, 11, 24, 10), Qt::AlignCenter, channels, Theme::textDisabled(), font7);
     }
     const auto pill = [&](const QString& text, const QRectF& box, double opacity) {
         p.save();
         p.setOpacity(opacity);
-        p.fillRoundedRect(box, 6.5, 6.5, withAlpha(Theme::kAccent, 30));
-        p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6, withAlpha(Theme::kAccent, 170));
-        p.drawText(box, Qt::AlignCenter, text, Theme::kAccent, font7);
+        p.fillRoundedRect(box, 6.5, 6.5, withAlpha(Theme::accent(), 30));
+        p.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6, withAlpha(Theme::accent(), 170));
+        p.drawText(box, Qt::AlignCenter, text, Theme::accent(), font7);
         p.restore();
     };
     const QList<QRectF> badges = badgeRects();
@@ -556,10 +556,10 @@ void LimiterGraph::paint(SgPainter& p) {
     // The footer: the gain reduction now, the meters' peaks.
     const QList<QRectF> figures = figureRects();
     p.drawText(figures[0], Qt::AlignLeft | Qt::AlignVCenter | Qt::TextDontClip, grText_,
-               mixColor(Theme::kTextDim, Theme::kAccent, grTint_.value), font8);
+               mixColor(Theme::textDim(), Theme::accent(), grTint_.value), font8);
     const QString* readouts[3] = {&inText_, &grPeakText_, &outText_};
     for (int m = 0; m < 3; ++m)
-        p.drawText(figures[m + 1], Qt::AlignCenter | Qt::TextDontClip, *readouts[m], Theme::kTextDim, font7);
+        p.drawText(figures[m + 1], Qt::AlignCenter | Qt::TextDontClip, *readouts[m], Theme::textDim(), font7);
 }
 
 QList<QRectF> LimiterGraph::figureRects() const {

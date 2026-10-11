@@ -476,6 +476,19 @@ public:
     const QString& deviceId() const { return target_.second; }
 };
 
+// A device's MIDI input: the MIDI track whose notes it plays ("": its own track's).
+class SetDeviceMidiFromCommand : public ValueCommand<DeviceTarget, QString> {
+public:
+    SetDeviceMidiFromCommand(Project* project, const QString& trackId, const QString& deviceId, QString old,
+                             QString nw, const QString& text);
+
+    void redo() override;
+    void undo() override;
+
+    const QString& trackId() const { return target_.first; }
+    const QString& deviceId() const { return target_.second; }
+};
+
 // Replaces several envelopes at once, {(owner, key): envelope} (moving a time
 // range on several lanes). With a merge key, one drag is one undo step.
 // Target: the lanes.

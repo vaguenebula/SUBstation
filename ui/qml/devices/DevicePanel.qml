@@ -169,6 +169,23 @@ Rectangle {
         menu.popup(at, x, y)
     }
 
+    // A device's MIDI From menu: Own Track, then the MIDI tracks whose notes
+    // it can play instead, under a search field that has the keyboard as it opens.
+    function showMidiFromMenu(frame, at, x, y) {
+        const info = frame.info
+        menu.reset()
+        const entries = info.midiFromMenu()
+        for (let i = 0; i < entries.length; ++i) {
+            const entry = entries[i]
+            if (entry.search) {
+                menu.search(entry.children, source => info.setMidiFrom(source.source))
+                continue
+            }
+            menu.entry(entry.text, () => info.setMidiFrom(entry.source), entry.checked, entry.enabled)
+        }
+        menu.popup(at, x, y)
+    }
+
     // A rack chain's menu; after it (whatever was chosen, but Rename, and
     // unless the chain went) the chain shows beside its rack.
     function showChainMenu(row, x, y) {

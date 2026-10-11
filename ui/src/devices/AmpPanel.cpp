@@ -173,7 +173,7 @@ void AmpPanel::paint(SgPainter& p) {
 
 void AmpPanel::paintTubes(SgPainter& p) const {
     const QRectF r = tubeRect_;
-    p.fillRoundedRect(r, 4, 4, Theme::kMeterBg);
+    p.fillRoundedRect(r, 4, 4, Theme::meterBg());
     const double rail = r.bottom() - 11.0;  // the sockets' rail, the labels under it
     const double room = std::max(10.0, rail - r.top() - 4.0);
     constexpr double kPreampWidth = 22.0, kPowerWidth = 30.0, kGap = 8.0;
@@ -190,7 +190,7 @@ void AmpPanel::paintTubes(SgPainter& p) const {
     p.setClipRect(r.adjusted(1, 1, -1, -1));
     for (int i = 0; i < kTubes; ++i) paintBloom(p, bodyOf(i), glow_[size_t(i)].value);
     p.restore();
-    p.drawLine(QPointF(r.left() + 6, rail + 0.5), QPointF(r.right() - 6, rail + 0.5), withAlpha(Theme::kGridBar, 160));
+    p.drawLine(QPointF(r.left() + 6, rail + 0.5), QPointF(r.right() - 6, rail + 0.5), withAlpha(Theme::gridBar(), 160));
     static const QString kLabels[kTubes] = {QStringLiteral("V1"), QStringLiteral("V2"), QStringLiteral("V3"),
                                             QStringLiteral("P")};
     const QFont font = uiFont(7);
@@ -198,7 +198,7 @@ void AmpPanel::paintTubes(SgPainter& p) const {
         const QRectF body = bodyOf(i);
         paintTube(p, body, glow_[size_t(i)].value, i == kTubes - 1 ? blue : 0.0);
         p.drawText(QRectF(body.left() - 4, rail + 1, body.width() + 8, r.bottom() - rail - 1), Qt::AlignCenter,
-                   kLabels[i], Theme::kTextDim, font);
+                   kLabels[i], Theme::textDim(), font);
     }
 }
 
@@ -222,7 +222,7 @@ void AmpPanel::paintTube(SgPainter& p, const QRectF& body, double g, double blue
     const QColor cold(0xff, 0x6a, 0x00), hot(0xff, 0xd2, 0x7a);
     const QColor heat = mixColor(cold, hot, g);  // orange when idle, nearly white when driven hard
     // The glass, warmed from inside (and hazed blue, the power tube's, as the supply sags).
-    p.fillRoundedRect(body, round, round, withAlpha(Theme::kSurface, 64));
+    p.fillRoundedRect(body, round, round, withAlpha(Theme::surface(), 64));
     p.fillRoundedRect(body, round, round, withAlpha(QColor(0xff, 0x8a, 0x2a), int(36 * g * g)));
     if (blue > 0.0)
         p.fillRoundedRect(body, round, round, withAlpha(QColor(0x6f, 0x7f, 0xff), int(64 * blue)));
@@ -250,7 +250,7 @@ void AmpPanel::paintTube(SgPainter& p, const QRectF& body, double g, double blue
 
 void AmpPanel::paintJewel(SgPainter& p) const {
     const QRectF r = jewelRect_;
-    p.fillRoundedRect(r, 4, 4, Theme::kMeterBg);
+    p.fillRoundedRect(r, 4, 4, Theme::meterBg());
     const double b = lamp_.value;
     const QPointF centre(r.center().x(), r.top() + 16.0);
     const QColor red(0xff, 0x3b, 0x2f);
@@ -260,7 +260,7 @@ void AmpPanel::paintJewel(SgPainter& p) const {
     p.fillEllipse(centre, 10, 10, withAlpha(red, int(40 * b)));
     p.restore();
     p.fillEllipse(centre, 6, 6, withAlpha(red, int(90 + 165 * b)));
-    p.drawEllipse(QRectF(centre.x() - 7, centre.y() - 7, 14, 14), Theme::kGridBar, 1.5);  // the bezel
+    p.drawEllipse(QRectF(centre.x() - 7, centre.y() - 7, 14, 14), Theme::gridBar(), 1.5);  // the bezel
     p.fillEllipse(QPointF(centre.x() - 2.0, centre.y() - 2.5), 1.5, 1.0, withAlpha(Qt::white, 110));  // a facet
     // The model's name as the amp's logo.
     const double top = centre.y() + 9.0;

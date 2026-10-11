@@ -46,7 +46,12 @@
 // "pre-fx"; version 21; older files have neither: every track goes into its
 // group, inputs are taken after the fader). An output into a track that isn't
 // an audio track there, into a device that isn't there, or closing a cycle goes
-// into its group.
+// into its group. A bent note stores its bend as a sixth value (its fifth then
+// written, false unless it is deactivated): {"bend": [[time, semitones, curve],
+// ...], "vibrato": [[start, length, depth, rate, fade], ...]}; a device taking
+// another track's notes stores that track ("midi_from"; version 22; older files
+// have neither: no note bends, every device hears its own track). A MIDI input
+// from a track that isn't a MIDI track there is dropped.
 //
 // There is no per-version migration code: each addition has a default that
 // makes an older file load as it was, and saving writes the current version.
@@ -58,8 +63,8 @@
 //
 // Presets: a device (a rack with everything in it too) on its own, in a file of
 // its own (deviceToPreset, presetDevice): what the project file stores of it. A
-// preset loads as new devices (new ids), without sidechains (they name tracks of
-// the project it came from). A rack loaded from a preset file is named as the
+// preset loads as new devices (new ids), without sidechains or MIDI inputs (they
+// name tracks of the project it came from). A rack loaded from a preset file is named as the
 // file is.
 //
 // Reading throws ProjectFileError (model/Errors.h) with a message for the user:
@@ -87,8 +92,10 @@ inline const QString kProjectFormat = QStringLiteral("gilstudio-project");
 // frozen tracks, 15: reversed clips, 16: frozen audio's segments, 17: clip fades,
 // 18: racks' macros (how many, their names), 19: track names as templates (# the
 // track's number; kNameTemplatesVersion), 20: deactivated clips and notes, 21:
-// tracks' outputs and where inputs from tracks are tapped
-inline constexpr int kProjectVersion = 21;
+// tracks' outputs and where inputs from tracks are tapped, 22: notes' bends
+// (MIDI 2.0's per-note pitch bend: points and vibratos) and devices' MIDI inputs
+// from other tracks
+inline constexpr int kProjectVersion = 22;
 inline constexpr int kNameTemplatesVersion = 19;
 inline const QString kPresetFormat = QStringLiteral("gilstudio-preset");
 inline constexpr int kPresetVersion = 1;

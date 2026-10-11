@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Rack.h"
 #include "Routing.h"
@@ -40,6 +41,29 @@ void ensureDelay(std::shared_ptr<DelayLine>& delay, int samples) {
     if (samples > 0 && (!delay || delay->capacity() <= samples)) {
         delay = std::make_shared<DelayLine>(2 * samples + Renderer::kMaxBlock);
     }
+}
+
+// A note's bend in samples (null: it doesn't bend): its points sorted, its
+// vibratos' rates in cycles a sample; those that can't swing left out.
+std::shared_ptr<const NoteBendRender> noteBend(const NoteDesc& note, double samplesPerBeat, double sampleRate) {
+    const bool bends = std::any_of(note.bend.begin(), note.bend.end(), [](const BendPoint& p) { return p.semitones != 0.0; });
+    const auto swings = [](const VibratoSpan& v) { return v.length > 0.0 && v.depth != 0.0 && v.rate > 0.0; };
+    if (!bends && std::none_of(note.vibrato.begin(), note.vibrato.end(), swings)) return nullptr;
+    auto render = std::make_shared<NoteBendRender>();
+    for (const BendPoint& point : note.bend) {
+        render->points.push_back({point.time * samplesPerBeat,  // (before the note's start: where it starts from)
+                                  std::clamp(point.semitones, -kMaxBendSemitones, kMaxBendSemitones),
+                                  std::clamp(point.curve, -1.0, 1.0)});
+    }
+    std::stable_sort(render->points.begin(), render->points.end(),
+                     [](const BendPoint& a, const BendPoint& b) { return a.time < b.time; });
+    for (const VibratoSpan& vibrato : note.vibrato) {
+        if (!swings(vibrato)) continue;
+        render->vibrato.push_back({vibrato.start * samplesPerBeat, vibrato.length * samplesPerBeat,
+                                   std::clamp(vibrato.depth, -kMaxBendSemitones, kMaxBendSemitones),
+                                   vibrato.rate / sampleRate, vibrato.fade});
+    }
+    return render;
 }
 
 // A rack chain's fader lane: "chain:<chain id>:volume" (or ":pan") of the rack.
@@ -118,6 +142,16 @@ void Engine::buildChainLocked(uint32_t chainId, const StripBuild& build, int dep
     }
     if (anySidechain) out.sidechains = std::move(sidechains);
     if (anyRack) out.racks = std::move(racks);
+    // The devices taking another track's notes (the prologue finds the track by its id).
+    for (size_t i = 0; i < chain.inserts.size(); ++i) {
+        const auto slot = build.slotOf.find(chain.inserts[i].get());
+        if (slot == build.slotOf.end()) continue;
+        const ProcessorEntry& entry = processors_.at(slots[static_cast<size_t>(slot->second)].processorId);
+        if (entry.midiSource == 0 || !entry.midiFeed) continue;
+        if (out.midiFeeds.empty()) out.midiFeeds.resize(chain.inserts.size());
+        out.midiFeeds[i] = entry.midiFeed;
+        snap.midiFeeds.push_back({static_cast<int>(entry.midiSource), entry.midiFeed});
+    }
 
     // The envelopes of the chain's devices' parameters (and switches), each as
     // late as the strip's input plus the latency before its device.
@@ -451,6 +485,10 @@ void Engine::rebuildSnapshotLocked() {
     const auto rate = static_cast<uint32_t>(sampleRate_);
     const int64_t clipFade = std::llround(clipFadeMs_ * 0.001 * sampleRate_);  // against clicks where clips cut
     std::array<size_t, kNumStretchConfigs> voicesNeeded{};
+    std::unordered_set<uint32_t> fedTracks;  // tracks whose notes a device takes
+    for (const auto& [id, entry] : processors_) {
+        if (entry.midiSource != 0) fedTracks.insert(entry.midiSource);
+    }
     snap->tracks.reserve(tracks_.size());
     for (const int t : order) {
         TrackModel& track = tracks_[t];
@@ -480,8 +518,10 @@ void Engine::rebuildSnapshotLocked() {
         // Its devices hear the timeline as late as its input; its fader after them
         // (its edges are delayed after the fader, to line up where they go).
         buildAutomationLocked(build, render.inputLatency + render.latency, render);
+        // (A track left out keeps its notes while a device elsewhere takes them.)
         static const std::vector<NoteDesc> kNoNotes;
-        const std::vector<NoteDesc>& notes = silent[static_cast<size_t>(t)] ? kNoNotes : track.notes;
+        const bool fed = fedTracks.count(track.id) > 0;
+        const std::vector<NoteDesc>& notes = silent[static_cast<size_t>(t)] && !fed ? kNoNotes : track.notes;
         render.notes.reserve(notes.size());
         for (const NoteDesc& note : notes) {
             NoteRender nr;
@@ -489,7 +529,8 @@ void Engine::rebuildSnapshotLocked() {
             nr.end = std::max<int64_t>(nr.start + 1, std::llround((note.startBeat + note.lengthBeats) * spb));
             nr.key = static_cast<uint8_t>(std::clamp(note.key, 0, 127));
             nr.velocity = static_cast<uint8_t>(std::clamp(note.velocity, 1, 127));
-            render.notes.push_back(nr);
+            nr.bend = noteBend(note, spb, sampleRate_);
+            render.notes.push_back(std::move(nr));
         }
         std::sort(render.notes.begin(), render.notes.end(), [](const NoteRender& a, const NoteRender& b) {
             return a.start != b.start ? a.start < b.start : a.key < b.key;
@@ -576,6 +617,13 @@ void Engine::rebuildSnapshotLocked() {
     }
     ensureWarpVoicesLocked(voicesNeeded);
     snap->warpVoices = warpVoices_;
+    // The devices taking other tracks' notes: from which snapshot track (they were listed by track id).
+    for (MidiFeedRender& feed : snap->midiFeeds) {
+        const auto id = static_cast<uint32_t>(feed.source);
+        const auto found = std::find_if(snap->tracks.begin(), snap->tracks.end(),
+                                        [id](const TrackRender& track) { return track.id == id; });
+        feed.source = found != snap->tracks.end() ? static_cast<int>(found - snap->tracks.begin()) : -1;
+    }
 
     std::shared_ptr<const RenderSnapshot> old = std::move(snapshotHold_);
     snapshotHold_ = snap;

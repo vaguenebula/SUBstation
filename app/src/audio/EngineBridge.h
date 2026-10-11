@@ -312,6 +312,9 @@ public:
     void storePluginStates(const std::optional<QSet<QString>>& deviceIds = std::nullopt);
     // Whether a device has a sidechain (aux) input (not while it isn't loaded).
     Q_INVOKABLE bool hasSidechainInput(const QString& trackId, const QString& deviceId);
+    // Whether a device plays notes (an instrument, or an effect with a MIDI
+    // input): what can take another track's (Device::midiFrom). Not while it isn't loaded.
+    Q_INVOKABLE bool acceptsMidi(const QString& trackId, const QString& deviceId);
     // A device's parameter as the engine describes it (none: not loaded, or no
     // such one): the editor's macros map through it.
     std::optional<sub::ParamInfo> deviceParamInfo(const QString& trackId, const QString& deviceId,
@@ -571,6 +574,7 @@ private:
     std::optional<SidechainState> wantedSidechain(const Device& device, quint32 processorId);
     void pushSidechains();
     void dropSidechain(quint32 processorId);
+    void pushMidiInputs();
     void pushEnabled(const QString& trackId);
     void onChainChanged(const QString& trackId, const QString& chainId);
     void pushChainMixers(const QString& trackId);

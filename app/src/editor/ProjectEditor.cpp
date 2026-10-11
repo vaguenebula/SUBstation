@@ -110,6 +110,11 @@ bool ProjectEditor::trySetDeviceSidechain(const QString& trackId, const QString&
     });
 }
 
+bool ProjectEditor::trySetDeviceMidiFrom(const QString& trackId, const QString& deviceId, const QString& sourceId) {
+    if (!project_->hasDevice(trackId, deviceId)) return false;
+    return reportRefusal([&] { setDeviceMidiFrom(trackId, deviceId, sourceId); });
+}
+
 QString ProjectEditor::tryAddRackChain(const QString& trackId, const QString& rackId, int index, const QString& name) {
     if (!project_->hasOwner(trackId)) return {};
     QString chain;

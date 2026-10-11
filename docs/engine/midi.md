@@ -1,11 +1,14 @@
 # MIDI in the engine
 
-How MIDI tracks play: the notes of their clips turned into note events for the track's devices, the
-notes the piano roll plays, and MIDI input from controllers (WinMM on Windows) played live and recorded. Playback
-is in the renderer ([Renderer.cpp](../../engine/src/Renderer.cpp): `buildNoteEvents`,
-`releaseNotes`, `syncTempo`); MIDI input devices and the audio clock are in
-[MidiInput.h](../../engine/src/MidiInput.h) / [MidiInput.cpp](../../engine/src/MidiInput.cpp); the
-engine's MIDI input API is in [EngineInput.cpp](../../engine/src/EngineInput.cpp); MIDI takes are in
+How MIDI tracks play: the notes of their clips turned into note events for the track's devices (each
+note on its own, as MIDI 2.0 addresses notes, with its bend: MIDI 2.0's per-note pitch bend), the notes
+the piano roll plays, MIDI input from controllers (WinMM on Windows; MIDI 2.0's packets too) played live
+and recorded, and devices taking another track's notes. Playback is in the renderer
+([Renderer.cpp](../../engine/src/Renderer.cpp): `buildNoteEvents`, `startNote`, `bendNotes`,
+`releaseNotes`, `syncTempo`); a bend's rules are in [NoteBend.h](../../engine/src/NoteBend.h); MIDI input
+devices and the audio clock are in [MidiInput.h](../../engine/src/MidiInput.h) /
+[MidiInput.cpp](../../engine/src/MidiInput.cpp), MIDI 2.0's packets in [Ump.h](../../engine/src/Ump.h);
+the engine's MIDI input API is in [EngineInput.cpp](../../engine/src/EngineInput.cpp); MIDI takes are in
 [Recorder.h](../../engine/src/Recorder.h).
 
 For what the user sees (MIDI clips, the piano roll, MIDI input, the computer MIDI keyboard) see
@@ -21,8 +24,11 @@ the tests).
 ## Overview
 
 - The engine bridge flattens a MIDI track's clips into the notes they play, in beats (`setTrackNotes`), keeping
-  only what the clips play (notes cut at their clip's end). The snapshot converts them to samples at the
-  current tempo.
+  only what the clips play (notes cut at their clip's end), each with its bend (points and vibratos). The
+  snapshot converts them to samples at the current tempo.
+- Every note-on carries an id of its own; the note's note-off and bends carry it too (MIDI 2.0's per-note
+  addressing; VST3's note ids). While a note sounds the renderer sends its bend along its curve: where it
+  starts, then every 32 samples where it moved, and on its last sample (`NoteBend` events).
 - Each block, the renderer turns notes starting in it into note-on events for the track's devices, and
   remembers when each ends. Note-offs come from that record, not from the snapshot, so a note edited or
   deleted while it sounds still ends.
@@ -36,44 +42,62 @@ the tests).
   sample on the audio device's clock, plus one device buffer, so the delay is constant. The renderer
   routes the messages due in each chunk to the tracks whose `MidiInputRoute` accepts them, and remembers
   the live notes it started so it can release them.
-- A MIDI track being recorded gets a `MidiRecordingTake`; its note-ons and note-offs go through a queue
-  and the edit side pairs them into notes.
+- MIDI 2.0: Universal MIDI Packets (`Engine::sendUmp`) are stamped and queued as MIDI 1.0's bytes are;
+  their channel voice messages play as MIDI 1.0's, and a per-note pitch bend bends the live note it names.
+- A MIDI track being recorded gets a `MidiRecordingTake`; its note-ons, note-offs and per-note bends go
+  through a queue and the edit side pairs them into notes (with their bends).
+- A device may take another track's notes instead of its own track's (`setProcessorMidiInput`): the
+  prologue copies that track's events for the chunk into the device's `MidiFeed`, and the device plays
+  its copy.
 
 ## Files
 
 | File | What it holds |
 |---|---|
-| [Engine.h](../../engine/src/Engine.h) | `NoteDesc` (a note in timeline beats), `AudioClockStatus`, the MIDI API (`setTrackNotes`, `previewNote`, `midiInputDevices`, `openMidiInput`, `closeMidiInput`, `openMidiInputs`, `setTrackMidiInput`, `sendMidiInput`, `audioClock`) |
+| [Engine.h](../../engine/src/Engine.h) | `NoteDesc` (a note in timeline beats, with its bend), `AudioClockStatus`, the MIDI API (`setTrackNotes`, `previewNote`, `midiInputDevices`, `openMidiInput`, `closeMidiInput`, `openMidiInputs`, `setTrackMidiInput`, `sendMidiInput`, `sendUmp`, `audioClock`, `setProcessorMidiInput`, `processorMidiInput`) |
+| [NoteBend.h](../../engine/src/NoteBend.h) | `BendPoint`, `VibratoSpan`, `kMaxBendSemitones`, and a bend's rules (`sub::bend::curveAt`, `vibratoAt`, `at`), header-only, for any unit of time (the application layer draws with them in beats) |
+| [Ump.h](../../engine/src/Ump.h) | MIDI 2.0's packets: `packetWords`, `decode` (into a `MidiInputEvent`), `bendSemitones`/`bendValue`, and packets to send (`noteOn`, `perNoteBend`, `perNoteManagement`...) |
 | [EngineTracks.cpp](../../engine/src/EngineTracks.cpp) | `setTrackNotes`, `previewNote` |
 | [EngineSnapshot.cpp](../../engine/src/EngineSnapshot.cpp) | Notes into `NoteRender`s in samples; `MidiInputRoute`, monitoring and arming into `TrackRender` |
-| [Snapshot.h](../../engine/src/Snapshot.h) | `NoteRender`, `MidiInputRoute`, `TrackBuffers::events` (a track's note events per chunk, at most 1024) |
+| [Snapshot.h](../../engine/src/Snapshot.h) | `NoteRender` (and its `NoteBendRender`), `MidiInputRoute`, `TrackBuffers::events` (a track's note events per chunk, at most 1024), `MidiFeed` and `MidiFeedRender` (devices taking other tracks' notes; `StripRender::midiFeeds`, `RenderSnapshot::midiFeeds`) |
 | [Transport.h](../../engine/src/Transport.h) | `PreviewNote`; in `SharedState`: `previewNotes` queue, `midiInput` queue and `midiInputMutex`, `midiInputDelay`, `midiSampleRate`, `clock` |
-| [Processor.h](../../engine/src/Processor.h) | `ProcessEvent` (`NoteOn`, `NoteOff`, `Midi`), `setEnabled`, `requestReset`, `takeResetRequest`, `reset`, `resetOffline` |
-| [Renderer.h](../../engine/src/Renderer.h), [Renderer.cpp](../../engine/src/Renderer.cpp) | Note events, active notes, preview notes, MIDI input gathering and routing, live notes, MIDI recording |
+| [Processor.h](../../engine/src/Processor.h) | `ProcessEvent` (`NoteOn`, `NoteOff`, `Midi`, `NoteBend`; `noteId`, `bend`), `acceptsMidi`, `setEnabled`, `requestReset`, `takeResetRequest`, `reset`, `resetOffline` |
+| [Renderer.h](../../engine/src/Renderer.h), [Renderer.cpp](../../engine/src/Renderer.cpp) | Note events, note ids, active notes and their bends, preview notes, MIDI input gathering and routing, live notes, MIDI recording, devices' MIDI feeds |
 | [MidiInput.h](../../engine/src/MidiInput.h), [MidiInput.cpp](../../engine/src/MidiInput.cpp) | `MidiInputEvent`, `AudioClock`, `MidiInputDevices` (the same on every system: the names users see, which inputs are open, closing them) |
 | [backends/MidiDriver.h](../../engine/src/backends/MidiDriver.h) | What a system's MIDI API gives `MidiInputDevices`: `systemInputNames()`, `openSystemInput()` (an `InputConnection`, closed when it goes), `shortMessageSize()` |
 | [backends/MidiWinMM.cpp](../../engine/src/backends/MidiWinMM.cpp), [backends/MidiNone.cpp](../../engine/src/backends/MidiNone.cpp) | Those on Windows (WinMM), and elsewhere (no devices) |
-| [EngineInput.cpp](../../engine/src/EngineInput.cpp) | MIDI ports, `Engine::midiInput` (stamping), `sendMidiInput`, `discardMidiInputLocked`, MIDI targets in `startRecording` |
-| [Recorder.h](../../engine/src/Recorder.h), [Recorder.cpp](../../engine/src/Recorder.cpp) | `RecordedNote`, `MidiRecordingTake`, `RecordingSession::midiNotes`, MIDI results in `finish()` |
+| [EngineInput.cpp](../../engine/src/EngineInput.cpp) | MIDI ports, `Engine::midiInput` and `umpInput` (decoding), `queueMidiInput` (stamping), `sendMidiInput`, `sendUmp`, `discardMidiInputLocked`, MIDI targets in `startRecording` |
+| [EngineChains.cpp](../../engine/src/EngineChains.cpp) | `setProcessorMidiInput`, `processorMidiInput`, `processorInfo` (`acceptsMidi`) |
+| [Recorder.h](../../engine/src/Recorder.h), [Recorder.cpp](../../engine/src/Recorder.cpp) | `RecordedNote` (with its `RecordedBend`s), `MidiRecordingTake`, `RecordingSession::midiNotes`, MIDI results in `finish()` |
 | [EngineOffline.cpp](../../engine/src/EngineOffline.cpp) | `resetProcessorsLocked` around offline renders and exports |
 
 ## Key types
 
-**`NoteDesc`** (Engine.h): `startBeat`, `lengthBeats`, `key` (60 = C3), `velocity`, in timeline beats.
+**`NoteDesc`** (Engine.h): `startBeat`, `lengthBeats`, `key` (60 = C3), `velocity`, in timeline beats, and
+its bend: `bend` (`BendPoint`s: time in beats from the note's start, semitones, curve) and `vibrato`
+(`VibratoSpan`s: start and length in beats from the note's start, depth in semitones, rate in Hz, fade).
 
 **`NoteRender`** (Snapshot.h): a note already cut to its clip, in timeline samples: `start`, `end` (always
-`> start`), `key` (clamped to 0..127), `velocity` (clamped to 1..127). A track's are sorted by start, then
-key. `EngineSnapshot.cpp` rounds `beat * samplesPerBeat` for both ends.
+`> start`), `key` (clamped to 0..127), `velocity` (clamped to 1..127), and `bend` (a shared
+`NoteBendRender`, null if it doesn't bend: its points' times in samples from its start, its vibratos'
+starts and lengths in samples and rates in cycles a sample). A track's are sorted by start, then key.
+`EngineSnapshot.cpp` rounds `beat * samplesPerBeat` for both ends; `noteBend()` leaves out vibratos that
+can't swing and a bend whose points are all 0.
 
 **`ProcessEvent`** (Processor.h): what devices get. `NoteOn`/`NoteOff` with `data[0]` the key, `data[1]`
-the velocity (0 for note-offs), `data[2]` the MIDI channel; `Midi` with the raw bytes (pressure,
-controllers, program changes, pitch bend from MIDI input). `sampleOffset` is in the block (the renderer
-rebases it to each stretch a device processes).
+the velocity (0 for note-offs), `data[2]` the MIDI channel; `NoteBend` with `data[0]` the key and `bend`
+the note's pitch in semitones from its key; `Midi` with the raw bytes (pressure, controllers, program
+changes, channel pitch bend from MIDI input). `noteId` names the note an event is about (a note-on's id,
+which its note-off and bends repeat), -1 for none (a note the piano roll plays): such a note is known by
+its key and channel, as in MIDI 1.0. `sampleOffset` is in the block (the renderer rebases it to each
+stretch a device processes).
 
 **`PreviewNote`** (Transport.h): `trackId`, `key`, `velocity` (0: a note-off), from the piano roll.
 
 **`MidiInputEvent`** (MidiInput.h): `time` (the device sample at which it plays), `port` (the engine's id
-of the input), `status`, `data1`, `data2`.
+of the input), `status`, `data1`, `data2`; `kind` `Message` (a MIDI 1.0 message, or a MIDI 2.0 one put in
+its form), or `NoteBend` (a MIDI 2.0 per-note pitch bend: `status` 0x6n, `data1` the key, `value` its 32
+bits, 0x80000000 none).
 
 **`AudioClock`**: the device's sample clock against the host clock. The audio thread writes it at each
 callback (`update(hostTimeNs, sampleTime)`) as a seqlock (wait-free for it; readers retry); `stop()` is
@@ -95,8 +119,14 @@ ignored: no long buffers are given).
 edit side: `time` in timeline samples, channel, key, velocity, 0 for a note-off), `start`, `frames`,
 `dropped` (events lost because nobody took them in time), and on the edit side the `notes` paired so far.
 
-**`RecordedNote`**: `start`, `end` (-1: still held), `key`, `velocity`, `channel`, in timeline samples.
+**`RecordedNote`**: `start`, `end` (-1: still held), `key`, `velocity`, `channel`, in timeline samples, and
+`bend`: the per-note bends played on it (`RecordedBend`: samples from its start, semitones), in time order.
 The API hands them over as a `std::vector<RecordedNote>` (`recordingProgress()`, `RecordedTake`).
+
+**`MidiFeed`** (Snapshot.h): a device's copy of another track's events for the chunk (`events`, as many as
+a track's, and `numEvents`), kept with the device (`ProcessorEntry::midiFeed`) across snapshots;
+`MidiFeedRender` lists each in the snapshot with the snapshot track it copies (`source`, -1: none in this
+snapshot).
 
 ## How it works: playback
 
@@ -108,19 +138,25 @@ while anything is sounding, queued or arriving, the renderer builds the track's 
 
 1. **Preview notes** for this track, all at offset 0 and in the order they were played (dragging a note
    across keys releases one key and plays the next several times within a block; reordering those would
-   leave notes playing whose note-off came first).
+   leave notes playing whose note-off came first). Each note-on gets an id, and its note-off the same
+   (`heldPreviews_`: the oldest held of that key on the track; 256 at most, the oldest forgotten). They
+   have no bend.
 2. **MIDI input** (`routeMidiInput`, below).
 3. If stopped, or the clips' notes don't play (monitoring `In` with MIDI input), every active note of
    the track is released at offset 0 (`releaseNotes`).
 4. For each segment of the chunk (a continuous stretch of the timeline; see [rendering.md](rendering.md)):
    - a segment that `jump`s (a locate, a loop wrap) releases the track's sounding notes at its start;
    - a segment that `chase`s (playback starts here) sounds the notes already underway from there;
-   - note-ons for the notes starting in it (binary search on `start`), each recorded as an `ActiveNote`
-     (`trackId`, `key`, `end`);
-   - note-offs for active notes ending in it, those that just started included.
+   - note-ons for the notes starting in it (binary search on `start`; `startNote`), each with a fresh id
+     (`newNoteId()`) and recorded as an `ActiveNote` (`trackId`, `key`, `end`, `noteId`, `start`, the
+     note's index as a hint, the bend sent); a note that starts bent (or is joined bent: chased) gets its
+     bend there too, right after its note-on;
+   - the sounding notes' bends (`bendNotes`, below), those ending in the segment included;
+   - note-offs for active notes ending in it, those that just started included, with their ids.
 5. The arrangement's notes and the input are sorted by offset; at the same offset a note-off comes
-   first, so a note that ends where the next one on its key starts doesn't cut the new one short. The
-   preview notes stay first, in their order.
+   first, then note-ons and raw messages, then bends, so a note that ends where the next one on its key
+   starts doesn't cut the new one short, and a bend comes after the note-on it bends. The preview notes
+   stay first, in their order.
 
 Active notes are capped at 512 across all tracks (`kMaxActiveNotes`); a note that can't be recorded
 there isn't started. A track's events are capped at `TrackBuffers::kMaxEvents` (1024); events that don't
@@ -131,6 +167,38 @@ Because note-offs come from `activeNotes_`, not the snapshot, a note edited or d
 still ends when it was going to. Every chain of a rack hears the track's notes, so an Instrument Rack
 layers its instruments ([routing.md](routing.md)). A device then processes each stretch with the events
 that fall in it (`processInserts` splits them by slice).
+
+### Bends: MIDI 2.0's per-note pitch bend
+
+A note's bend ([NoteBend.h](../../engine/src/NoteBend.h)) is a curve of points from its start plus
+vibratos on top: the curve starts at 0 at the note's start, goes to the first point and through the
+others (a point's curve bends the segment starting at it, as `automationShape()` bends automation),
+then holds the last point's value; a point at (or before) the start sets where it starts. A vibrato adds
+`depth * swell * release * sin(2π rate (t - start))` over its stretch: it swells in (smoothstep) over its
+first `fade` of its length and dies away over its last tenth (`kVibratoRelease`), so it begins and ends
+on the curve. All is held to ±48 semitones (`kMaxBendSemitones`, MIDI 2.0's default per-note range). The
+rules are written once, as templates on any types with the fields' names, for any unit of time: the
+snapshot's `NoteBendRender` plays them in samples, and the application layer's `Note::bendAt()` draws
+them in beats (a vibrato's rate turned from Hz into cycles a beat).
+
+`bendNotes(track, segment)` sends each of the track's active notes' bends over a segment: it finds the
+note's `NoteRender` again (`findNote`: at its hinted index, else by start and key in the current
+snapshot's notes, to within two samples, as a tempo change may round its start), then for each point of
+the note's own grid (every `kBendStep` = 32 samples from its start, after it, before its end) in the
+segment, a `NoteBend` event where the value moved by `kBendEpsilon` (0.001 semitones) or more since the
+last one sent, and where the note ends in the segment, one more on its last sample (if it moved), so its
+release holds the value the curve ends on: a slide whose last point is on the note's end lands on it rather
+than up to 32 samples short. The grid is the note's, so the values don't depend on where blocks start; a
+flat stretch sends nothing. Because the note is looked up again in every snapshot, a bend drawn (or changed) while a
+note sounds is heard at once; a note moved or deleted while it sounds keeps the bend it reached. Bends
+stop while fewer than `kBendHeadroom` (64) of the track's events are free, so note-offs always fit.
+
+Devices follow bends as they come: the Synth and the Sampler glide each voice to its note's bend over
+about a millisecond (`dsp::kBendGlideSeconds`, so the 32-sample steps don't zipper); a VST3 plug-in gets
+them as note expression "tuning" for the note's id ([plugins.md](plugins.md#events-notes-and-midi)), and
+every note's tuning from its start, unbent unless its own bend follows (a synth that reuses a voice, as
+Serum 2 can, may otherwise play the next note with the last note's tuning). A voice keeps its bend through
+its release.
 
 ### Tempo changes (`Renderer::syncTempo`)
 
@@ -228,15 +296,39 @@ each track, in the prologue:
    stopped: `releaseLiveNotes_`) are released at the chunk's start (and recorded as note-offs).
 2. Each due message its route `accepts`:
    - a note-on: recorded; if heard, a key it is already holding is released first (played again, it starts
-     over), then the note-on goes to the track and a `LiveNote` (`trackId`, `port`, `channel`, `key`) is
-     remembered (at most 512 across all tracks; one that couldn't be released isn't played);
-   - a note-off (or note-on with velocity 0): recorded; it goes to the track only if the track started that
-     note;
-   - pressure, controllers, program changes and pitch bend go to the track as raw `Midi` events if heard
-     (played, not recorded).
+     over), then the note-on goes to the track with a fresh id, and a `LiveNote` (`trackId`, `port`,
+     `channel`, `key`, `noteId`) is remembered (at most 512 across all tracks; one that couldn't be
+     released isn't played);
+   - a note-off (or note-on with velocity 0): recorded; it goes to the track (with the live note's id) only
+     if the track started that note;
+   - a MIDI 2.0 per-note pitch bend: recorded; if heard, it goes to the live note the track holds on that
+     port, channel and key as a `NoteBend` with that note's id (none held: nothing bends);
+   - pressure, controllers, program changes and channel pitch bend go to the track as raw `Midi` events if
+     heard (played, not recorded).
 
 So each live note gets its note-off even if the track stops hearing its input, stops existing
 (`forgetNotesOfRemovedTracks`), or the transport stops while the key is held.
+
+### MIDI 2.0 input
+
+MIDI 2.0 devices hand over Universal MIDI Packets ([Ump.h](../../engine/src/Ump.h)): one to four 32-bit
+words, the first word's top four bits the message type. `Engine::sendUmp(device, words, hostTimeNs)` (what a
+MIDI 2.0 backend will call, as `sendMidiInput` takes MIDI 1.0's bytes) decodes each whole packet with
+`ump::decode` on the caller's thread and stamps it as `midiInput` stamps bytes (`queueMidiInput`):
+
+| Packet | Becomes |
+|---|---|
+| MIDI 1.0 channel voice (type 2) | its bytes as they are |
+| MIDI 2.0 note on / off (type 4) | a note-on / note-off; the 16-bit velocity scaled to 7 bits (a note-on at velocity 0 is a note in MIDI 2.0: velocity 1) |
+| MIDI 2.0 poly pressure, control change, channel pressure | the MIDI 1.0 message, its 32-bit value scaled to 7 bits |
+| MIDI 2.0 program change | the MIDI 1.0 message (its program; bank fields ignored) |
+| MIDI 2.0 pitch bend | the MIDI 1.0 pitch bend, 32 bits into 14 |
+| MIDI 2.0 per-note pitch bend | a `NoteBend` event: 0x80000000 none, either end ±48 semitones (`ump::bendSemitones`) |
+| MIDI 2.0 per-note management with Reset | a `NoteBend` to none (the note's controllers reset) |
+| anything else (utility, system, data, stream, registered and assignable controllers, per-note controllers) | nothing |
+
+Groups are merged: a track's route takes the 16 channels of every group alike. Nothing on the audio thread
+changes for MIDI 2.0 but the per-note bend (`routeMidiInput`).
 
 ## How it works: MIDI takes
 
@@ -251,7 +343,9 @@ input). The audio thread:
 
 On the edit side, `MidiRecordingTake::collect()` pairs the events: a note-on starts a held note; a note-off
 ends the earliest held note on its key and channel (one whose note-on came before the take began has none),
-at least one sample long. `RecordingSession::midiNotes()` moves them back by the *MIDI placement*:
+at least one sample long; a per-note bend (an event with `bend` set) adds a point (`RecordedBend`, from the
+note's start) to the latest note held on its key and channel (none held: it is lost). Placement moves a
+note, not its bend's times (they are the note's own). `RecordingSession::midiNotes()` moves them back by the *MIDI placement*:
 
 ```
 midiPlacement = lag (output lag: delay compensation and the master's devices)
@@ -272,11 +366,34 @@ and the session applies *Record Quantization* (`recordQuantize()` in
 [app/src/audio/AudioSettings.h](../../app/src/audio/AudioSettings.h)) to their starts when it adds the takes
 (`ProjectEditor::addRecordings`).
 
-## Invariants and real-time rules
+## A device's MIDI input from another track
+
+`setProcessorMidiInput(processor, track)` gives a device that plays notes (`Processor::acceptsMidi()`:
+the Synth, the Sampler, a VST3 plug-in with an event input) another track's notes instead of its own
+track's; 0 gives it its own track's again. The engine keeps it with the device (`ProcessorEntry::
+midiSource`, and its `MidiFeed`, made the first time), so it moves with it; `removeTrack` takes away
+those from the track removed. Changing it resets the device (`requestReset()`), so no note it heard
+hangs.
+
+- It is no routing edge: notes are built in the prologue, before the graph, so a feed orders nothing and
+  closes no cycle (two tracks may take each other's notes), and solo and mute don't stop it.
+- `buildChainLocked()` puts each fed device's feed in its chain's `StripRender::midiFeeds` (by insert) and
+  lists it in `RenderSnapshot::midiFeeds` with its source; the source is found in the snapshot's tracks by
+  id at the end. A track left out of the snapshot (frozen, or in a frozen group) keeps its notes while
+  something takes them (`fedTracks`).
+- In the prologue, once every track's events are built, each feed gets a copy of its source's events
+  (absolute offsets in the chunk). It must be a copy: the source's own devices rebase their events to
+  their stretches in place, on whichever thread renders the source.
+- `processDevice()` gives a fed device its feed's events instead of the strip's, split by the same
+  slices (rebased in place: the copy is the device's own).
+- The notes come on time, not delayed by latency before the device (as its own track's notes aren't
+  either). A device switched off for a chunk doesn't consume its copy; it resets as it comes back on.
 
 - Every note-on the renderer sends has a note-off: clips' notes through `activeNotes_`, live notes
   through `liveNotes_`, both released on stop, jump, track removal (forgotten with the instrument) and
   device resets.
+- Every note-on from clips or MIDI input has an id of its own (counting up, never negative); its
+  note-off and bends carry it. A bend never comes before its note-on, nor after its note-off.
 - The audio thread never waits on MIDI producers: one mutex serialises the producers only.
 - Offline renders never hear MIDI input or preview notes, and never record (`flags.live` is false); they
   start clean (`prepare()` empties every note list) and reset the shared devices before and after.
@@ -292,8 +409,15 @@ and the session applies *Record Quantization* (`recordQuantize()` in
   `InputConnection` that calls the handler with its port, the bytes (`shortMessageSize()` for APIs that hand over
   a byte stream) and `hostTimeNs()` taken on arrival, and stops calling once destroyed. `MidiInputDevices` does
   the rest.
-- **Recording controllers** (sustain, pitch bend): `routeMidiInput()` would send them to the take as well,
-  and `MidiRecordingTake::Event` / `RecordedNote` would need a form for them.
+- **A MIDI 2.0 backend** (Windows MIDI Services): a file in `backends/` that opens UMP endpoints and hands
+  their words to the engine as `sendUmp()` does (`Engine::umpInput`, on the driver's thread). Decoding
+  and everything after it are done.
+- **Recording controllers** (sustain, channel pitch bend): `routeMidiInput()` would send them to the take as
+  well (per-note bends go there already), and `RecordedNote` would need a form for them.
+- **More per-note expressions** (MIDI 2.0's per-note controllers, VST3's other note expressions): a type
+  of `ProcessEvent` beside `NoteBend`, sent along the note's curve the same way (`bendNotes`).
+- **MPE for plug-ins without note expression**: notes spread over channels with channel pitch bend; it
+  needs the plug-in's bend range.
 - **MIDI effects** would sit between `buildNoteEvents()` and the instrument; today events go straight to
   the track's devices.
 - **MIDI overdub** (recording into existing clips) is a model-side change: the engine already returns
@@ -310,9 +434,25 @@ and the session applies *Record Quantization* (`recordQuantize()` in
   tracks can fill them, and new notes are then not played rather than left hanging.
 - `MidiRecordingTake` notes are paired by key and channel, not by port: two inputs on one track playing
   the same key and channel pair up with each other.
+- A note's bend events are sent only while it sounds; bend points past its end shape the curve before it
+  but are never reached. A note moved (or its key changed) while it sounds is no longer found: it keeps
+  the bend it reached until its note-off.
+- A device fed by another track hears that track's preview notes too (the piano roll's auditions).
 
 ## Tests
 
+- [tests/engine/test_note_bends_engine.cpp](../../tests/engine/test_note_bends_engine.cpp): a bend's curve and
+  vibratos (NoteBend.h), MIDI 2.0's packets decoded, the renderer's note ids and bends (sent along a note's
+  own grid where it moves, from its note-on, chased, edited while it sounds, a vibrato as it swings, a slide
+  landing on its last value) with a device of the test's own logging what it gets in snapshots made by hand,
+  notes played by hand having ids, MIDI 2.0 per-note bends live (`Renderer::processLive` on a hand-made
+  snapshot), recorded bends, and the Synth, the Sampler and SUB Test Synth (note expression) playing bent notes
+  at their pitch, and the note after a bent one at its own (SUB Test Synth keeps a voice's last tuning, as
+  Serum 2 can).
+- [tests/engine/test_midi_routing_engine.cpp](../../tests/engine/test_midi_routing_engine.cpp): devices taking
+  another track's notes: an instrument, an effect with a MIDI input (SUB Test Note Effect, to the sample),
+  in racks and after moves, from frozen tracks, the source going, what is refused, bit-identical on any
+  number of threads.
 - [tests/engine/test_midi_engine.cpp](../../tests/engine/test_midi_engine.cpp): notes start on their sample and
   follow the tempo, velocity sets the level, chords and repeated keys, offline renders leave no hanging notes,
   loop wraps release and retrigger notes, the instrument's output through the chain, notes without an

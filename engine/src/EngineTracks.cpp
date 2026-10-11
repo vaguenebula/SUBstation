@@ -42,7 +42,7 @@ void Engine::removeTrack(uint32_t trackId) {
     std::lock_guard lock(mutex_);
     arrangementTrackLocked(trackId);
     // What went into it goes to the master; the sends into it go, and so do the
-    // inputs and sidechains from it.
+    // inputs, sidechains and MIDI inputs from it.
     for (TrackModel& track : tracks_) {
         if (track.output == trackId) track.output = kMaster;
         std::erase_if(track.sends, [trackId](const SendModel& send) { return send.to == trackId; });
@@ -50,6 +50,10 @@ void Engine::removeTrack(uint32_t trackId) {
     }
     for (auto& [id, entry] : processors_) {
         if (entry.sidechain && entry.sidechain->source == trackId) entry.sidechain.reset();
+        if (entry.midiSource == trackId) {
+            entry.midiSource = 0;
+            entry.processor->requestReset();  // (its notes went with it)
+        }
     }
     // Its chains go, with their devices.
     for (auto it = processors_.begin(); it != processors_.end();) {

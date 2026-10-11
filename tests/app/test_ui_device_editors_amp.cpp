@@ -1089,7 +1089,7 @@ private Q_SLOTS:
                 const QPointF at = played.drive->mapToScene(QPointF(x, y));
                 return qGray(image.pixel(int(std::floor(at.x())), int(std::floor(at.y()))));
             };
-            const int well = qGray(Theme::kMeterBg.rgb());
+            const int well = qGray(Theme::meterBg().rgb());
             QVERIFY2(pixel(played.drive->yOf(0.0) + 3.5) - well >= 8,
                      qPrintable(QString::number(pixel(played.drive->yOf(0.0) + 3.5))));  // (the line, higher up)
             QVERIFY2(std::abs(pixel(box.top() - 0.5) - well) <= 3,
