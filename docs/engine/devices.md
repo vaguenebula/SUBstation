@@ -2191,6 +2191,9 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   those a glide crosses, and an unfaded splice; Hi-Quality with Color and with Post Clip too); automation through the
   engine, to the sample; reset and a new rate; silence ringing out to exact zeros without flush-to-zero (slow Color
   sections at 1x and 4x too); the tail; extremes at 44.1 to 192 kHz (Hard Clip's ceiling at any Dry/Wet, within the
+  4x filters' worst gain with Hi-Quality); NaN and infinity in the input coming out as zeros there would (DC and
+  Color running, at 4x, DC switched on after); one channel, and channels independent; its displays (also in blocks
+  that split the meters' 128 samples).
 - [test_amp_engine.cpp](../../tests/engine/test_amp_engine.cpp): its listing; the design (each stack's make-up and its
   digital response against the analog one, the curve, its anti-aliasing exact at rest and when clipped, the morph's
   ends, the transfer's parts); each model's character and level-matched defaults; Gain, Volume (the power stage it
@@ -2209,9 +2212,6 @@ The engine's tests are in [tests/engine](../../tests/engine) (one executable, `e
   any blocks); model changes faster than a morph, and a change in a morph, level-matched while a dial moves; blocks of
   1 to 1024 frames and slices bit for bit (soft onsets, silence and sleep in Dual too); sleep (its cost, Release only)
   and waking as a fresh amp.
-  4x filters' worst gain with Hi-Quality); NaN and infinity in the input coming out as zeros there would (DC and
-  Color running, at 4x, DC switched on after); one channel, and channels independent; its displays (also in blocks
-  that split the meters' 128 samples).
 - [test_erosion_engine.cpp](../../tests/engine/test_erosion_engine.cpp): its listing and 2 ms latency at any rate;
   Amount 0 a clean delay of its latency, bit for bit, and transparent through the engine (its modulators running on
   as at any Amount); a sine's sidebands as Bessel functions of the modulation index (within 0.1 %), Frequency moving
