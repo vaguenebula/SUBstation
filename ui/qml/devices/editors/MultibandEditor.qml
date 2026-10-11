@@ -15,7 +15,8 @@ import SUBstation
 // bypassed (its activator) dims its controls; they stay editable, as Live
 // keeps them. The columns are as wide as their texts need in the font the UI
 // has (measured): every box its widest text with the automation dot clear of
-// it, every knob its name and its widest value, every button its text.
+// it, every caption its name, every knob its name and its widest value, every
+// button its text.
 // Every control shows its parameter as it is now (its automation's value while
 // that plays), sets it undoably, touches it when pressed, and right-click
 // gives its menu.
@@ -66,32 +67,17 @@ Item {
         }
     }
 
-    // The 8 pt font of the captions, boxes and readouts, measured, and its widest figure: a sample text with
-    // its #s in that figure ("-##.# dB") is as wide as any value's text of that form.
+    // The 8 pt font of the captions, boxes and readouts, measured.
     FontMetrics {
         id: metrics
         font: Theme.uiFont(8)
     }
-    readonly property string figure: {
-        let widest = "0"
-        for (const digit of "123456789") {
-            if (metrics.advanceWidth(digit) > metrics.advanceWidth(widest))
-                widest = digit
-        }
-        return widest
+    // `pattern` written in each figure in turn ("-##.# dB": "-00.0 dB" to "-99.9 dB"): the widest of them is as
+    // wide as any value's text of that form, as a box or a Text lays it out (whichever figure is widest there).
+    function samples(pattern) {
+        return [..."0123456789"].map(figure => pattern.replace(/#/g, figure))
     }
-    function sample(pattern) {
-        return pattern.replace(/#/g, figure)
-    }
-    // The widest of `texts` as a caption or a readout lays them out (whole pixels): a text's advance, or as
-    // far as its glyphs reach if further (a last glyph overhanging its advance).
-    function textWidth(texts) {
-        return Math.ceil(Math.max(0, ...texts.map(text => {
-            const ink = metrics.boundingRect(text)
-            return Math.max(metrics.advanceWidth(text), ink.x + ink.width)
-        })))
-    }
-    // The widest of `texts` (by advance, as a box centres its text).
+    // The widest of `texts` as a box draws them (by advance, centred: FontMetrics, as ValueBoxItem measures).
     function widest(texts) {
         return texts.reduce((a, b) => metrics.advanceWidth(b) > metrics.advanceWidth(a) ? b : a)
     }
@@ -100,22 +86,61 @@ Item {
     function boxWidth(text) {
         return Math.ceil(metrics.advanceWidth(text) + 2 * 9)
     }
+    // How wide `texts` need a caption or a readout (a Text) to be, in whole pixels: as a Text lays them out (a
+    // hidden one, a line each, is as wide as the widest of them: a Text lays text out in the font's design
+    // metrics, which can be a pixel off what FontMetrics gives where the font is hinted), or as far as a glyph
+    // reaches past its advance if further.
+    component TextsWidth: Text {
+        id: measured
+        property var texts: []
+        readonly property int needed: Math.ceil(Math.max(implicitWidth, ...texts.map(text => {
+            const ink = inkMetrics.boundingRect(text)
+            return ink.x + ink.width
+        })))
+        visible: false
+        font: Theme.uiFont(8)
+        text: texts.join("\n")
+
+        FontMetrics {
+            id: inkMetrics
+            font: measured.font
+        }
+    }
 
     // The boxes' widest texts: the band's gains (±24 dB), the thresholds (-80 to 0 dB), the ratios (1:0.250 to
-    // 1:100), the times (0.1 ms to 5 s: "0.88 ms", or "1000 ms" just under a second) and the crossovers (to
-    // 15.00 kHz).
-    readonly property string gainSample: sample("-2#.# dB")
-    readonly property string thresholdSample: sample("-##.# dB")
-    readonly property string ratioSample: sample("1:0.###")
-    readonly property string timeSample: widest([sample("0.## ms"), "1000 ms"])
-    readonly property string crossoverSample: sample("1#.## kHz")
-    readonly property int levelBoxWidth: boxWidth(gainSample)                          // Input and Output
-    readonly property int fieldWidth: boxWidth(widest([thresholdSample, timeSample]))  // Above, Below, Attack
-    readonly property int field2Width: boxWidth(widest([ratioSample, timeSample]))     // their ratios, Release
+    // 1:100), the times (0.1 ms to 5 s: "0.88 ms", "8.8 ms", "888 ms", "1000 ms" just under a second, "4.44 s")
+    // and the crossovers (to 15.00 kHz).
+    readonly property string gainSample: widest(samples("-2#.# dB"))
+    readonly property string thresholdSample: widest(samples("-##.# dB"))
+    readonly property string ratioSample: widest(samples("1:0.###"))
+    readonly property string timeSample: widest(samples("0.## ms").concat(samples("#.# ms"), samples("### ms"),
+                                                                           ["1000 ms"], samples("#.## s")))
+    readonly property string crossoverSample: widest(samples("1#.## kHz"))
+    // The columns' captions, whichever page is shown.
+    TextsWidth {
+        id: levelCaptions
+        texts: [qsTr("Input"), qsTr("Output")]
+    }
+    TextsWidth {
+        id: fieldCaptions
+        texts: [qsTr("Above"), qsTr("Below"), qsTr("Attack")]
+    }
+    TextsWidth {
+        id: field2Captions
+        texts: [qsTr("Ratio"), qsTr("Release")]
+    }
+    // Each box column as wide as its widest text with the dot clear of it needs, and its caption: Input and
+    // Output; Above, Below and Attack; the ratios and Release; the crossovers.
+    readonly property int levelBoxWidth: Math.max(boxWidth(gainSample), levelCaptions.needed)
+    readonly property int fieldWidth: Math.max(boxWidth(widest([thresholdSample, timeSample])), fieldCaptions.needed)
+    readonly property int field2Width: Math.max(boxWidth(widest([ratioSample, timeSample])), field2Captions.needed)
     readonly property int crossoverWidth: boxWidth(crossoverSample)
-    // The columns (x): the band column (its button and solo over the split's switch and crossover); Input; the
-    // display; the two fields; Output; the device's own controls. Each follows the one before it.
-    readonly property int bandWidth: 16 + crossoverWidth
+    // The columns (x): the band column (its button and solo over the split's switch and crossover, as wide as
+    // the wider needs); Input; the display; the two fields; Output; the device's own controls. Each follows the
+    // one before it.
+    readonly property int bandWidth: Math.max(16 + crossoverWidth,
+                                              Math.ceil(Math.max(highRow.buttonWidth, midRow.buttonWidth,
+                                                                 lowRow.buttonWidth)) + 2 + 18)
     readonly property int inX: 8 + bandWidth + 6
     readonly property int graphX: inX + levelBoxWidth + 6
     readonly property int fieldX: graphX + graph.width + 6
@@ -307,6 +332,8 @@ Item {
         property string band: "mid"
         property string title: qsTr("Mid")
         property int rowIndex: 1
+        // What its button's name needs (the band column is as wide as the widest band's).
+        readonly property real buttonWidth: activator.implicitWidth
         // Split off (Mid always is); its activator on. Its controls dim unless both.
         readonly property bool on: band === "mid" || (p.get(band + "_on") ? p.get(band + "_on").value >= 0.5 : true)
         readonly property bool active: p.get(band + "_active") ? p.get(band + "_active").value >= 0.5 : true
@@ -326,6 +353,7 @@ Item {
         height: editor.rowHeight
 
         ParamButton {
+            id: activator
             objectName: row.name("Active")
             x: 8
             y: 1
@@ -482,16 +510,19 @@ Item {
     }
 
     BandRow {
+        id: highRow
         band: "high"
         title: qsTr("High")
         rowIndex: 0
     }
     BandRow {
+        id: midRow
         band: "mid"
         title: qsTr("Mid")
         rowIndex: 1
     }
     BandRow {
+        id: lowRow
         band: "low"
         title: qsTr("Low")
         rowIndex: 2
@@ -522,14 +553,23 @@ Item {
 
     // --- The device's own controls -----------------------------------------------------------
 
-    // Their widths: a knob's cell as wide as its name and its widest value (the device's three at least
-    // EditorKnob's own 52 px), and the column as wide as its widest row needs. The button rows fill it, so
-    // their edges line up (Soft Knee, Peak and RMS sharing it as their texts need, Peak and RMS alike), and
-    // the knobs are centred in it.
-    readonly property int knobCellWidth: Math.max(52, textWidth([qsTr("Amount"), qsTr("Time"), qsTr("Output"),
-                                                                 sample("### %"), sample("1### %"), gainSample]))
-    readonly property int scKnobWidth: textWidth([qsTr("S/C Gain"), qsTr("S/C Mix"), thresholdSample,
-                                                  sample("### %")])
+    // Their widths: a knob's cell as wide as its name and its widest value as its caption and readout lay
+    // them out (the device's three at least EditorKnob's own 52 px: Amount 0 to 100 %, Time 10 to 1000 %,
+    // Output ±24 dB; S/C Gain -70 to 24 dB, S/C Mix 0 to 100 %), and the column as wide as its widest row
+    // needs. The button rows fill it, so their edges line up (Soft Knee, Peak and RMS sharing it as their texts
+    // need, Peak and RMS alike), and the knobs are centred in it.
+    TextsWidth {
+        id: knobTexts
+        texts: [qsTr("Amount"), qsTr("Time"), qsTr("Output")].concat(editor.samples("### %"),
+                                                                     editor.samples("1### %"),
+                                                                     editor.samples("-2#.# dB"))
+    }
+    TextsWidth {
+        id: scKnobTexts
+        texts: [qsTr("S/C Gain"), qsTr("S/C Mix")].concat(editor.samples("-##.# dB"), editor.samples("### %"))
+    }
+    readonly property int knobCellWidth: Math.max(52, knobTexts.needed)
+    readonly property int scKnobWidth: scKnobTexts.needed
 
     Column {
         id: globals

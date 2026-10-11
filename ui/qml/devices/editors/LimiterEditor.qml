@@ -25,43 +25,60 @@ Item {
     implicitHeight: 6 + Math.max(gainColumn.minimumHeight, releaseColumn.minimumHeight, sideColumn.minimumHeight,
                                  graph.implicitHeight) + 6
 
-    // The 8 pt font of the captions and readouts, measured, and its widest figure: a sample text with its #s
-    // in that figure ("-##.# dB") is as wide as any value's text of that form.
+    // The 8 pt font of the captions, boxes and readouts, measured.
     FontMetrics {
         id: metrics
         font: Theme.uiFont(8)
     }
-    readonly property string figure: {
-        let widest = "0"
-        for (const digit of "123456789") {
-            if (metrics.advanceWidth(digit) > metrics.advanceWidth(widest))
-                widest = digit
-        }
-        return widest
+    // `pattern` written in each figure in turn ("-##.# dB": "-00.0 dB" to "-99.9 dB"): the widest of them is as
+    // wide as any value's text of that form, as a box or a Text lays it out (whichever figure is widest there).
+    function samples(pattern) {
+        return [..."0123456789"].map(figure => pattern.replace(/#/g, figure))
     }
-    function sample(pattern) {
-        return pattern.replace(/#/g, figure)
+    // The widest of `texts` as a box draws them (by advance, centred: FontMetrics, as ValueBoxItem measures).
+    function widest(texts) {
+        return texts.reduce((a, b) => metrics.advanceWidth(b) > metrics.advanceWidth(a) ? b : a)
     }
-    // The widest of `texts` in `font` (a FontMetrics; the 8 pt one by default) as Text lays them out (whole
-    // pixels): a text's advance, or as far as its glyphs reach if further (a last glyph overhanging it).
-    function textWidth(texts, font) {
-        const m = font || metrics
-        return Math.ceil(Math.max(0, ...texts.map(text => {
-            const ink = m.boundingRect(text)
-            return Math.max(m.advanceWidth(text), ink.x + ink.width)
+    // How wide `texts` need a caption, a readout or a button's name (a Text) to be, in whole pixels: as a Text
+    // lays them out (a hidden one, a line each, is as wide as the widest of them: a Text lays text out in the
+    // font's design metrics, which can be a pixel off what FontMetrics gives where the font is hinted), or as far
+    // as a glyph reaches past its advance if further.
+    component TextsWidth: Text {
+        id: measured
+        property var texts: []
+        readonly property int needed: Math.ceil(Math.max(implicitWidth, ...texts.map(text => {
+            const ink = inkMetrics.boundingRect(text)
+            return ink.x + ink.width
         })))
+        visible: false
+        font: Theme.uiFont(8)
+        text: texts.join("\n")
+
+        FontMetrics {
+            id: inkMetrics
+            font: measured.font
+        }
     }
 
-    // The knobs' columns: 64 px, or wider where a knob's name or widest value (Gain and Output to -24.0 dB,
-    // Release from 0.10 ms to 3.00 s, "1000 ms" just under a second) or Maximize's or Auto's text needs it.
+    // The knobs' columns: 64 px, or wider where a knob's name or widest value (Gain and Output ±24 dB, Release
+    // 0.10 ms to 3.00 s: "0.88 ms", "8.8 ms", "888 ms", "1000 ms" just under a second, "2.22 s") or Maximize's
+    // or Auto's text needs it.
+    TextsWidth {
+        id: knobTexts
+        texts: [qsTr("Gain"), qsTr("Output"), qsTr("Release")].concat(
+                   editor.samples("-2#.# dB"), editor.samples("0.## ms"), editor.samples("#.# ms"),
+                   editor.samples("### ms"), ["1000 ms"], editor.samples("#.## s"))
+    }
     readonly property int knobWidth: Math.ceil(Math.max(64, maximize.implicitWidth, autoRelease.implicitWidth,
-                                                        textWidth([qsTr("Gain"), qsTr("Output"), qsTr("Release"),
-                                                                   sample("-2#.# dB"), sample("0.## ms"),
-                                                                   sample("### ms"), "1000 ms", sample("#.## s")])))
+                                                        knobTexts.needed))
     // The right column: 96 px, or wider where its captions, a list's longest name with its arrow, the Routing
     // buttons or Link's caption and box need it.
-    readonly property int sideWidth: Math.ceil(Math.max(96, textWidth([qsTr("Lookahead"), qsTr("Mode")]),
-                                                        lookahead.widest, mode.widest, routingRow.widest,
+    TextsWidth {
+        id: sideCaptions
+        texts: [qsTr("Lookahead"), qsTr("Mode")]
+    }
+    readonly property int sideWidth: Math.ceil(Math.max(96, sideCaptions.needed, lookahead.widest, mode.widest,
+                                                        routingRow.widest,
                                                         linkCaption.implicitWidth + 2 + linkBox.width))
 
     DeviceParamMap {
@@ -148,18 +165,18 @@ Item {
     }
 
     // The line's value, in the display's header (over it, so declared after it). The caption is as
-    // wide as the wider of its two names, so the box stays put when Maximize swaps them.
-    TextMetrics {
-        id: captionMetrics
+    // wide as the wider of its two names (and 4 px), so the box stays put when Maximize swaps them.
+    TextsWidth {
+        id: lineNames
         font: lineCaption.font
-        text: qsTr("Threshold")
+        texts: [qsTr("Ceiling"), qsTr("Threshold")]
     }
     EditorCaption {
         id: lineCaption
         objectName: "lineCaption"
         x: graph.x + 6
         y: graph.y + 2
-        width: Math.ceil(captionMetrics.advanceWidth) + 4
+        width: lineNames.needed + 4
         height: 18
         horizontalAlignment: Text.AlignLeft
         verticalAlignment: Text.AlignVCenter
@@ -170,14 +187,14 @@ Item {
         objectName: "lineBox"
         x: lineCaption.x + lineCaption.width + 2
         y: graph.y + 2
-        // (its widest text, its minimum's, + 16, and 4 more: the automation dot, 3.5 to 8.5 px from the
-        // left, clears a centred minus sign)
+        // (its widest text, + 16, and 4 more: the automation dot, 3.5 to 8.5 px from the left, clears a
+        // centred minus sign)
         width: implicitWidth + 4
         param: editor.maximizeOn ? p.get("threshold") : p.get("ceiling")
         step: 0.1
         decimals: 1
         defaultValue: param ? param.defaultValue : undefined
-        sampleText: param ? param.format(param.minimum) : ""
+        sampleText: editor.widest(editor.samples("-2#.# dB"))  // (the Ceiling and the Threshold: -24 to 0 dB)
         formatter: v => param ? param.format(v) : ""
         parser: text => param ? param.parse(text) : null
         tooltip: editor.maximizeOn
@@ -245,8 +262,7 @@ Item {
                 id: lookahead
                 objectName: "lookahead"
                 // (the width its longest name and the arrow need)
-                readonly property real widest: editor.textWidth(names, listFont) + button.leftPadding
-                                               + button.rightPadding
+                readonly property real widest: lookaheadNames.needed + button.leftPadding + button.rightPadding
                 width: parent.width
                 param: p.get("lookahead")
                 tooltip: qsTr("Lookahead: how far ahead peaks are seen (the device's latency). Shorter is punchier "
@@ -265,8 +281,7 @@ Item {
             ParamChoice {
                 id: mode
                 objectName: "mode"
-                readonly property real widest: editor.textWidth(names, listFont) + button.leftPadding
-                                               + button.rightPadding
+                readonly property real widest: modeNames.needed + button.leftPadding + button.rightPadding
                 width: parent.width
                 param: p.get("mode")
                 tooltip: qsTr("Standard: no sample above the ceiling. Soft Clip: rounds peaks off as they near it, "
@@ -319,7 +334,7 @@ Item {
                 step: 1
                 decimals: 0
                 defaultValue: param ? param.defaultValue : undefined
-                sampleText: param ? param.format(param.maximum) : ""
+                sampleText: editor.widest(["100 %"].concat(editor.samples("## %")))  // (0 to 100 %)
                 formatter: v => param ? param.format(v) : ""
                 parser: text => param ? param.parse(text) : null
                 tooltip: qsTr("Link: how much of one channel's gain reduction the other shares (100 %: both alike, "
@@ -327,9 +342,15 @@ Item {
             }
         }
     }
-    // The lists' font, measured.
-    FontMetrics {
-        id: listFont
+    // The lists' names, in their font.
+    TextsWidth {
+        id: lookaheadNames
         font: lookahead.button.font
+        texts: lookahead.names
+    }
+    TextsWidth {
+        id: modeNames
+        font: mode.button.font
+        texts: mode.names
     }
 }

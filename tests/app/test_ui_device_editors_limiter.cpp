@@ -10,13 +10,15 @@
 // Soft Clip, with Maximize.
 
 #include <QFontMetricsF>
+#include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSet>
 #include <QTest>
-#include <QTextLayout>
 #include <QUndoStack>
 
 #include <cmath>
+#include <memory>
 #include <tuple>
 #include <vector>
 
@@ -91,32 +93,48 @@ class TestUiDeviceEditorsLimiter : public QObject, public sub::app::test::Editor
     static sub::ui::DeviceParam* paramOf(QQuickItem* control) {
         return control ? qvariant_cast<sub::ui::DeviceParam*>(control->property("param")) : nullptr;
     }
-    // How wide `text` is in `font` as a Text lays it out (its implicitWidth: the advance, and what the last
-    // glyph overhangs past it).
-    static double textWidth(const QString& text, const QFont& font) {
-        QTextLayout layout(text, font);
-        layout.beginLayout();
-        QTextLine line = layout.createLine();
-        line.setLineWidth(1e6);
-        layout.endLayout();
-        return line.naturalTextWidth();
+    // A Text, as the captions and the readouts are (EditorCaption, EditorReadout), to measure texts with.
+    std::unique_ptr<QQuickItem> textProbe_;
+    // How wide `text` is in `font` as a caption or a readout lays it out: a Text's implicitWidth. (A Text lays
+    // text out in the font's design metrics: where the font is hinted, QFontMetrics can be a pixel off it.)
+    double textWidth(const QString& text, const QFont& font) {
+        if (!textProbe_) {
+            QQmlComponent component(qml_.get());
+            component.setData(QByteArrayLiteral("import QtQuick\nText {}"), QUrl());
+            textProbe_.reset(qobject_cast<QQuickItem*>(component.create()));
+            if (!textProbe_) {
+                qWarning() << component.errors();
+                return 1e9;
+            }
+        }
+        textProbe_->setProperty("font", font);
+        textProbe_->setProperty("text", text);
+        return textProbe_->implicitWidth();
     }
     // The widest text a parameter shows over its range (its format() at 20001 values across it, in even steps
-    // of the value or, log-scaled, of its log: closer together than its texts step), and how wide it is in
-    // `font`: as a box centres it (its advance) or, `asText`, as a Text lays it out.
-    static std::pair<QString, double> widestText(const sub::ui::DeviceParam* param, const QFont& font,
-                                                 bool asText) {
+    // of the value or, log-scaled, of its log: closer together than its texts step), a value showing it, and how
+    // wide it is in `font`: as a box centres it (its advance) or, `asText`, as a Text lays it out.
+    struct Widest {
+        QString text;
+        double width = 0.0;
+        double value = 0.0;
+    };
+    Widest widestText(const sub::ui::DeviceParam* param, const QFont& font, bool asText) {
         const QFontMetricsF metrics(font);
         const double from = param->minimum(), to = param->maximum();
         constexpr int kSteps = 20000;
-        std::pair<QString, double> widest;
+        Widest widest;
+        QSet<QString> measured;
         for (int i = 0; i <= kSteps; ++i) {
             const double t = double(i) / kSteps;
-            const QString text =
-                param->format(param->logScale() ? from * std::pow(to / from, t) : from + (to - from) * t);
+            const double value = param->logScale() ? from * std::pow(to / from, t) : from + (to - from) * t;
+            const QString text = param->format(value);
+            if (measured.contains(text))
+                continue;
+            measured.insert(text);
             const double width = asText ? textWidth(text, font) : metrics.horizontalAdvance(text);
-            if (width > widest.second)
-                widest = {text, width};
+            if (width > widest.width)
+                widest = {text, width, value};
         }
         return widest;
     }
@@ -158,7 +176,10 @@ private Q_SLOTS:
         startHost();
     }
 
-    void cleanupTestCase() { stopHost(); }
+    void cleanupTestCase() {
+        textProbe_.reset();  // (before its QML engine)
+        stopHost();
+    }
 
     void init() { clearHost(); }
 
@@ -200,9 +221,12 @@ private Q_SLOTS:
         // Threshold's with Maximize); the knobs' cells for their names and widest values; the buttons and the
         // captions for their texts; the lists for their longest name with the arrow.
         auto boxFits = [&](ValueBoxItem* box, QQuickItem* control) {
-            const auto [text, width] = widestText(paramOf(control), box->font(), false);
-            QVERIFY2((box->width() - width) / 2 >= 9.5,
-                     qPrintable(QStringLiteral("\"%1\" (%2 px) in %3 px").arg(text).arg(width).arg(box->width())));
+            const Widest widest = widestText(paramOf(control), box->font(), false);
+            QVERIFY2((box->width() - widest.width) / 2 >= 9.5,
+                     qPrintable(QStringLiteral("\"%1\" (%2 px) in %3 px")
+                                    .arg(widest.text)
+                                    .arg(widest.width)
+                                    .arg(box->width())));
         };
         boxFits(link, find(view, QStringLiteral("link")));
         boxFits(line, find(view, QStringLiteral("lineBox")));
@@ -210,17 +234,27 @@ private Q_SLOTS:
         QTRY_COMPARE(paramOf(find(view, QStringLiteral("lineBox")))->paramId(), QStringLiteral("threshold"));
         boxFits(line, find(view, QStringLiteral("lineBox")));
         undo()->undo();
+        const int knobSteps = undo()->index();
         for (const char* name : {"gain", "output", "release"}) {
             QQuickItem* cell = find(view, QString::fromLatin1(name));
             const QList<QQuickItem*> children = cell->childItems();
             QQuickItem* caption = children.first();
             QQuickItem* readout = children.last();
-            const auto [text, width] = widestText(paramOf(cell), qvariant_cast<QFont>(readout->property("font")), true);
-            QVERIFY2(width <= readout->width(),
-                     qPrintable(QStringLiteral("%1: \"%2\" (%3 px) in %4 px").arg(name, text).arg(width).arg(
-                         readout->width())));
+            const Widest widest = widestText(paramOf(cell), qvariant_cast<QFont>(readout->property("font")), true);
+            const QString where = QStringLiteral("%1: \"%2\" (%3 px) in %4 px")
+                                      .arg(QString::fromLatin1(name), widest.text)
+                                      .arg(widest.width)
+                                      .arg(readout->width());
+            QVERIFY2(widest.width <= readout->width(), qPrintable(where));
+            // (the readout showing it: whole)
+            editor()->setDeviceParam(track, device, paramOf(cell)->paramId(), widest.value);
+            QTRY_COMPARE(readout->property("text").toString(), widest.text);
+            QVERIFY2(!readout->property("truncated").toBool() && readout->implicitWidth() <= readout->width(),
+                     qPrintable(where));
             QVERIFY2(caption->implicitWidth() <= caption->width(), name);
         }
+        while (undo()->index() > knobSteps)
+            undo()->undo();
         for (const char* name : {"maximize", "autoRelease", "routingLR", "routingMS"}) {
             QQuickItem* button = find(view, QString::fromLatin1(name));
             QVERIFY2(button->implicitWidth() <= button->width(),
