@@ -664,7 +664,9 @@ private Q_SLOTS:
         // A handle held at the edge still drags as it does on its own frequency: 100 Hz's up 20 px. The display takes
         // the press. No tooltip may be up as it comes: the display's own has no room below or above it in this window,
         // so it lies over the plot's bottom, where the handle is, and would take the press (the tilt left as it was).
-        // Moving off the display first closes any tip a hover opened.
+        // It opens 0.7 s into a hover, or at once as the mouse comes onto the display if a knob left of it had its tip
+        // up: Qt Quick hovers the display before it leaves the knob, so the tip passes over, and the knob's hide spares
+        // a tip no longer its own. Moving off the display first closes it.
         QTest::mouseMove(window_, QPoint(1, 1));
         const double dbPerPixel = graph_->dbPerPixel();
         const int steps = undo()->index();

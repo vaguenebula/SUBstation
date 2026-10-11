@@ -62,8 +62,10 @@ their pixel checks meaningless. So on Linux CTest runs them under `xvfb-run -a -
 Windows they run on the desktop, one at a time (CTest's `RESOURCE_LOCK desktop`: one window at a time is active),
 and the system's cursor counts: Windows tells a window where it is whenever the window changes under it, which
 hovers what lies there (and pops up its tooltip). Knob and value-box drags put the cursor back where they began,
-over the window, so the editors' host (`EditorHarness`) moves it off before each test and each editor it shows. By
-hand:
+over the window, so the editors' host (`EditorHarness`) moves it off before each test and each editor it shows. A
+tooltip already up passes at once, without its delay, to a control the mouse moves onto that is painted after the
+first (Qt Quick hovers that one before it leaves the first, whose hide then spares the tip): a hover a test didn't
+make can so put a display's tooltip over its plot the moment the test's mouse arrives. By hand:
 
 ```sh
 xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb build/bin/test_ui_arrangement
