@@ -62,7 +62,7 @@ std::vector<QPointF> typeShape(int kind, const QRectF& r) {
 
 }  // namespace
 
-EqTypeIcon::EqTypeIcon(QQuickItem* parent) : SgCanvas(parent), color_(Theme::kAccent) { setImplicitSize(17, 15); }
+EqTypeIcon::EqTypeIcon(QQuickItem* parent) : SgCanvas(parent) { setImplicitSize(17, 15); }
 
 void EqTypeIcon::setKind(int kind) {
     if (kind == kind_)
@@ -107,8 +107,8 @@ void EqTypeIcon::paint(SgPainter& p) {
     const QRectF rect = QRectF(0, 0, width(), height()).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool enabled = isEnabled();
     p.fillRoundedRect(rect, 3, 3,
-                      checked_ ? withAlpha(color_, 60) : (hovered_ && enabled ? Theme::kSurfaceHover : Theme::kSurface));
-    const QColor line = checked_ ? color_ : (enabled ? Theme::kText : Theme::kTextDisabled);
+                      checked_ ? withAlpha(color(), 60) : (hovered_ && enabled ? Theme::surfaceHover() : Theme::surface()));
+    const QColor line = checked_ ? color() : (enabled ? Theme::text() : Theme::textDisabled());
     const std::vector<QPointF> shape = typeShape(kind_, rect.adjusted(3, 3, -3, -3));
     p.drawPolyline(shape.data(), int(shape.size()), line, 1.3, Qt::RoundCap);
 }

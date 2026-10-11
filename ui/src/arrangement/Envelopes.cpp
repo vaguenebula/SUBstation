@@ -449,8 +449,11 @@ void drawGhost(SgPainter& p, const timeline::Timeline& view, const EnvelopeArea&
     if (!hover || !hover->on(area) || hover->kind != Hover::Kind::Add || gestureActive) return;
     const double radius = kPointRadius + 1.0;
     const QPointF at(view.beatToX(hover->beat), area.y(hover->value));
-    p.fillEllipse(at, radius, radius, QColor(kGhost.red(), kGhost.green(), kGhost.blue(), 70));
-    p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), kGhost, 1.4);
+    QColor ghost = Theme::automationOn();
+    ghost.setAlpha(70);
+    p.fillEllipse(at, radius, radius, ghost);
+    ghost.setAlpha(kGhostAlpha);
+    p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), ghost, 1.4);
 }
 
 }  // namespace
@@ -673,12 +676,16 @@ void drawArea(SgPainter& p, const timeline::Timeline& view, const app::Selection
     p.setAntialiasing(true);
     const double x0 = clip.left() - 2, x1 = clip.right() + 2;
     if (points.empty()) {
-        if (look.unautomated) dashedLine(p, x0, x1, area.y(*look.unautomated), kUnautomated, 1.5);
+        if (look.unautomated) {
+            QColor unautomated = Theme::automationOn();
+            unautomated.setAlpha(kUnautomatedAlpha);
+            dashedLine(p, x0, x1, area.y(*look.unautomated), unautomated, 1.5);
+        }
         drawGhost(p, view, area, hover, gestureActive);
         p.restore();
         return;
     }
-    const QColor color = look.overridden ? kOverridden : kEnvelope;
+    const QColor color = look.overridden ? Theme::automationOff() : Theme::automationOn();
     const app::ParamSpec* quantize = look.quantizer();
     const bool here = hover && hover->on(area);
     if (here && hover->kind == Hover::Kind::Segment && hover->index && *hover->index + 1 < static_cast<int>(points.size()))
@@ -702,7 +709,7 @@ void drawArea(SgPainter& p, const timeline::Timeline& view, const app::Selection
                 hovered = i - *hover->index == 0 || i - *hover->index == 1;
         }
         const double radius = kPointRadius + (hovered ? 1.0 : 0.0);
-        const QColor fill = selected.contains(i) ? Theme::kSelectionOutline : (hovered ? color : Theme::kLane);
+        const QColor fill = selected.contains(i) ? Theme::selectionOutline() : (hovered ? color : Theme::lane());
         const QPointF at(x, area.y(point.value));
         p.fillEllipse(at, radius, radius, fill);
         p.drawEllipse(QRectF(at.x() - radius, at.y() - radius, 2 * radius, 2 * radius), color, 1.4);
@@ -733,10 +740,10 @@ void drawReadout(SgPainter& p, double width, const std::optional<Readout>& reado
     if (box.right() > width) box.moveRight(at.x() - 8);
     p.save();
     p.setAntialiasing(true);
-    p.fillRoundedRect(box, 3, 3, Theme::kPanelAlt);
-    p.drawRoundedRect(box, 3, 3, Theme::kBorder);
+    p.fillRoundedRect(box, 3, 3, Theme::panelAlt());
+    p.drawRoundedRect(box, 3, 3, Theme::border());
     p.restore();
-    p.drawText(box, Qt::AlignCenter, readout->text, Theme::kText, font);
+    p.drawText(box, Qt::AlignCenter, readout->text, Theme::text(), font);
 }
 
 }  // namespace envelopes

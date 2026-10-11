@@ -850,8 +850,8 @@ private Q_SLOTS:
         editor().setSend(track, a, -6.0, true);
         h_->settle();
         letters = sendItems(header(track), "sendLetter");
-        QCOMPARE(letters[0]->property("color").value<QColor>(), sub::ui::Theme::kAccent);
-        QCOMPARE(letters[1]->property("color").value<QColor>() == sub::ui::Theme::kAccent, false);
+        QCOMPARE(letters[0]->property("color").value<QColor>(), sub::ui::Theme::accent());
+        QCOMPARE(letters[1]->property("color").value<QColor>() == sub::ui::Theme::accent(), false);
         QVERIFY(std::abs(knobs(header(track))[0]->property("value").toDouble() - automation::volumeToNormalized(-6.0)) < 1e-9);
         // Its menu: Pre-Fader (checked), Remove Send, Show Automation.
         arr::MenuEntries menu = header(track)->sendMenu(a);

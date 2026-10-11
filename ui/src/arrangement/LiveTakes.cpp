@@ -76,7 +76,7 @@ void LiveTakes::drawTake(SgPainter& p, const QColor& trackColor, const app::Live
     p.setClipRect(rect.intersected(visible).adjusted(-1, -1, 1, 1));
     const double titleHeight = clipTitleHeight(rect.height(), folded);  // (as a clip's)
     p.fillRect(rect, trackColor.darker(160));
-    if (titleHeight > 0) p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), titleHeight), Theme::kRecordOn);
+    if (titleHeight > 0) p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), titleHeight), Theme::recordOn());
     const QRectF body = rect.adjusted(0, titleHeight + 1, 0, -1);
     const qint64 peaks = take.peakCount();
     if (take.midi) {
@@ -112,11 +112,11 @@ void LiveTakes::drawTake(SgPainter& p, const QColor& trackColor, const app::Live
                     high = std::max(high, take.peakMax(k));
                 }
                 const double x = starts[i].first;
-                p.drawLine(QPointF(x, mid - high * half), QPointF(x, mid - low * half), Theme::kWaveform);
+                p.drawLine(QPointF(x, mid - high * half), QPointF(x, mid - low * half), Theme::waveform());
             }
         }
     }
-    p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), Theme::kRecordOn, 1);
+    p.drawRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), Theme::recordOn(), 1);
     p.restore();
 }
 
@@ -140,7 +140,7 @@ void LiveTakes::drawNotes(SgPainter& p, const app::LiveTake& take, double takeEn
         const double x1 = view.beatToX(note.end >= 0 ? static_cast<double>(note.end) * beatsPerSample : takeEnd);
         if (x1 >= visible.left() && x0 <= visible.right())
             p.fillRect(QRectF(x0, top + (high - note.key) * row, std::max(1.0, x1 - x0 - gap), std::max(1.0, row - gap)),
-                       Theme::kWaveform);
+                       Theme::waveform());
     }
 }
 

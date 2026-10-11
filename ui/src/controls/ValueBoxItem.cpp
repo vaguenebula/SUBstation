@@ -312,7 +312,7 @@ void ValueBoxItem::paint(SgPainter& p) {
         p.setAntialiasing(true);
         const QRectF rect = QRectF(0, 0, width(), height()).adjusted(0.5, 0.5, -0.5, -0.5);
         const bool active = hovered_ || dragging();
-        p.fillRoundedRect(rect, 2, 2, active ? Theme::kSurfaceHover : Theme::kSurface);
+        p.fillRoundedRect(rect, 2, 2, active ? Theme::surfaceHover() : Theme::surface());
         if (fill_ >= 0 && fillColor_.isValid()) {
             const QRectF inside = rect.adjusted(1, 1, -1, -1);
             const double a = inside.left() + std::clamp(fillFrom_, 0.0, 1.0) * inside.width();
@@ -321,17 +321,17 @@ void ValueBoxItem::paint(SgPainter& p) {
                 p.fillRect(QRectF(std::min(a, b), inside.top(), std::abs(b - a), inside.height()), fillColor_);
             }
         }
-        p.drawRoundedRect(rect, 2, 2, Theme::kBorder);
-        p.drawText(rect, Qt::AlignCenter, text_, dragging() ? Theme::kAccent : Theme::kText, font_);
+        p.drawRoundedRect(rect, 2, 2, Theme::border());
+        p.drawText(rect, Qt::AlignCenter, text_, dragging() ? Theme::accent() : Theme::text(), font_);
         drawAutomationDot(p, automation_, QPointF(4.0, rect.center().y()));
         return;
     }
     p.setAntialiasing(true);
     const QRectF rect = QRectF(0, 0, width(), height()).adjusted(0.5, 0.5, -0.5, -0.5);
     const bool active = hovered_ || dragging();
-    p.fillRoundedRect(rect, 3, 3, active ? Theme::kSurfaceHover : Theme::kSurface);
-    p.drawRoundedRect(rect, 3, 3, Theme::kBorder);
-    p.drawText(rect, Qt::AlignCenter, text_, dragging() ? Theme::kAccent : Theme::kText, font_);
+    p.fillRoundedRect(rect, 3, 3, active ? Theme::surfaceHover() : Theme::surface());
+    p.drawRoundedRect(rect, 3, 3, Theme::border());
+    p.drawText(rect, Qt::AlignCenter, text_, dragging() ? Theme::accent() : Theme::text(), font_);
     drawAutomationDot(p, automation_, QPointF(6.0, rect.center().y()));
 }
 

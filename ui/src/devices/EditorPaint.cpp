@@ -37,7 +37,7 @@ void drawDecadeGrid(SgPainter& p, const QRectF& plot, const LogAxis& axis) {
             if (axis.low < value && value < axis.high) {
                 const double x = axis.position(value);
                 p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()),
-                           withAlpha(Theme::kGridBeat, multiple == 1 ? 200 : 90));
+                           withAlpha(Theme::gridBeat(), multiple == 1 ? 200 : 90));
             }
         }
     }

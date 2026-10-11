@@ -118,7 +118,7 @@ chain order, all of one chain (the track's own or a rack's).
   (see [README.md](README.md#what-an-action-acts-on)). A click beside the devices (`clickBeside()`) clears the device
   selection but keeps the focus here, so Ctrl+V pastes into this track. When the `Selection` moves on (another track,
   or the focus elsewhere), the device selection is dropped; devices no longer shown are no longer selected.
-- A frame shows it is selected by its title bar and edge in the selection's teal (`kDeviceHeaderSelected`), as in
+- A frame shows it is selected by its title bar and edge in the selection's teal (`Theme::deviceHeaderSelected()`), as in
   Ableton.
 
 ## Commands
@@ -172,10 +172,10 @@ The device view's clipboard is its own: the arrangement's clips, automation and 
 shows of the device: its name, tooltip, kind, on/off, folded, its chain, Move Left/Right, a plug-in's loading state
 and editor, its sidechain) reading the project again whenever that may have changed:
 
-- **Frame**: `kPanelAlt` in a 1 px line of its title bar's colour, 3 px corners. Its width is `DEVICE_WIDTH` (216 px),
+- **Frame**: `Theme::panelAlt()` in a 1 px line of its title bar's colour, 3 px corners. Its width is `DEVICE_WIDTH` (216 px),
   a rack's or an editor's own (`body.implicitWidth + 2`: a rack's grows with its macros and its chain list), or 26 px
   folded.
-- **Title bar** (`kDeviceHeader`, teal while selected): the fold button, the on/off switch (round, as Ableton's:
+- **Title bar** (`Theme::deviceHeader()`, teal while selected): the fold button, the on/off switch (round, as Ableton's:
   `DeviceInfo::setEnabled`, overriding the switch's automation while it plays; following that automation, with the
   automation dot: `enabled`, `enabledAutomation`; right-click: Show, Delete and Re-Enable Automation), the name
   (elided; its tooltip: a plug-in's name, vendor, file and latency, a rack's name
