@@ -24,6 +24,7 @@
 #include <QHash>
 #include <QMap>
 #include <QPointF>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QString>
 #include <QtQml/qqmlregistration.h>
@@ -89,6 +90,10 @@ public:
     std::vector<float> readDisplay(const QString& displayId);
     // The same with the absolute index of the first value.
     std::pair<qint64, std::vector<float>> readDisplayAt(const QString& displayId);
+    // The newest of the display's values since the last call: those covering the last `seconds` of audio
+    // at its rate (its samples per value), at least one if any came. A read can hold a long backlog (an
+    // editor shown, or shown again, after the sound stopped), where a meter or an activity wants what is now.
+    std::vector<float> readRecent(const QString& displayId, double seconds);
 
     // Reads everything again, as a change of the device would.
     Q_INVOKABLE void refresh();
@@ -103,8 +108,13 @@ Q_SIGNALS:
 protected:
     // The device's parameters, automation or state may have changed: read what is drawn. The default repaints.
     virtual void sync();
-    // Draws what the engine reported since; called as the meters update, while visible.
+    // Draws what the engine reported since; called on each DisplayClock tick, while visible.
     virtual void refreshDisplays() {}
+    // In refreshDisplays(): the seconds since the last call, to move animations on by. Never less
+    // than a tick (kDisplayRefreshMs: so animations ticked by hand move as the clock would) nor
+    // more than 0.1 s (a busy UI doesn't make them jump); the first call, or one after the item
+    // was hidden for a while, counts as one tick.
+    double tickSeconds();
     // The device's state besides its parameters changed (a sampler's sample).
     virtual void stateChanged() { sync(); }
 
@@ -130,9 +140,11 @@ private:
     QStringList automatable_;         // those that can follow automation
     bool following_ = false;          // any of them does now
     QMap<QString, int> displays_;     // display id -> index
+    QMap<QString, int> displaySamples_;  // display id -> the samples each value stands for
     QHash<QString, quint64> positions_;  // "<processor>:<display>" -> where to read from
     QList<QMetaObject::Connection> connections_;
     DoubleClicks doubleClicks_;
+    QElapsedTimer tickTimer_;  // since the last tickSeconds()
 };
 
 }  // namespace sub::ui

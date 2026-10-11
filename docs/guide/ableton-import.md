@@ -63,7 +63,7 @@ and fades, and whether they are deactivated.
   (the message lists those: set them up again). A VST2 plug-in with no VST3 installed
   is left out. Their automation comes along only with a VST3's own.
 
-**Live's own devices.** Those SUBstation has a device like:
+**Live's own devices.** These come across, each as the SUBstation device like it:
 
 | Live | SUBstation |
 |---|---|
@@ -92,8 +92,10 @@ came across, each where its target now is (a pad's on its track).
 - The Session View.
 - Tempo and time signature changes over the song.
 - Clip envelopes, grooves, follow actions, take lanes.
-- Live devices SUBstation has nothing like, MIDI effects, Max for Live devices,
-  racks' macros and their mappings, Drum Racks' return chains.
+- Live devices SUBstation has nothing like, and Live's Gate, Limiter, Multiband
+  Dynamics, Saturator, Amp, Erosion, Chorus-Ensemble, Phaser-Flanger and Reverb
+  (SUBstation has devices like them, but doesn't import them yet), MIDI effects, Max for
+  Live devices, racks' macros and their mappings, Drum Racks' return chains.
 - Frozen tracks come unfrozen (their devices are all there).
 - Curved automation segments come straight.
 

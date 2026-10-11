@@ -84,9 +84,16 @@ so nothing above it has `#ifdef`s for one. This page is the map; each part has i
   `Q_INVOKABLE`s and signals, but includes nothing of QML.
 - **The application layer talks to the engine only through [Engine.h](../engine/src/Engine.h)** and the few engine
   headers it needs besides: `builtin/BuiltinRegistry.h` (the built-in devices), `Processor.h` (`ParamInfo`),
-  `AudioSource.h`, `RenderJob.h`, `AudioDevice.h` (the default driver), `builtin/EqDesign.h` (the EQ's curves),
-  `builtin/DisperserDesign.h` (the Disperser's group delay)
-  and `plugins/Vst3Format.h` (the default VST3 folders). Only the engine bridge talks to the engine about the
+  `AudioSource.h`, `RenderJob.h`, `AudioDevice.h` (the default driver), `builtin/GateDesign.h` (the Gate's key EQ
+  curve and gain), `builtin/LimiterDesign.h` (the Limiter's line and Soft Clip's band), `builtin/MultibandDesign.h`
+  (Multiband Dynamics' gain law and ranges), `builtin/SpectralDesign.h` (the Spectral Compressor's threshold, Below and
+  Focus), `builtin/SaturatorDesign.h` (the Saturator's curve and Color), `builtin/AmpDesign.h` (the Amp's tone and
+  transfer curves), `builtin/ErosionDesign.h` (Erosion's noise band and excursion), `builtin/ChorusDesign.h` (the
+  Chorus-Ensemble's voices), `builtin/PhaserDesign.h` (the Phaser-Flanger's response and LFO shapes),
+  `builtin/ReverbDesign.h` (the Reverb's decay curve, input filter, reflections and Spin's swing),
+  `builtin/DisperserDesign.h` (the Disperser's group delay), `builtin/EqDesign.h` (the EQ's curves),
+  `builtin/SampleSlicing.h` (the Sampler's slices and Snap), `plugins/Vst3Format.h` (the default VST3 folders) and
+  `plugins/Vst3Ids.h` (VST3 class ids, for Live Sets). Only the engine bridge talks to the engine about the
   project. What the UI shows of the engine (waveform peaks, meters, the scope, device status, plug-in parameter
   texts, devices' displays) comes through application-layer types whose headers include no engine header
   (`Waveform`, `MeterLevel`, `ProcessorParam`...: see [app/engine-bridge.md](app/engine-bridge.md)).
@@ -211,7 +218,8 @@ not hierarchy: a track's output into a group or the master, sends into returns, 
 track (resampling), a sidechain into a device. The hierarchy (which track is in which group) lives in the
 application's model (`Track::parent`; the tracks stay a flat list), which also refuses any edge that would close a
 cycle before it reaches the engine. Delay compensation is worked out per edge. See
-[engine/routing.md](engine/routing.md) and [app/model.md](app/model.md#returns-sends-inputs-sidechains-the-routing-graph).
+[engine/routing.md](engine/routing.md) and
+[app/model.md](app/model.md#outputs-returns-sends-inputs-sidechains-the-routing-graph).
 
 ## Parameters and automation
 

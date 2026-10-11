@@ -3,7 +3,9 @@
 // channels and ranges out of interleaved audio, levels (peak, RMS), where a
 // signal is non-zero, comparisons sample by sample (np.testing.assert_allclose,
 // assert_array_equal), spectra (np.fft.rfft, for any length), envelopes,
-// correlation, random numbers, and reading WAV files back.
+// correlation, random numbers, and reading WAV files back. And what the devices'
+// own tests play and measure: signals (a faded-in sine, noise, an impulse),
+// levels in dB, and how sharp a sound's steepest moment is (a click).
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +28,9 @@ namespace subtest {
 inline constexpr double kPi = 3.14159265358979323846;
 
 using Samples = std::vector<float>;
+
+// The fractional part, x - floor(x): where a phase is in its cycle (0..1).
+inline double frac(double x) { return x - std::floor(x); }
 
 // --- Picking out ----------------------------------------------------------------------
 
@@ -88,10 +93,48 @@ inline Samples interleave(const std::vector<Samples>& channels) {
 inline Samples stereo(const Samples& mono) { return interleave({mono, mono}); }
 
 // amplitude * sin(2 pi freq t), `seconds` long at `rate` (computed in double, as numpy does).
-inline Samples sine(double freq, double seconds, double amplitude = 0.5, int rate = 48000) {
+inline Samples sine(double freq, double seconds, double amplitude = 0.5, double rate = 48000.0) {
     Samples out(static_cast<size_t>(seconds * rate));
     for (size_t i = 0; i < out.size(); ++i)
         out[i] = static_cast<float>(amplitude * std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
+    return out;
+}
+
+// amplitude * sin(2 pi freq t) faded in over its first 100 ms by an S-curve
+// (t² (3 - 2t)), so its start is no click of its own.
+inline Samples smoothSine(double freq, double seconds, double rate = 48000.0, double amplitude = 0.5) {
+    Samples x(static_cast<size_t>(seconds * rate));
+    const double fadeIn = 0.1 * rate;
+    for (size_t i = 0; i < x.size(); ++i) {
+        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
+        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude *
+                                  std::sin(2.0 * kPi * freq * static_cast<double>(i) / rate));
+    }
+    return x;
+}
+
+// Uniform noise in [-amplitude, amplitude): std::mt19937 through the standard
+// library's uniform_real_distribution, so another library may make other values
+// from the same seed (Rng's are the same everywhere); the tests only need noise.
+inline Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
+    std::mt19937 random(seed);
+    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
+    Samples x(length);
+    for (float& v : x) v = uniform(random);
+    return x;
+}
+
+// `level` at frame `at`, silence around it.
+inline Samples impulse(size_t length, size_t at = 0, float level = 1.f) {
+    Samples x(length, 0.f);
+    x.at(at) = level;
+    return x;
+}
+
+// `x` delayed by `frames` (zeros first), as long as `x`.
+inline Samples delayed(const Samples& x, int64_t frames) {
+    Samples out(x.size(), 0.f);
+    for (size_t i = static_cast<size_t>(frames); i < x.size(); ++i) out[i] = x[i - static_cast<size_t>(frames)];
     return out;
 }
 
@@ -120,6 +163,13 @@ double maxOf(const std::vector<T>& v) {
 }
 
 template <typename T>
+double minOf(const std::vector<T>& v) {
+    double least = std::numeric_limits<double>::infinity();
+    for (const T x : v) least = std::min(least, static_cast<double>(x));
+    return least;
+}
+
+template <typename T>
 double mean(const std::vector<T>& v) {
     double sum = 0.0;
     for (const T x : v) sum += static_cast<double>(x);
@@ -131,6 +181,21 @@ double rms(const std::vector<T>& v) {
     double sum = 0.0;
     for (const T x : v) sum += static_cast<double>(x) * static_cast<double>(x);
     return v.empty() ? 0.0 : std::sqrt(sum / static_cast<double>(v.size()));
+}
+
+// The sum of the squares.
+inline double energy(const Samples& x) {
+    double sum = 0.0;
+    for (const float v : x) sum += static_cast<double>(v) * v;
+    return sum;
+}
+
+// A gain (or an amplitude) in dB: 20 log10(gain); silence is -600 dB, not minus infinity.
+inline double db(double gain) { return 20.0 * std::log10(std::max(gain, 1e-30)); }
+
+// The RMS level of x[from:to] (as slice() takes them) in dB.
+inline double rmsDb(const Samples& x, int64_t from = 0, int64_t to = std::numeric_limits<int64_t>::max()) {
+    return db(rms(slice(x, from, to)));
 }
 
 // Every value equals `value` (np.all(v == value)).
@@ -229,6 +294,35 @@ namespace subtest {
 
 // --- Clicks ----------------------------------------------------------------------------------
 
+// The largest 6th difference over [from, to) (to < 0: to the end): a steep high-pass
+// (gain (2 sin(pi f / rate))^6), 8 times (18 dB) more sensitive at Nyquist than at a
+// quarter of the sample rate and about 2·10^5 times more than at 2 kHz (48 kHz). A
+// step of d shows as 10 d, a one-sample spike as 20 d, a kink (a change of slope s)
+// as 6 s; a smooth signal well below Nyquist hardly at all. How the devices' tests
+// tell a click from the sound around it.
+inline double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
+    std::vector<double> d(x.begin(), x.end());
+    for (int k = 0; k < 6; ++k)
+        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
+    if (to < 0 || to > static_cast<int64_t>(d.size())) to = static_cast<int64_t>(d.size());
+    double worst = 0.0;
+    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i)
+        worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
+    return worst;
+}
+
+// The largest step from one sample to the next over [from, to) (to < 0: to the end).
+inline double largestStep(const Samples& x, int64_t from = 1, int64_t to = -1) {
+    if (to < 0 || to > static_cast<int64_t>(x.size())) to = static_cast<int64_t>(x.size());
+    double worst = 0.0;
+    for (int64_t i = std::max<int64_t>(from, 1); i < to; ++i) {
+        const auto at = static_cast<size_t>(i);
+        worst = std::max(worst, std::abs(static_cast<double>(x[at]) - x[at - 1]));
+    }
+    return worst;
+}
+
+// What clicksOf finds: a render's samples that aren't silent, by frame.
 using Clicks = std::map<int64_t, double>;
 
 // Where a channel isn't silent (|x| > threshold), and its values there rounded to 6 decimals.
@@ -279,6 +373,13 @@ namespace subtest {
 // --- Spectra -------------------------------------------------------------------------------
 
 using Complex = std::complex<double>;
+
+// The smallest power of two at least `n` (a transform's length).
+inline size_t powerOfTwoAtLeast(size_t n) {
+    size_t p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
 
 // In-place radix-2 FFT (size a power of two); unscaled either way.
 inline void fftPow2(std::vector<Complex>& a, bool inverse) {
@@ -340,6 +441,54 @@ std::vector<double> spectrum(const std::vector<T>& x, const std::vector<double>&
     std::vector<double> out(x.size() / 2 + 1);
     for (size_t k = 0; k < out.size(); ++k) out[k] = std::abs(bins[k]);
     return out;
+}
+
+// The energy of x's spectrum (Hann-windowed) between `low` and `high` Hz, in dB.
+inline double bandDb(const Samples& x, double low, double high, double rate = 48000.0) {
+    const std::vector<double> s = spectrum(x, hanning(x.size()));
+    double sum = 0.0;
+    for (size_t k = 0; k < s.size(); ++k) {
+        const double f = static_cast<double>(k) * rate / static_cast<double>(x.size());
+        if (f >= low && f <= high) sum += s[k] * s[k];
+    }
+    return 10.0 * std::log10(sum + 1e-30);
+}
+
+// x's transform at `freq` Hz over x[from, from + length) (length 0: to the end), its
+// phase counted from `from`: one bin of a DFT, at any frequency. (A rotation each
+// sample, kept on the unit circle.)
+inline Complex transformAt(const Samples& x, double freq, int64_t from = 0, int64_t length = 0,
+                           double rate = 48000.0) {
+    if (length == 0) length = static_cast<int64_t>(x.size()) - from;
+    const Complex step = std::polar(1.0, -2.0 * kPi * freq / rate);
+    Complex z = 1.0, sum = 0.0;
+    for (int64_t n = 0; n < length; ++n) {
+        sum += static_cast<double>(x[static_cast<size_t>(from + n)]) * z;
+        z *= step;
+        if ((n & 1023) == 1023) z /= std::abs(z);
+    }
+    return sum;
+}
+
+// A steady tone's amplitude at `freq` in x[from, from + length), which holds a
+// whole number of its cycles: 2 |X| / length.
+inline double toneAmplitude(const Samples& x, double freq, int64_t from, int64_t length, double rate = 48000.0) {
+    return 2.0 * std::abs(transformAt(x, freq, from, length, rate)) / static_cast<double>(length);
+}
+
+// The same through a Hann window, for any length (the window keeps out what leaks
+// from other frequencies): twice the windowed transform's magnitude over the
+// window's sum.
+inline double windowedAmplitude(const Samples& x, double freq, int64_t from, int64_t length, double rate = 48000.0) {
+    Complex sum = 0.0;
+    double weights = 0.0;
+    for (int64_t n = 0; n < length; ++n) {
+        const double w = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(n) / static_cast<double>(length));
+        sum += w * static_cast<double>(x[static_cast<size_t>(from + n)]) *
+               std::polar(1.0, -2.0 * kPi * freq * static_cast<double>(n) / rate);
+        weights += w;
+    }
+    return 2.0 * std::abs(sum) / weights;
 }
 
 // The strongest frequency, between bins: a Hann window, and a parabola through

@@ -38,8 +38,12 @@ public:
     void setParam(int index, float value) final;
 
     // Real-time. Calls render() for each stretch of the block with no automation
-    // change in it, applying the changes in between.
+    // change in it, applying the changes in between. Input that isn't audio (NaN,
+    // infinity, or beyond kMaxInput: what a broken plug-in or file can hand on) is
+    // taken as silence first, so no device's state ever holds it.
     void process(const ProcessContext& ctx, float* const* channels, int numChannels, int numFrames) final;
+
+    static constexpr float kMaxInput = 1e30f;  // +600 dBFS
 
     std::vector<DisplayInfo> displays() const final { return displayInfos_; }
 

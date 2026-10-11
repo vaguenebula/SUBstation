@@ -316,6 +316,7 @@ private Q_SLOTS:
         QCOMPARE(formatValue(440.0, QStringLiteral("Hz")), QStringLiteral("440 Hz"));
         QCOMPARE(formatValue(1500.0, QStringLiteral("ms")), QStringLiteral("1.50 s"));
         QCOMPARE(formatValue(2.5, QStringLiteral("ms")), QStringLiteral("2.5 ms"));
+        QCOMPARE(formatValue(0.02, QStringLiteral("ms")), QStringLiteral("0.02 ms"));
         QCOMPARE(formatValue(120.0, QStringLiteral("ms")), QStringLiteral("120 ms"));
         QCOMPARE(formatValue(1.5, QStringLiteral("x")), QStringLiteral("1.50 x"));
         QCOMPARE(formatValue(32.0, QStringLiteral("#")), QStringLiteral("32"));  // a count (the Sampler's voices)
@@ -323,6 +324,17 @@ private Q_SLOTS:
         QCOMPARE(formatValue(6.0, QStringLiteral("beats")), QStringLiteral("6 Beats"));
         QCOMPARE(formatValue(4.0, QStringLiteral("beats")), QStringLiteral("1 Bar"));
         QCOMPARE(formatValue(16.0, QStringLiteral("beats")), QStringLiteral("4 Bars"));
+        // The newer devices' units: a phase offset, a tilt, Multiband Dynamics' ratios (as Live writes them), an
+        // amp's dials, a room's size.
+        QCOMPARE(formatValue(180.0, QStringLiteral("\u00B0")), QStringLiteral("180\u00B0"));
+        QCOMPARE(formatValue(-1.5, QStringLiteral("dB/oct")), QStringLiteral("-1.5 dB/oct"));
+        QCOMPARE(formatValue(4.0, QStringLiteral("ratio")), QStringLiteral("1:4.00"));
+        QCOMPARE(formatValue(66.7, QStringLiteral("ratio")), QStringLiteral("1:66.7"));
+        QCOMPARE(formatValue(100.0, QStringLiteral("ratio")), QStringLiteral("1:100"));
+        QCOMPARE(formatValue(0.5, QStringLiteral("ratio")), QStringLiteral("1:0.500"));
+        QCOMPARE(formatValue(9.996, QStringLiteral("ratio")), QStringLiteral("1:10.0"));
+        QCOMPARE(formatValue(5.0, QStringLiteral("dial")), QStringLiteral("5.0"));
+        QCOMPARE(formatValue(100.0, QStringLiteral("size")), QStringLiteral("100.00"));
     }
 
     // --- Saving (test_save_and_load, with the changes made through commands) ---

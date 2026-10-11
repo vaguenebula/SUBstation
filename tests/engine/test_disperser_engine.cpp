@@ -23,6 +23,7 @@
 #include "builtin/DisperserDesign.h"
 #include "harness/Fixtures.h"
 #include "harness/Signal.h"
+#include "harness/Standalone.h"
 
 using namespace subtest;
 namespace disperser = sub::disperser;
@@ -31,110 +32,13 @@ namespace {
 
 constexpr int kBlock = 1024;  // the renderer's largest block (Renderer::kMaxBlock)
 
-using Values = std::vector<std::pair<std::string, float>>;
+using Values = ParamValues;
+using Change = ParamChange;
 
-// A parameter's change at a frame, as automation hands it over.
-struct Change {
-    int64_t frame;
-    std::string id;
-    float value;
+// A Disperser on its own, outside an engine (harness/Standalone.h).
+struct Disperser : Standalone {
+    explicit Disperser(double rate = kSampleRate, const Values& values = {}) : Standalone("disperser", rate, values) {}
 };
-
-// A Disperser on its own, outside an engine, at any sample rate: processed in
-// blocks, its changes handed over as automation (so its blocks split there) as
-// the renderer does.
-class Disperser {
-public:
-    explicit Disperser(double rate = kSampleRate, const Values& values = {})
-        : processor_(sub::BuiltinRegistry::instance().create("disperser")), rate_(rate) {
-        for (const auto& [id, value] : values) set(id, value);
-        processor_->prepare(rate, kBlock);
-    }
-
-    sub::Processor& processor() { return *processor_; }
-
-    int index(const std::string& id) const {
-        const auto& params = processor_->params();
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i].id == id) return static_cast<int>(i);
-        INFO(id);
-        REQUIRE(false);
-        return -1;
-    }
-    void set(const std::string& id, float value) { processor_->setParam(index(id), value); }
-
-    // Processes one or two channels of equal length in place, `block` frames at a time.
-    void run(const std::vector<Samples*>& channels, const std::vector<Change>& changes = {}, int block = 256) {
-        const auto frames = static_cast<int64_t>(channels[0]->size());
-        sub::ProcessContext ctx;
-        ctx.sampleRate = rate_;
-        ctx.offline = true;
-        float* pointers[2] = {};
-        size_t next = 0;
-        for (int64_t start = 0; start < frames; start += block) {
-            const int n = static_cast<int>(std::min<int64_t>(block, frames - start));
-            while (next < changes.size() && changes[next].frame < start + n) {
-                const Change& change = changes[next++];
-                const int i = index(change.id);
-                processor_->automate(i, processor_->params()[static_cast<size_t>(i)].toNormalized(change.value),
-                                     static_cast<int32_t>(std::max<int64_t>(0, change.frame - start)));
-            }
-            for (size_t c = 0; c < channels.size(); ++c) pointers[c] = channels[c]->data() + start;
-            ctx.samplePos = start;
-            processor_->process(ctx, pointers, static_cast<int>(channels.size()), n);
-            processor_->clearAutomation();
-        }
-    }
-    // One channel: what comes out.
-    Samples play(Samples mono, const std::vector<Change>& changes = {}) {
-        run({&mono}, changes);
-        return mono;
-    }
-
-private:
-    std::shared_ptr<sub::Processor> processor_;
-    double rate_;
-};
-
-Samples impulse(size_t length) {
-    Samples x(length, 0.f);
-    x[0] = 1.f;
-    return x;
-}
-
-Samples noise(size_t length, unsigned seed, float amplitude = 0.5f) {
-    std::mt19937 random(seed);
-    std::uniform_real_distribution<float> uniform(-amplitude, amplitude);
-    Samples x(length);
-    for (float& v : x) v = uniform(random);
-    return x;
-}
-
-// A sine that fades in over 100 ms: the stages never hear it start abruptly
-// (which they would smear into a chirp, as they should: that is the effect).
-Samples smoothSine(double freq, double seconds, double rate = kSampleRate, double amplitude = 0.5) {
-    Samples x(static_cast<size_t>(seconds * rate));
-    const double fadeIn = 0.1 * rate;
-    for (size_t i = 0; i < x.size(); ++i) {
-        const double t = std::min(1.0, static_cast<double>(i) / fadeIn);
-        x[i] = static_cast<float>(t * t * (3.0 - 2.0 * t) * amplitude * std::sin(2.0 * kPi * freq * i / rate));
-    }
-    return x;
-}
-
-// The largest 6th difference over [from, to): a steep high-pass, about 64 times
-// (36 dB) more sensitive at Nyquist than at a quarter of the sample rate and
-// 10^5 times more than at 2 kHz (48 kHz). A step of d shows as up to 20 d; a
-// smooth signal well below Nyquist hardly at all.
-double clickiness(const Samples& x, int64_t from = 0, int64_t to = -1) {
-    std::vector<double> d(x.begin(), x.end());
-    for (int k = 0; k < 6; ++k)
-        for (size_t i = d.size() - 1; i > 0; --i) d[i] -= d[i - 1];
-    if (to < 0) to = static_cast<int64_t>(d.size());
-    double worst = 0.0;
-    for (int64_t i = std::max<int64_t>(from, 6); i < to; ++i) worst = std::max(worst, std::abs(d[static_cast<size_t>(i)]));
-    return worst;
-}
 
 // The impulse response's transform at `freq` (Hz).
 std::complex<double> transform(const Samples& h, double freq, double rate, bool timesN = false) {
@@ -157,12 +61,6 @@ double designDelay(int stages, double freq, double pinch, double rate, double at
     return disperser::groupDelayMs(stages, freq, pinch, rate, at) * rate / 1000.0;
 }
 
-double energy(const Samples& x) {
-    double sum = 0.0;
-    for (const float v : x) sum += static_cast<double>(v) * v;
-    return sum;
-}
-
 // Whether, at every frame, what came out so far holds no more energy than what went in.
 bool neverMoreThanGiven(const Samples& in, const Samples& out) {
     double given = 0.0, put = 0.0;
@@ -173,14 +71,6 @@ bool neverMoreThanGiven(const Samples& in, const Samples& out) {
     }
     return true;
 }
-
-size_t powerOfTwoAtLeast(size_t n) {
-    size_t p = 1;
-    while (p < n) p <<= 1;
-    return p;
-}
-
-int tailOf(Disperser& d) { return d.processor().tailSamples(); }
 
 struct Setting {
     int stages;
@@ -201,7 +91,7 @@ Disperser deviceFor(const Setting& s) {
 // Its impulse response, `length` long (at least twice its tail by default).
 Samples impulseResponse(const Setting& s, size_t length = 0) {
     Disperser d = deviceFor(s);
-    if (length == 0) length = powerOfTwoAtLeast(2 * static_cast<size_t>(tailOf(d)) + 1024);
+    if (length == 0) length = powerOfTwoAtLeast(2 * static_cast<size_t>(d.processor().tailSamples()) + 1024);
     return d.play(impulse(length));
 }
 
@@ -582,20 +472,20 @@ TEST_CASE("its tail covers its ringing") {
                              Setting{8, 50.f, 0.5f, 192000.0}}) {
         INFO(describe(s));
         Disperser d = deviceFor(s);
-        const auto tail = static_cast<size_t>(tailOf(d));
+        const auto tail = static_cast<size_t>(d.processor().tailSamples());
         const Samples h = d.play(impulse(powerOfTwoAtLeast(4 * tail + 4096)));
         CHECK(energy(slice(h, static_cast<int64_t>(tail))) < 1e-6 * energy(h));  // 60 dB down
         CHECK(tail < h.size() / 2);
     }
     Disperser none(kSampleRate, {{"amount", 0.f}}), bypassed(kSampleRate, {{"bypass", 1.f}});
-    CHECK_EQ(tailOf(none), 0);
-    CHECK_EQ(tailOf(bypassed), 0);
+    CHECK_EQ(none.processor().tailSamples(), 0);
+    CHECK_EQ(bypassed.processor().tailSamples(), 0);
     Disperser dry(kSampleRate, {{"mix", 0.f}});
-    CHECK_EQ(tailOf(dry), 0);
+    CHECK_EQ(dry.processor().tailSamples(), 0);
     // At most a minute, however long its delay.
     Disperser longest(kSampleRate, {{"amount", 64.f}, {"freq", 20.f}, {"pinch", 10.f}});
-    CHECK(tailOf(longest) > 20 * kSampleRate);
-    CHECK(tailOf(longest) <= 60 * kSampleRate);
+    CHECK(longest.processor().tailSamples() > 20 * kSampleRate);
+    CHECK(longest.processor().tailSamples() <= 60 * kSampleRate);
 }
 
 TEST_CASE("the engine keeps its dispersion: nothing is delayed to line up with it") {

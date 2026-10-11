@@ -1,0 +1,1777 @@
+// Built-in "Reverb" device, after Ableton Live's Reverb: an algorithmic reverb
+// with an input filter, early reflections and a diffusion network. Mono in,
+// stereo out, as Live's is: the input's two sides are summed before the
+// reverb, and Stereo sets how wide the reverb comes out. The design (its
+// constants, and the maths its editor shares) is in builtin/ReverbDesign.h.
+//
+//   mono = (L + R) / 2 -> input filter (a Butterworth high-pass and low-pass a
+//   band apart, each switch cross-faded) -> the input line, read by
+//     - 12 early-reflection taps from the predelay on (Shape's envelope, signs,
+//       pans; Spin drifts them later in time and swings their pans), times Reflect;
+//     - the network's input, Shape's onset later (drifting with the first
+//       tap): Schroeder all-passes (Diffusion their gain, Scale their length)
+//       into a feedback delay network of 4, 8 or 16 lines (Density). Each line
+//       is read through a first-order Thiran all-pass (lossless, so the decay
+//       per band is exactly the design's), through two one-pole shelves set per
+//       line so each band rings for its share of Decay (or a low-pass), times
+//       the loop's gain; High adds an all-pass in each loop. A Walsh-Hadamard
+//       transform, rotated by one line, mixes them back in; two orthogonal
+//       Hadamard rows of the lines' reads are the left and right of the tail,
+//       times Diffuse.
+//   -> Stereo (mid/side) -> Dry/Wet.
+//
+// A sub-chunk (32 samples) is worked in three passes: the front (the input
+// filter, the input line, the reflections, the network's input), the network,
+// and the output (the levels, Stereo, Dry/Wet, the meters).
+//
+// - Smoothing: what moves a delay (Predelay, Shape's onset, Size, Scale) and the
+//   levels applied to the audio (Reflect, Diffuse, Stereo, Dry/Wet, the input
+//   filter's switches) glide a sample at a time, through two one-poles in a row,
+//   so they have no corners. Everything else glides every 32 samples (a
+//   sub-chunk) and what it sets (a coefficient, a gain, Chorus's and Spin's
+//   drift) is ramped linearly across the sub-chunk. Each glide lands on its
+//   target exactly once within a hair of it, so a settled control is exactly its
+//   target and nothing is worked out again. Size glides at Smooth's pace (None:
+//   2 ms, a fast pitch sweep but never a step); a change of Smooth glides the
+//   pace itself, so a sweep under way speeds up or slows down without a corner.
+// - When a moving delay's whole number of samples changes, its Thiran all-pass's
+//   state is worked out again for the new split from the last few samples, so a
+//   gliding or chorused line leaves no transient.
+// - Freeze glides the tail's decay to practically none (with Cut the input no
+//   longer reaches it; without, a minute's, so a held input settles at a level);
+//   Flat glides the shelves flat while frozen. A guard eases the loops' gain
+//   down while the tail's output peaks above +18 dBFS (a frozen uncut tail fed
+//   loudly), and back once it doesn't: ordinary material never gets near it.
+// - A change of Density crossfades from the network as it is to the new one
+//   over 20 ms, both running: the lines, all-passes and diffusers that join
+//   start from silence and hear their input ease in, those that leave are faded
+//   out, and the lines that stay are written a crossfade of what each network
+//   writes, never faded through silence, so a frozen tail keeps what they hold.
+// - Silence: once the input has been below -160 dB for longer than the input
+//   line reaches and the tail has died below -120 dB (not frozen), it sleeps:
+//   the wet is exactly 0 and the network is skipped until sound comes back
+//   (the glides and the LFOs go on; what they set is snapped there on waking).
+//   Its buffers are let go: they read as silence from then on, so a reverb that
+//   wakes reaching further back (Predelay, Size or Shape raised meanwhile) hears
+//   silence, not what it held when it fell asleep. No buffer is cleared whole
+//   at once (LineBank): each sub-chunk clears only what its reads will reach,
+//   and asleep a slice of the rest goes each sub-chunk. A reset, and what joins
+//   on a change of Density, are let go the same way.
+// - On one channel, that channel is the input and the wet's mid the output.
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <numbers>
+#include <string>
+#include <vector>
+
+#include "builtin/BuiltinProcessor.h"
+#include "builtin/BuiltinRegistry.h"
+#include "builtin/Dsp.h"
+#include "builtin/DspBlocks.h"
+#include "builtin/ReverbDesign.h"
+#include "rt/RtUtils.h"
+
+namespace sub {
+namespace {
+
+using reverb::kControl;
+using reverb::kMaxDiffusers;
+using reverb::kMaxLines;
+using reverb::kMaxTaps;
+using reverb::kMeterFloorDb;
+using reverb::kMeterSamples;
+
+constexpr double kPi = std::numbers::pi;
+constexpr float kButterworthK = 1.41421356f;  // the input filter's damping (Q 0.707)
+constexpr double kSwitchSeconds = 0.02;       // Density: the crossfade from one network to the other
+constexpr double kGuardLevel = 8.0;           // +18 dBFS: the tail's output peak the guard holds it under
+constexpr double kMaxPredelayMs = 250.0;
+constexpr float kAwakeLevel = 1e-8f;          // -160 dB: an input this loud wakes it
+constexpr float kSleepLevel = 1e-6f;          // -120 dB: a tail this quiet lets it sleep
+constexpr double kLandedSamples = 1e-5;       // a delay's glide lands within this of its target
+constexpr int kSettleSamples = 4;             // a Thiran's state is worked out again over this many
+constexpr size_t kClearSlice = 16384;         // asleep: floats of what was let go cleared a sub-chunk
+constexpr float kTailGain = static_cast<float>(reverb::kDiffuseGain * reverb::kOutputScale);
+
+// The sub-chunk glides' time constants (each of the two one-poles), and the
+// per-sample ones'.
+enum Tau { TauFast = 0, TauSlow, TauCount };
+constexpr std::array<double, TauCount> kTaus = {0.02, 0.03};
+constexpr double kDelaySeconds = 0.025;  // Predelay and the onset
+constexpr double kScaleSeconds = 0.05;
+constexpr double kLevelSeconds = 0.005;  // Reflect, Diffuse, Stereo, Dry/Wet, the input filter's switches
+constexpr std::array<double, 3> kSizeSeconds = {0.002, 0.35, 0.05};  // Smooth: None, Slow, Fast
+
+// A 4-point (Hermite) read of a line `delay` samples (1 to `most`) before its
+// latest write, `next` being where the next goes: as dsp::DelayLine::hermite().
+inline float hermiteRead(const float* line, size_t next, size_t mask, float most, float delay) noexcept {
+    delay = std::clamp(delay, 1.f, most);
+    const int whole = static_cast<int>(delay);
+    const float t = delay - static_cast<float>(whole);
+    const size_t at = next - 1 - static_cast<size_t>(whole);  // `whole` samples before the latest
+    return dsp::hermite(line[(at + 1) & mask], line[at & mask], line[(at - 1) & mask], line[(at - 2) & mask], t);
+}
+
+// A Walsh-Hadamard matrix's entry (+-1), at a row and a column.
+inline float hadamardSign(int row, int column) noexcept {
+    return (std::popcount(static_cast<unsigned>(row & column)) & 1) ? -1.f : 1.f;
+}
+
+// A glide (dsp::Glide: two one-poles in a row) moved on a sub-chunk at a time, by
+// `c` (the share of the way a one-pole goes in the sub-chunk): true if it moved.
+// Once within `landed` of its target it is exactly that, so a settled control is
+// its target (nothing is worked out again, and none is exactly none).
+inline bool moved(dsp::Glide& glide, double target, double c, double landed) noexcept {
+    if (glide.settled(target)) return false;
+    glide.next(target, c, landed);
+    return true;
+}
+
+// The same moved a sample at a time (a delay, or a level on the audio: no
+// corners at all), its target, pace and landing kept with it. It lands only at a
+// sub-chunk's end (land()), so within a sub-chunk every sample glides or none does.
+struct Smooth : dsp::Glide {
+    double target = 0.0, c = 1.0, landed = 0.0;
+
+    void snap(double to) noexcept {
+        Glide::snap(to);
+        target = to;
+    }
+    bool settled() const noexcept { return Glide::settled(target); }
+    double next() noexcept { return Glide::next(target, c, 0.0); }  // (0: it never lands here)
+    void land() noexcept {
+        if (std::abs(target - first) < landed && std::abs(target - value) < landed) Glide::snap(target);
+    }
+};
+
+// Something worked out from a parameter's value (a log, a gain), again only
+// when the value changes: no transcendental every sub-chunk for nothing.
+struct Cached {
+    float raw = std::numeric_limits<float>::quiet_NaN();
+    double value = 0.0;
+
+    template <typename F>
+    double of(float v, F&& f) noexcept {
+        if (!(v == raw)) {
+            raw = v;
+            value = f(v);
+        }
+        return value;
+    }
+};
+
+// A value ramped linearly across a sub-chunk: next() gives each sample's, the
+// last sample's being exactly where it was sent (each sub-chunk starts again
+// from that exact value, so rounding never builds up).
+struct Ramp {
+    float value = 0.f, step = 0.f;
+    double end = 0.0;
+
+    void to(double target, int n) noexcept {
+        value = static_cast<float>(end);
+        step = static_cast<float>((target - end) / n);
+        end = target;
+    }
+    void snap(double target) noexcept {
+        value = static_cast<float>(target);
+        step = 0.f;
+        end = target;
+    }
+    void set(double target, int n, bool snapping) noexcept { snapping ? snap(target) : to(target, n); }
+    void scale(double factor) noexcept {
+        value = static_cast<float>(value * factor);
+        step = static_cast<float>(step * factor);
+        end *= factor;
+    }
+    bool still() const noexcept { return step == 0.f && end == 0.0; }
+    float next() noexcept { return value += step; }
+};
+
+// Delay lines of one power-of-two length side by side, written in step (one
+// write position for all). Each starts a cache line further than a whole number
+// of lines' lengths, so their writes (all at one position) don't share a cache set.
+//
+// A line let go (on falling asleep, on reset, on joining the network) reads as
+// silence from then on, yet is never cleared whole at once: each sub-chunk,
+// ensure() clears what is stale where its reads are about to reach (as much as
+// they move, a sub-chunk ahead), and while asleep clearSome() clears a slice at a
+// time. Positions are counted from prepare() on (unwrapped), so what of a line is
+// clean is everything from `clean` on (cleared, or written since it was let go)
+// and a window [lo, hi) below it, cleared ahead of its reads.
+class LineBank {
+public:
+    void prepare(int lines, double maxDelaySamples) {
+        size_t size = 4;
+        while (size < static_cast<size_t>(std::ceil(maxDelaySamples)) + kSettleSamples + 12) size <<= 1;
+        stride_ = size + 16;
+        mask_ = size - 1;
+        count_ = std::min(lines, kMaxLines);
+        buffer_.assign(stride_ * static_cast<size_t>(count_), 0.f);
+        write_ = synced_ = 0;
+        written_ = 0;
+        stale_.fill(Stale{});
+        staleCount_ = 0;
+    }
+    float* line(int q) noexcept { return buffer_.data() + static_cast<size_t>(q) * stride_; }
+    size_t stride() const noexcept { return stride_; }
+    size_t mask() const noexcept { return mask_; }
+    size_t write() const noexcept { return write_; }
+    void advance() noexcept { write_ = (write_ + 1) & mask_; }
+    bool empty() const noexcept { return buffer_.empty(); }
+
+    // Brings the count of writes up to date: at least once every `mask() + 1` of them (each sub-chunk).
+    void sync() noexcept {
+        written_ += static_cast<int64_t>((write_ - synced_) & mask_);
+        synced_ = write_;
+    }
+    // Line q is let go: what it holds reads as silence from now on.
+    void letGo(int q) noexcept {
+        sync();
+        Stale& stale = stale_[static_cast<size_t>(q)];
+        if (!stale.on) ++staleCount_;
+        stale = Stale{true, written_, 0, 0};
+    }
+    bool anyStale() const noexcept { return staleCount_ > 0; }
+
+    // Before a sub-chunk of `n` samples whose reads of line q are at delays from `least` to `most` samples
+    // (and a few either side: kReadReach): clears what is stale where they reach.
+    void ensure(int q, double least, double most, int n) noexcept {
+        Stale& stale = stale_[static_cast<size_t>(q)];
+        if (!stale.on) return;
+        sync();
+        const int64_t oldest = written_ - static_cast<int64_t>(mask_ + 1);  // (older is no longer in the ring)
+        const int64_t from = std::max(oldest, written_ - static_cast<int64_t>(std::ceil(most)) - kReadReach);
+        const int64_t to = std::min(stale.clean, written_ + n - static_cast<int64_t>(std::floor(least)) + kReadReach);
+        if (from < to) {
+            if (stale.lo == stale.hi) {
+                clear(q, from, to);
+                stale.lo = from;
+                stale.hi = to;
+            } else {  // (the reads move on smoothly: what they reach now joins the window, or a gap the move left)
+                if (from < stale.lo) clear(q, from, stale.lo);
+                if (to > stale.hi) clear(q, stale.hi, to);
+                stale.lo = std::min(stale.lo, from);
+                stale.hi = std::max(stale.hi, to);
+            }
+            if (stale.hi >= stale.clean) {  // the window reaches the clean part: one now
+                stale.clean = stale.lo;
+                stale.lo = stale.hi = 0;
+            }
+        }
+        if (stale.clean <= oldest) forget(stale);
+    }
+
+    // Asleep (nothing is written): clears up to `count` more floats of what is stale, the newest first; returns
+    // how many of `count` are left.
+    size_t clearSome(size_t count) noexcept {
+        if (staleCount_ == 0) return count;
+        sync();
+        const int64_t oldest = written_ - static_cast<int64_t>(mask_ + 1);
+        for (int q = 0; q < count_ && count > 0; ++q) {
+            Stale& stale = stale_[static_cast<size_t>(q)];
+            while (stale.on && count > 0) {
+                if (stale.lo != stale.hi && stale.hi >= stale.clean) {  // down to the window: on below it
+                    stale.clean = std::min(stale.clean, stale.lo);
+                    stale.lo = stale.hi = 0;
+                }
+                if (stale.clean <= oldest) {
+                    forget(stale);
+                    break;
+                }
+                const int64_t bottom = stale.lo != stale.hi ? std::max(oldest, stale.hi) : oldest;
+                const int64_t from = std::max(bottom, stale.clean - static_cast<int64_t>(count));
+                clear(q, from, stale.clean);
+                count -= static_cast<size_t>(stale.clean - from);
+                stale.clean = from;
+            }
+        }
+        return count;
+    }
+
+private:
+    // A line let go: everything from `clean` on reads as silence, and [lo, hi) (empty if lo == hi).
+    struct Stale {
+        bool on = false;
+        int64_t clean = 0, lo = 0, hi = 0;
+    };
+    // How far past its delay a read reaches: a Thiran's re-settling (kSettleSamples + 3), Hermite's neighbours.
+    static constexpr int64_t kReadReach = kSettleSamples + 4;
+
+    void forget(Stale& stale) noexcept {
+        stale.on = false;
+        --staleCount_;
+    }
+    // Clears positions [from, to) of line q, of those the ring holds now (any other shares a place with one).
+    void clear(int q, int64_t from, int64_t to) noexcept {
+        from = std::max(from, written_ - static_cast<int64_t>(mask_ + 1));
+        to = std::min(to, written_);
+        if (from >= to) return;
+        float* const base = line(q);
+        const size_t start = static_cast<size_t>(from) & mask_;
+        const auto count = static_cast<size_t>(to - from);
+        const size_t first = std::min(count, mask_ + 1 - start);
+        std::fill_n(base + start, first, 0.f);
+        std::fill_n(base, count - first, 0.f);
+    }
+
+    std::vector<float> buffer_;
+    size_t stride_ = 0, mask_ = 0, write_ = 0, synced_ = 0;
+    int count_ = 0;  // lines
+    int64_t written_ = 0;  // the next write's position, counted from prepare() on (brought up to date by sync())
+    std::array<Stale, kMaxLines> stale_{};
+    int staleCount_ = 0;
+};
+
+// First-order Thiran (all-pass) interpolation of a delay D (at least 2 samples)
+// read before the coming write: M whole samples, then an all-pass of
+// d = D - M (0.5..1.5), a = (1 - d) / (1 + d). Lossless (|H| = 1), so a loop's
+// decay per band is its design's whatever the fraction; linear or Hermite reads
+// would dull the highs a little on every pass.
+//
+// A moving delay: the all-pass's state (its last output) was worked out for
+// the delay a sample ago, so as the delay moves by `step` a sample, the state is
+// moved with it (by step times the input's slope there), leaving an error of the
+// step's square rather than of the step: a sweep (Size gliding, Chorus) reads
+// about 20 times cleaner. And when the whole part changes, the state belongs to
+// the old split: it is worked out again for the new one, running the new
+// all-pass over the last few samples from an estimate (whose error falls by
+// |a| <= 1/3 a sample), so the change leaves no transient.
+struct Thiran {
+    int whole = 1;
+    float a = 0.f;
+    float last = 0.f;  // the delay a sample ago
+    float step = 0.f;  // how far it moved since (0: the state is for this delay)
+
+    // To a delay (at least 2 samples) that moves: each sample, or each sub-chunk where it holds still.
+    void follow(float delay, const float* line, size_t w, size_t mask, float& state) noexcept {
+        const int m = static_cast<int>(delay - 0.5f);  // (a floor)
+        const float d = delay - static_cast<float>(m);
+        a = (1.f - d) / (1.f + d);
+        step = delay - last;
+        last = delay;
+        if (m == whole) return;
+        whole = m;
+        step = 0.f;
+        const auto x = [&](size_t back) { return line[(w - back) & mask]; };  // the input `back` samples ago
+        const auto mm = static_cast<size_t>(m);
+        // Its output kSettleSamples + 1 samples ago, read between samples; then on to the last.
+        size_t back = kSettleSamples + 1 + mm;
+        float t = d;
+        if (t >= 1.f) {
+            ++back;
+            t -= 1.f;
+        }
+        float y = x(back) + t * (x(back + 1) - x(back));
+        for (size_t k = kSettleSamples; k >= 1; --k) y = a * (x(k + mm) - y) + x(k + mm + 1);
+        state = y;
+    }
+    // y = a x[n - M] + x[n - M - 1] - a y[n - 1], from `line` before the write at `w`.
+    float read(const float* line, size_t w, size_t mask, float& state) const noexcept {
+        const auto m = static_cast<size_t>(whole);
+        state = a * (line[(w - m) & mask] - state) + line[(w - m - 1) & mask];
+        return state;
+    }
+    // The same while the delay moves: y[n - 1] moved to this sample's delay first.
+    float readMoving(const float* line, size_t w, size_t mask, float& state) const noexcept {
+        const auto m = static_cast<size_t>(whole);
+        const float x0 = line[(w - m) & mask], x1 = line[(w - m - 1) & mask];
+        state = a * (x0 - (state + step * (x1 - x0))) + x1;
+        return state;
+    }
+};
+
+class ReverbProcessor final : public BuiltinProcessor {
+public:
+    enum Param {
+        Predelay = 0, LoCut, HiCut, InFreq, InWidth, SpinOn, SpinRate, SpinAmount, Shape, DensityParam, Smoothing,
+        Size, Stereo, LoShelf, LoFreq, LoGain, HiFilter, HiType, HiFreq, HiGain, Decay, Freeze, Flat, Cut, Diffusion,
+        Scale, ChorusOn, ChorusRate, ChorusAmount, Reflect, Diffuse, Mix, NumParams
+    };
+    enum Display { InputLevel = 0, EarlyLevel, DiffuseLevel, SpinPhase, ChorusPhase, Signal, Tail };
+
+    ReverbProcessor()
+        : BuiltinProcessor(infos(), {{"input", kMeterSamples},
+                                     {"early", kMeterSamples},
+                                     {"diffuse", kMeterSamples},
+                                     {"spin", kMeterSamples},
+                                     {"chorus", kMeterSamples},
+                                     {"signal", 1},
+                                     {"tail", 1}}) {}
+
+    std::string typeId() const override { return "builtin:reverb"; }
+    std::string name() const override { return "Reverb"; }
+
+    // Until the tail is 60 dB down: the predelay, onset (and Spin's drift of it)
+    // and diffusers, a pass of the longest loop, and 1.15 times Decay; frozen (or
+    // at most) a minute. On the main thread: from the parameters only.
+    int tailSamples() const override {
+        const double fs = sampleRate_;
+        if (isOn(Freeze)) return static_cast<int>(60.0 * fs);
+        const double s = reverb::sizeFactor(param(Size)), c = reverb::scaleFactor(param(Scale));
+        const reverb::Density d = reverb::densityAt(choiceIndex(DensityParam));
+        double samples = (param(Predelay) + reverb::onsetMs(s, param(Shape)) + 2.0 * reverb::kSpinDepthMs +
+                          reverb::kChorusDepthMs) *
+                         fs / 1000.0;
+        for (int j = 0; j < reverb::layout(d).diffusers; ++j) samples += reverb::diffuserSamples(j, s, c, fs);
+        double longest = 0.0;
+        for (const int q : reverb::activeLines(d)) longest = std::max(longest, reverb::loopSamples(q, d, s, c, fs));
+        samples += longest + (1.15 * param(Decay) / 1000.0 + 0.1) * fs;
+        return static_cast<int>(std::min(samples, 60.0 * fs));
+    }
+
+    void prepare(double sampleRate, int) override {
+        sampleRate_ = sampleRate;
+        const double fs = sampleRate;
+        const double s = reverb::sizeFactor(reverb::kMaxSize), c = reverb::scaleFactor(100.0);
+        // The input line: the predelay, then the last tap at the largest Size with Spin's drift.
+        const double inputMs = kMaxPredelayMs + (reverb::kTapMs[kMaxTaps - 1] + 2.0 * reverb::kSpinDepthMs) * s;
+        input_.prepare(1, std::ceil(inputMs * fs / 1000.0) + 8.0);
+        lines_.prepare(kMaxLines, (reverb::kLineMs[kMaxLines - 1] * s + reverb::kChorusDepthMs) * fs / 1000.0 + 2.0);
+        allpasses_.prepare(kMaxLines, reverb::loopAllpassSamples(kMaxLines - 1, s, c, fs) + 2.0);
+        double longestDiffuser = 0.0;
+        for (int j = 0; j < kMaxDiffusers; ++j)
+            longestDiffuser = std::max(longestDiffuser, reverb::diffuserSamples(j, s, c, fs));
+        diffusers_.prepare(kMaxDiffusers, longestDiffuser + 2.0);
+        for (int q = 0; q < kMaxLines; ++q) {
+            LineState& line = line_[static_cast<size_t>(q)];
+            line.length = reverb::kLineMs[static_cast<size_t>(q)] * fs / 1000.0;
+            line.allpassLength = reverb::kLoopAllpassShare * line.length;
+        }
+        for (int j = 0; j < kMaxDiffusers; ++j)
+            diffuser_[static_cast<size_t>(j)].length = reverb::kDiffuserMs[static_cast<size_t>(j)] * fs / 1000.0;
+        for (int k = 0; k < kMaxTaps; ++k) {
+            TapState& tap = tap_[static_cast<size_t>(k)];
+            tap.time = reverb::kTapMs[static_cast<size_t>(k)] * fs / 1000.0;
+            tap.angle = reverb::tapAngle(k);
+            tap.swing = reverb::tapSwing(k);
+            tap.restLeft = std::cos(tap.angle);
+            tap.restRight = std::sin(tap.angle);
+        }
+        for (int t = 0; t < TauCount; ++t)
+            glide32_[static_cast<size_t>(t)] = 1.0 - onePoleCoefficient(kTaus[static_cast<size_t>(t)], fs, kControl);
+        switchLength_ = std::max(1, static_cast<int>(std::lround(kSwitchSeconds * fs)));
+
+        // The per-sample glides: how fast, and how near their target they land.
+        const auto perSample = [&](Smooth& g, double seconds, double landed) {
+            g.c = 1.0 - onePoleCoefficient(seconds, fs);
+            g.landed = landed;
+        };
+        perSample(predelay_, kDelaySeconds, kLandedSamples);
+        perSample(onset_, kDelaySeconds, kLandedSamples);
+        perSample(size_, kSizeSeconds[1], kLandedSamples / line_[kMaxLines - 1].length);
+        perSample(scale_, kScaleSeconds, kLandedSamples / (diffuser_[2].length * s));
+        for (Smooth* level : {&reflect_, &diffuse_, &stereo_, &mix_, &loCutMix_, &hiCutMix_})
+            perSample(*level, kLevelSeconds, 1e-7);
+        // Size's pace at each Smooth, at this rate (and its log: the pace glides in log).
+        for (size_t k = 0; k < kSizeSeconds.size(); ++k) {
+            sizePace_[k] = 1.0 - onePoleCoefficient(kSizeSeconds[k], fs);
+            sizePaceLog_[k] = std::log(sizePace_[k]);
+        }
+        reset();
+    }
+
+    // Silent, every glide and fade where the parameters are, the LFOs at their
+    // start: renders after a reset are the same every time. (The buffers are let
+    // go, not cleared at once: they read as silence all the same.)
+    void reset() override {
+        if (lines_.empty()) return;
+        for (int q = 0; q < kMaxLines; ++q) {
+            LineState& line = line_[static_cast<size_t>(q)];
+            line.mod = line.gain = line.kHi = line.kLo = Ramp{};
+            line.read = line.allpassRead = Thiran{};
+            line.y = line.allpassY = 0.f;
+            line.hi = line.lo = reverb::OnePoleTpt{};
+            line.chorusPhase = static_cast<double>(q) / kMaxLines;
+            line.chorusRatio = 1.0 + 0.23 * (static_cast<double>((7 * q) % kMaxLines) / (kMaxLines - 1) - 0.5);
+        }
+        for (DiffuserState& diffuser : diffuser_) {
+            diffuser.gain = Ramp{};
+            diffuser.read = Thiran{};
+            diffuser.y = 0.f;
+        }
+        for (TapState& tap : tap_) {
+            tap.gain = dsp::Glide{};
+            tap.drift = tap.left = tap.right = Ramp{};
+        }
+        netDrift_ = Ramp{};
+        hp_.reset();
+        lp_.reset();
+        spinPhase_ = spinStart_ = 0.0;
+        gamma_ = 1.0;
+        gammaMoved_ = false;
+        loopsRamping_ = false;
+        switch_ = Switch{};
+        layoutDensity_ = std::clamp(choiceIndex(DensityParam), 0, 3);
+        layout_ = reverb::layout(reverb::densityAt(layoutDensity_));
+        runLayout();
+        letGoBuffers();
+        fresh_.fill(false);
+        freshDiffuser_.fill(false);
+        layoutSwitched_ = false;
+        snapGlides();
+        snapping_ = true;
+        setRamps(kControl, true);
+        snapping_ = false;
+        sleeping_ = false;
+        silent_ = 0;
+        meterCount_ = 0;
+        meterInput_ = meterEarly_ = 0.f;
+        meterDiffuse_ = 0.0;
+        netPeak_ = earlyPeak_ = 0.f;
+    }
+
+protected:
+    void render(const ProcessContext&, float* const* ch, int numChannels, int numFrames) override {
+        const int channels = std::min(numChannels, 2);
+        if (channels <= 0 || lines_.empty()) return;
+        for (int at = 0; at < numFrames;) {
+            const int n = std::min(kControl, numFrames - at);
+            for (LineBank* bank : {&input_, &lines_, &allpasses_, &diffusers_}) bank->sync();
+            // How long the input has been silent; any sound wakes it before it is processed.
+            int lastLoud = -1;
+            for (int i = 0; i < n; ++i) {
+                const float x = channels == 2 ? 0.5f * (ch[0][at + i] + ch[1][at + i]) : ch[0][at + i];
+                if (std::abs(x) > kAwakeLevel) lastLoud = i;
+            }
+            const bool waking = sleeping_ && lastLoud >= 0;
+            if (lastLoud >= 0) {
+                silent_ = n - 1 - lastLoud;
+                sleeping_ = false;
+            } else {
+                silent_ = std::min<int64_t>(silent_ + n, int64_t{1} << 40);
+            }
+            const bool loopsMoved = moveGlides(n);
+            if (!sleeping_) {
+                snapping_ = waking;  // (nothing was ramped while it slept)
+                setRamps(n, loopsMoved);
+                snapping_ = false;
+            }
+            if (sleeping_) {
+                renderAsleep(ch, channels, at, n);
+            } else {
+                front(ch, channels, at, n);
+                if (switch_.active) {
+                    networkSwitching(n);
+                } else {
+                    switch (layout_.lines) {
+                    case 4: network<4, false>(n); break;
+                    case 8: network<8, false>(n); break;
+                    default:
+                        if (layout_.loopAllpass) {
+                            network<16, true>(n);
+                        } else {
+                            network<16, false>(n);
+                        }
+                        break;
+                    }
+                }
+                output(ch, channels, at, n);
+                afterChunk();
+            }
+            for (Smooth* g : {&predelay_, &onset_, &size_, &scale_, &reflect_, &diffuse_, &stereo_, &mix_, &loCutMix_,
+                              &hiCutMix_})
+                g->land();
+            at += n;
+        }
+    }
+
+private:
+    // A line of the network: its read, its loop's filters and gain, High's all-pass, its chorus.
+    struct LineState {
+        double length = 0.0;          // its delay at size factor 1 (samples)
+        double allpassLength = 0.0;   // High: its loop all-pass's at size and scale factors 1
+        Ramp mod;                     // Chorus's drift (samples)
+        Thiran read;                  // the read's split
+        float y = 0.f;                // the Thiran's state
+        reverb::OnePoleTpt hi, lo;    // the shelves' one-poles
+        Ramp gain, kHi, kLo;          // the loop's gain (times the guard and 1 / sqrt(N)); the shelves' far ends
+        Thiran allpassRead;           // High: the loop's all-pass
+        float allpassY = 0.f;
+        double chorusPhase = 0.0, chorusRatio = 1.0;
+    };
+    struct DiffuserState {
+        double length = 0.0;  // its delay at size and scale factors 1 (samples)
+        Ramp gain;
+        Thiran read;
+        float y = 0.f;
+    };
+    struct TapState {
+        double time = 0.0;           // its time after the predelay at size factor 1 (samples)
+        double angle = 0.0, swing = 0.0, restLeft = 0.0, restRight = 0.0;  // its pan (reverb::tapAngle(), tapSwing())
+        dsp::Glide gain;             // its gain, gliding to Shape's and Density's
+        double target = 0.0;         // the gain it glides to (Shape's envelope; 0 for a tap the Density doesn't use)
+        Ramp drift, left, right;     // Spin's drift of its time; its gain into each side
+    };
+    // A change of Density under way: the network it comes from (layout_ is where it goes), how far it has
+    // come, and, for each line, its place in either network and how alike their two writes into it are.
+    struct Switch {
+        bool active = false;
+        reverb::Layout from = reverb::layout(reverb::Density::High);
+        int at = 0;  // samples into the crossfade
+        std::array<int, kMaxLines> slotFrom{}, slotTo{};  // the line's index in each network (-1: not in it)
+        std::array<float, kMaxLines> alike{};             // the two writes' correlation (see startSwitch())
+        float alikeL = 0.f, alikeR = 0.f;                 // the same for the two networks' outputs
+    };
+    // What a sub-chunk's front hands on, a sample at a time: the input, the size factor and size times
+    // scale (the delays as they glide), the network's input read from the input line, the reflections;
+    // and what the network hands the output.
+    struct Chunk {
+        std::array<float, kControl> x{}, u{}, earlyL{}, earlyR{}, tailL{}, tailR{};
+        std::array<double, kControl> s{}, sc{};
+    };
+
+    double coefficient(Tau tau, int n) const noexcept {
+        return n == kControl ? glide32_[tau] : 1.0 - onePoleCoefficient(kTaus[tau], sampleRate_, n);
+    }
+
+    // --- The glides' targets (from the parameters) -----------------------------------------
+
+    double targetSize() const noexcept { return reverb::sizeFactor(param(Size)); }
+    double targetScale() const noexcept { return reverb::scaleFactor(param(Scale)); }
+    double targetPredelay() const noexcept {
+        return std::clamp<double>(param(Predelay), 0.5, kMaxPredelayMs) * sampleRate_ / 1000.0;
+    }
+    double targetOnset(double s) const noexcept { return reverb::onsetMs(s, param(Shape)) * sampleRate_ / 1000.0; }
+    static double onOff(bool on) noexcept { return on ? 1.0 : 0.0; }
+    double logOf(Cached& cache, int index, float least) const noexcept {
+        return cache.of(std::max(least, param(index)), [](float v) { return std::log(static_cast<double>(v)); });
+    }
+    double logInFreq() noexcept { return logOf(logInFreq_, InFreq, 1.f); }
+    double logDecay() noexcept { return logOf(logDecay_, Decay, 1.f); }
+    double logLoFreq() noexcept { return logOf(logLoFreq_, LoFreq, 1.f); }
+    double logHiFreq() noexcept { return logOf(logHiFreq_, HiFreq, 1.f); }
+    double logSpinRate() noexcept { return logOf(logSpinRate_, SpinRate, 0.01f); }
+    double logChorusRate() noexcept { return logOf(logChorusRate_, ChorusRate, 0.001f); }
+    double gainOf(Cached& cache, int index) const noexcept {
+        return cache.of(param(index), [](float db) { return static_cast<double>(dbToGain(db)); });
+    }
+    double targetSpin() const noexcept {
+        return isOn(SpinOn) ? std::clamp(param(SpinAmount), 0.f, 100.f) / 100.0 : 0.0;
+    }
+    double targetChorus() const noexcept {
+        return isOn(ChorusOn) ? std::clamp(param(ChorusAmount), 0.f, 100.f) / 100.0 : 0.0;
+    }
+    size_t smoothIndex() const noexcept { return static_cast<size_t>(std::clamp(choiceIndex(Smoothing), 0, 2)); }
+    // Sets the per-sample glides' targets.
+    void aimSmooths() noexcept {
+        predelay_.target = targetPredelay();
+        size_.target = targetSize();
+        onset_.target = targetOnset(size_.value);
+        scale_.target = targetScale();
+        reflect_.target = gainOf(reflectGain_, Reflect);
+        diffuse_.target = gainOf(diffuseGain_, Diffuse);
+        stereo_.target = reverb::stereoWidth(param(Stereo));
+        mix_.target = param(Mix) / 100.0;
+        loCutMix_.target = onOff(isOn(LoCut));
+        hiCutMix_.target = onOff(isOn(HiCut));
+    }
+    // Size's pace (its per-sample coefficient) glides in log to Smooth's, a sub-chunk at a time, and is
+    // ramped a sample at a time across it (a factor each sample): a change of Smooth mid-glide then eases
+    // the sweep's speed up or down, where a jump of the coefficient would turn every delay's read a corner.
+    void movePace(int n, double c) noexcept {
+        const size_t smooth = smoothIndex();
+        const double from = pace_.value;
+        if (moved(pace_, sizePaceLog_[smooth], c, 1e-6)) {
+            size_.c = std::exp(from);
+            sizeRatio_ = std::exp((pace_.value - from) / n);
+        } else {
+            size_.c = sizePace_[smooth];
+            sizeRatio_ = 1.0;
+        }
+    }
+
+    void snapGlides() noexcept {
+        aimSmooths();
+        for (Smooth* g : {&predelay_, &size_, &scale_, &reflect_, &diffuse_, &stereo_, &mix_, &loCutMix_, &hiCutMix_})
+            g->snap(g->target);
+        onset_.snap(targetOnset(size_.value));
+        pace_.snap(sizePaceLog_[smoothIndex()]);
+        size_.c = sizePace_[smoothIndex()];
+        sizeRatio_ = 1.0;
+        inFreq_.snap(logInFreq());
+        inWidth_.snap(param(InWidth));
+        decay_.snap(logDecay());
+        loFreq_.snap(logLoFreq());
+        hiFreq_.snap(logHiFreq());
+        loShare_.snap(param(LoGain) / 100.0);
+        hiShare_.snap(param(HiGain) / 100.0);
+        loOn_.snap(onOff(isOn(LoShelf)));
+        hiOn_.snap(onOff(isOn(HiFilter)));
+        lowpass_.snap(onOff(choiceIndex(HiType) == 1));
+        freeze_.snap(onOff(isOn(Freeze)));
+        flat_.snap(onOff(isOn(Flat)));
+        cut_.snap(onOff(isOn(Cut)));
+        diffusion_.snap(param(Diffusion) / 100.0);
+        spinAmount_.snap(targetSpin());
+        chorusAmount_.snap(targetChorus());
+        spinRateLog_.snap(logSpinRate());
+        chorusRateLog_.snap(logChorusRate());
+        updateShown();
+        tapShape_ = -1.f;
+        updateTapTargets();
+        for (TapState& tap : tap_) tap.gain.snap(tap.target);
+    }
+
+    void updateTapTargets() noexcept {
+        const float shape = param(Shape);
+        const int density = std::clamp(choiceIndex(DensityParam), 0, 3);
+        if (shape == tapShape_ && density == tapDensity_) return;
+        tapShape_ = shape;
+        tapDensity_ = density;
+        std::array<reverb::Tap, kMaxTaps> taps;
+        reverb::earlyTaps(1.0, shape, reverb::densityAt(density), taps);
+        for (size_t k = 0; k < kMaxTaps; ++k) tap_[k].target = taps[k].gain;
+    }
+
+    // Whether the `spin` and `chorus` displays show a phase: while switched on, or still fading out (asleep
+    // too, where the LFOs go on).
+    void updateShown() noexcept {
+        spinShown_ = isOn(SpinOn) || spinAmount_.value != 0.0;
+        chorusShown_ = isOn(ChorusOn) || chorusAmount_.value != 0.0;
+    }
+
+    // Moves every sub-chunk glide on by `n` samples (and aims the per-sample
+    // ones), the Density switch and the LFOs too; true if anything the loops are
+    // worked out from moved.
+    bool moveGlides(int n) noexcept {
+        const double fs = sampleRate_;
+        const double fast = coefficient(TauFast, n), slow = coefficient(TauSlow, n);
+
+        // Density: a change crossfades to the new network (asleep, nothing sounds: it switches at once). A
+        // change while one is under way waits for it to end.
+        const int density = std::clamp(choiceIndex(DensityParam), 0, 3);
+        if (switch_.active && switch_.at >= switchLength_) finishSwitch();
+        if (!switch_.active && density != layoutDensity_) {
+            if (sleeping_) {
+                switchAtOnce(density);
+            } else {
+                startSwitch(density);
+            }
+        }
+
+        aimSmooths();
+        movePace(n, fast);
+        delaysMoving_ = !size_.settled() || !scale_.settled();
+        filterMoved_ = moved(inFreq_, logInFreq(), fast, 1e-6) | moved(inWidth_, param(InWidth), fast, 1e-6);
+        bool loops = layoutSwitched_ | switch_.active | !size_.settled() | (layout_.loopAllpass && !scale_.settled()) |
+                     gammaMoved_;
+        loops |= moved(decay_, logDecay(), slow, 1e-6);
+        loops |= moved(loFreq_, logLoFreq(), fast, 1e-6);
+        loops |= moved(hiFreq_, logHiFreq(), fast, 1e-6);
+        loops |= moved(loShare_, param(LoGain) / 100.0, fast, 1e-6);
+        loops |= moved(hiShare_, param(HiGain) / 100.0, fast, 1e-6);
+        loops |= moved(loOn_, onOff(isOn(LoShelf)), fast, 1e-6);
+        loops |= moved(hiOn_, onOff(isOn(HiFilter)), fast, 1e-6);
+        loops |= moved(lowpass_, onOff(choiceIndex(HiType) == 1), fast, 1e-6);
+        loops |= moved(freeze_, onOff(isOn(Freeze)), slow, 1e-6);
+        loops |= moved(flat_, onOff(isOn(Flat)), fast, 1e-6);
+        loops |= moved(cut_, onOff(isOn(Cut)), fast, 1e-6);
+        gammaMoved_ = false;
+        moved(diffusion_, param(Diffusion) / 100.0, slow, 1e-6);
+        moved(spinAmount_, targetSpin(), fast, 1e-5);
+        moved(chorusAmount_, targetChorus(), fast, 1e-5);
+        updateShown();
+        updateTapTargets();
+        for (TapState& tap : tap_) moved(tap.gain, tap.target, fast, 1e-7);
+
+        // The LFOs: their phases at the sub-chunk's start (for the displays) and end.
+        // Their rates glide (in log) too: a jump of rate would step the drift's speed.
+        moved(spinRateLog_, logSpinRate(), slow, 1e-6);
+        moved(chorusRateLog_, logChorusRate(), slow, 1e-6);
+        spinStart_ = spinPhase_;
+        spinRate_ = std::exp(spinRateLog_.value);
+        spinPhase_ += spinRate_ * n / fs;
+        spinPhase_ -= std::floor(spinPhase_);
+        chorusRate_ = std::exp(chorusRateLog_.value);
+        chorusStart_ = line_[static_cast<size_t>(layout_.firstLine)].chorusPhase;
+        for (LineState& line : line_) {
+            line.chorusPhase += chorusRate_ * line.chorusRatio * n / fs;
+            line.chorusPhase -= std::floor(line.chorusPhase);
+        }
+        return loops;
+    }
+
+    // Works out what the sub-chunk glides set at the sub-chunk's end and ramps
+    // each value there across it (or snaps it there: on reset, on waking, and for
+    // what a Density change brings in).
+    void setRamps(int n, bool loopsMoved) noexcept {
+        const double fs = sampleRate_;
+        const double s = size_.value, c = scale_.value;
+        // While two networks run, the loops' gains leave out 1 / sqrt(N): each network applies its own. And
+        // a loop all-pass's length counts in a loop (High's) as much as it is crossfaded in by the sub-chunk's
+        // end, so the loops' gains move to the new network's over the crossfade, not in a step.
+        const double norm = switch_.active ? 1.0 : 1.0 / std::sqrt(static_cast<double>(layout_.lines));
+        double allpassShare = layout_.loopAllpass ? 1.0 : 0.0;
+        if (switch_.active) {
+            const double t = dsp::sCurve(std::min(1.0, static_cast<double>(switch_.at + n) / switchLength_));
+            allpassShare = (switch_.from.loopAllpass ? 1.0 - t : 0.0) + (layout_.loopAllpass ? t : 0.0);
+        }
+        const double z = freeze_.value;
+
+        // The loops: their gains and the shelves', while anything they come from moves.
+        if (loopsMoved || loopsRamping_ || snapping_) {
+            const reverb::Rates rates = reverb::rates(std::exp(decay_.value) / 1000.0, loShare_.value, hiShare_.value,
+                                                      z, flat_.value, cut_.value);
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                LineState& line = line_[static_cast<size_t>(q)];
+                const bool snap = snapping_ || fresh_[static_cast<size_t>(q)];
+                if (loopsMoved || snap) {
+                    const double loopSamples =
+                        reverb::lineSamples(q, s, fs) + allpassShare * reverb::loopAllpassSamples(q, s, c, fs);
+                    const reverb::Loop l = reverb::loop(rates, loopSamples, fs, loOn_.value, hiOn_.value,
+                                                        lowpass_.value, z, flat_.value);
+                    line.gain.set(l.g * gamma_ * norm, n, snap);
+                    line.kHi.set(l.kHi, n, snap);
+                    line.kLo.set(l.kLo, n, snap);
+                } else {
+                    line.gain.to(line.gain.end, n);
+                    line.kHi.to(line.kHi.end, n);
+                    line.kLo.to(line.kLo.end, n);
+                }
+            }
+            if (loopsMoved || snapping_) {
+                gHi_.set(reverb::tptG(std::exp(hiFreq_.value), fs), n, snapping_);
+                gLo_.set(reverb::tptG(std::exp(loFreq_.value), fs), n, snapping_);
+            } else {
+                gHi_.to(gHi_.end, n);
+                gLo_.to(gLo_.end, n);
+            }
+            loopsRamping_ = loopsMoved;
+        }
+
+        // Chorus's drift of each line (a quarter of the line at most); the
+        // lines' reads where nothing moves them.
+        const double chorus = chorusAmount_.value * reverb::kChorusDepthMs * fs / 1000.0;
+        linesMoving_ = delaysMoving_;
+        for (int r = 0; r < runningCount_; ++r) {
+            const int q = running_[static_cast<size_t>(r)];
+            LineState& line = line_[static_cast<size_t>(q)];
+            double drift = 0.0;
+            if (chorus > 0.0)
+                drift = std::min(chorus, 0.25 * line.length * s) * std::sin(2.0 * kPi * line.chorusPhase);
+            line.mod.set(drift, n, snapping_ || fresh_[static_cast<size_t>(q)]);
+            linesMoving_ = linesMoving_ || !line.mod.still();
+        }
+        clearAhead(n);  // (before any read, the Thirans' below included)
+        if (!linesMoving_) {
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                LineState& line = line_[static_cast<size_t>(q)];
+                line.read.follow(lineDelay(line, s), lines_.line(q), lines_.write(), lines_.mask(), line.y);
+            }
+        }
+        if (!delaysMoving_ || snapping_ || layoutSwitched_) {
+            for (int q = 0; q < kMaxLines; ++q) {
+                LineState& line = line_[static_cast<size_t>(q)];
+                line.allpassRead.follow(allpassDelay(line, s * c), allpasses_.line(q), allpasses_.write(),
+                                        allpasses_.mask(), line.allpassY);
+            }
+            for (int j = 0; j < kMaxDiffusers; ++j) {
+                DiffuserState& diffuser = diffuser_[static_cast<size_t>(j)];
+                diffuser.read.follow(diffuserDelay(diffuser, s * c), diffusers_.line(j), diffusers_.write(),
+                                     diffusers_.mask(), diffuser.y);
+            }
+        }
+
+        // The input diffusers' and High's loop all-passes' gains (reverb::diffusionGain()).
+        const double d = reverb::diffusionGain(diffusion_.value);
+        for (int j = 0; j < diffusersRunning(); ++j) {
+            DiffuserState& diffuser = diffuser_[static_cast<size_t>(j)];
+            diffuser.gain.set(reverb::kDiffuserGain[static_cast<size_t>(j)] * d, n,
+                              snapping_ || freshDiffuser_[static_cast<size_t>(j)]);
+        }
+        allpassGain_.set(reverb::kLoopAllpassGain * d, n, snapping_);
+
+        // How much of the input goes into the network (none frozen with Cut).
+        inject_.set((1.0 - z * cut_.value) * norm, n, snapping_);
+        layoutSwitched_ = false;
+        fresh_.fill(false);
+        freshDiffuser_.fill(false);
+
+        // The input filter: its corners' g, per sample while they glide.
+        if (filterMoved_ || filterMoving_ || snapping_) {
+            const double freq = std::exp(inFreq_.value), width = inWidth_.value;
+            hpG_.set(std::tan(kPi * reverb::loCutHz(freq, width, fs) / fs), n, snapping_);
+            lpG_.set(std::tan(kPi * reverb::hiCutHz(freq, width, fs) / fs), n, snapping_);
+            filterMoving_ = hpG_.step != 0.f || lpG_.step != 0.f;
+            if (!filterMoving_) {
+                hpCoefficients_ = dsp::SvfCoefficients(hpG_.value, kButterworthK);
+                lpCoefficients_ = dsp::SvfCoefficients(lpG_.value, kButterworthK);
+            }
+        }
+
+        // The early reflections: each tap's gains into each side and Spin's
+        // drift of its time (later only, each tap at its own phase) and swing of
+        // its pan (in the angle of an equal-power pan: reverb::spinPan()). The
+        // network hears the input where the first tap is, drifting with it.
+        const double spin = spinAmount_.value;
+        const double depth = spin * reverb::kSpinDepthMs * std::min(1.0, s) * fs / 1000.0;
+        const double spinAngle = 2.0 * kPi * spinPhase_;
+        const double spinSin = std::sin(spinAngle), spinCos = std::cos(spinAngle);
+        taps_ = 0;
+        for (int k = 0; k < kMaxTaps; ++k) {
+            TapState& tap = tap_[static_cast<size_t>(k)];
+            const double gain = tap.gain.value;
+            double left = tap.restLeft, right = tap.restRight, drift = 0.0;
+            if (spin > 0.0) {
+                // sin and cos of 2 pi (phase + k / 12), turned on from the phase's.
+                const double cosStep = kTapCos[static_cast<size_t>(k)], sinStep = kTapSin[static_cast<size_t>(k)];
+                const double sinK = spinSin * cosStep + spinCos * sinStep;
+                const double cosK = spinCos * cosStep - spinSin * sinStep;
+                drift = depth * (1.0 + sinK);
+                const double angle = tap.angle + spin * tap.swing * cosK;
+                left = std::cos(angle);
+                right = std::sin(angle);
+            }
+            tap.drift.set(drift, n, snapping_);
+            const bool silent = gain == 0.0 && tap.left.end == 0.0 && tap.right.end == 0.0;
+            tap.left.set(gain * left, n, snapping_);
+            tap.right.set(gain * right, n, snapping_);
+            if (!silent) tapList_[static_cast<size_t>(taps_++)] = k;
+        }
+        netDrift_.set(spin > 0.0 ? depth * (1.0 + spinSin) : 0.0, n, snapping_);
+    }
+
+    // The delays (samples) at size factor `s` (and scale factor `c`), as the
+    // per-sample reads work them out.
+    static float lineDelay(const LineState& line, double s) noexcept { return static_cast<float>(line.length * s); }
+    static float allpassDelay(const LineState& line, double sc) noexcept {
+        return std::max(2.f, static_cast<float>(line.allpassLength * sc));
+    }
+    static float diffuserDelay(const DiffuserState& diffuser, double sc) noexcept {
+        return std::max(2.f, static_cast<float>(diffuser.length * sc));
+    }
+
+    // --- Density -----------------------------------------------------------------------------
+
+    static int lineOf(const reverb::Layout& layout, int k) noexcept { return layout.firstLine + layout.lineStride * k; }
+    int diffusersRunning() const noexcept {
+        return switch_.active ? std::max(switch_.from.diffusers, layout_.diffusers) : layout_.diffusers;
+    }
+    // The lines the network runs: the layout's.
+    void runLayout() noexcept {
+        runningCount_ = layout_.lines;
+        for (int k = 0; k < layout_.lines; ++k) running_[static_cast<size_t>(k)] = lineOf(layout_, k);
+    }
+    // What joins the network starts from silence: its states at once, its buffer let go (LineBank).
+    void joinLine(int q) noexcept {
+        LineState& line = line_[static_cast<size_t>(q)];
+        lines_.letGo(q);
+        line.y = 0.f;
+        line.hi.s = line.lo.s = 0.f;
+        fresh_[static_cast<size_t>(q)] = true;
+    }
+    void joinAllpass(int q) noexcept {
+        allpasses_.letGo(q);
+        line_[static_cast<size_t>(q)].allpassY = 0.f;
+    }
+    void joinDiffuser(int j) noexcept {
+        diffusers_.letGo(j);
+        diffuser_[static_cast<size_t>(j)].y = 0.f;
+        freshDiffuser_[static_cast<size_t>(j)] = true;
+    }
+    // Whether running line q's loop all-pass runs: High's, and while a change of Density crossfades, either
+    // network's.
+    bool allpassRuns(int q) const noexcept {
+        if (!switch_.active) return layout_.loopAllpass;
+        const auto i = static_cast<size_t>(q);
+        return (switch_.from.loopAllpass && switch_.slotFrom[i] >= 0) ||
+               (layout_.loopAllpass && switch_.slotTo[i] >= 0);
+    }
+    // Scales the ramps that carry a network's 1 / sqrt(N): the running lines' gains and the input's share.
+    void scaleGains(double factor) noexcept {
+        for (int r = 0; r < runningCount_; ++r)
+            line_[static_cast<size_t>(running_[static_cast<size_t>(r)])].gain.scale(factor);
+        inject_.scale(factor);
+    }
+
+    // Starts the crossfade to a Density's network: the lines, all-passes and diffusers that join start from
+    // silence, and both networks run, the lines of either (running_), until it ends.
+    void startSwitch(int density) noexcept {
+        const reverb::Layout from = layout_, to = reverb::layout(reverb::densityAt(density));
+        Switch& sw = switch_;
+        sw = Switch{};
+        sw.active = true;
+        sw.from = from;
+        sw.slotFrom.fill(-1);
+        sw.slotTo.fill(-1);
+        for (int k = 0; k < from.lines; ++k) sw.slotFrom[static_cast<size_t>(lineOf(from, k))] = k;
+        for (int k = 0; k < to.lines; ++k) sw.slotTo[static_cast<size_t>(lineOf(to, k))] = k;
+        scaleGains(std::sqrt(static_cast<double>(from.lines)));  // (each network applies its own 1 / sqrt(N))
+        runningCount_ = 0;
+        for (int q = 0; q < kMaxLines; ++q) {
+            const size_t i = static_cast<size_t>(q);
+            const bool inFrom = sw.slotFrom[i] >= 0, inTo = sw.slotTo[i] >= 0;
+            if (!inFrom && !inTo) continue;
+            running_[static_cast<size_t>(runningCount_++)] = q;
+            if (inTo && !inFrom) joinLine(q);
+            if (to.loopAllpass && inTo && !(from.loopAllpass && inFrom)) joinAllpass(q);
+        }
+        for (int j = from.diffusers; j < to.diffusers; ++j) joinDiffuser(j);
+
+        // How alike the two networks' writes into a line that stays are, so their crossfade keeps its level:
+        // each write is a row of its network's (normalized) matrix times the lines' outputs. Taken as
+        // uncorrelated from line to line, two rows' writes correlate as their dot product; through a loop
+        // all-pass a line's output correlates with what went in as -g (its gain: the straight-through part).
+        // Crossfaded as cos and sin, the write's power is then 1 + 2 cos sin alike: divided out per sample.
+        const float through = from.loopAllpass != to.loopAllpass ? -allpassGain_.value : 1.f;
+        const float scale = static_cast<float>(1.0 / std::sqrt(static_cast<double>(from.lines * to.lines)));
+        for (int r = 0; r < runningCount_; ++r) {
+            const int q = running_[static_cast<size_t>(r)];
+            const int kf = sw.slotFrom[static_cast<size_t>(q)], kt = sw.slotTo[static_cast<size_t>(q)];
+            if (kf < 0 || kt < 0) continue;
+            const int rowFrom = (kf + 1) & (from.lines - 1), rowTo = (kt + 1) & (to.lines - 1);
+            float dot = 0.f;
+            for (int other = 0; other < kMaxLines; ++other) {
+                const int of = sw.slotFrom[static_cast<size_t>(other)], ot = sw.slotTo[static_cast<size_t>(other)];
+                if (of >= 0 && ot >= 0) dot += hadamardSign(rowFrom, of) * hadamardSign(rowTo, ot);
+            }
+            sw.alike[static_cast<size_t>(q)] = through * dot * scale;
+        }
+        // And the two networks' outputs (rows 1 and 2 of each, over the lines in both).
+        for (int q = 0; q < kMaxLines; ++q) {
+            const int kf = sw.slotFrom[static_cast<size_t>(q)], kt = sw.slotTo[static_cast<size_t>(q)];
+            if (kf < 0 || kt < 0) continue;
+            sw.alikeL += hadamardSign(1, kf) * hadamardSign(1, kt) * scale;
+            sw.alikeR += hadamardSign(2, kf) * hadamardSign(2, kt) * scale;
+        }
+        layout_ = to;
+        layoutDensity_ = density;
+        layoutSwitched_ = true;
+    }
+    // The crossfade done: the new network alone.
+    void finishSwitch() noexcept {
+        switch_.active = false;
+        runLayout();
+        scaleGains(1.0 / std::sqrt(static_cast<double>(layout_.lines)));
+        layoutSwitched_ = true;
+    }
+    // Asleep (nothing sounds): to a Density's network at once.
+    void switchAtOnce(int density) noexcept {
+        const reverb::Layout from = layout_, to = reverb::layout(reverb::densityAt(density));
+        const auto in = [](const reverb::Layout& l, int q) {
+            return q >= l.firstLine && (q - l.firstLine) % l.lineStride == 0;
+        };
+        for (int k = 0; k < to.lines; ++k) {
+            const int q = lineOf(to, k);
+            if (!in(from, q)) joinLine(q);
+            if (to.loopAllpass && (!from.loopAllpass || !in(from, q))) joinAllpass(q);
+        }
+        for (int j = from.diffusers; j < to.diffusers; ++j) joinDiffuser(j);
+        layout_ = to;
+        layoutDensity_ = density;
+        runLayout();
+        layoutSwitched_ = true;
+    }
+
+    // --- The passes over a sub-chunk ---------------------------------------------------------
+
+    // The front: the input summed to mono, filtered and pushed into the input
+    // line; the reflections read from it; the network's input read from it.
+    void front(float* const* ch, int channels, int at, int n) noexcept {
+        Chunk& c = chunk_;
+        const bool loActive = !loCutMix_.settled() || loCutMix_.target > 0.0;
+        const bool hiActive = !hiCutMix_.settled() || hiCutMix_.target > 0.0;
+        const bool filterMoving = filterMoving_;
+        if (!loActive) hp_.reset();
+        if (!hiActive) lp_.reset();
+
+        // The sub-chunk works on copies of the states, written back at its end:
+        // the compiler then knows the buffers' writes can't touch them and keeps
+        // them in registers.
+        const int tapCount = taps_;
+        std::array<TapState, kMaxTaps> taps;
+        for (int t = 0; t < tapCount; ++t)
+            taps[static_cast<size_t>(t)] = tap_[static_cast<size_t>(tapList_[static_cast<size_t>(t)])];
+        Smooth size = size_, scale = scale_, predelay = predelay_, onset = onset_;
+        Smooth reflect = reflect_, loCut = loCutMix_, hiCut = hiCutMix_;
+        const double sizeRatio = sizeRatio_;
+        const bool delaysGliding = !size.settled() || !scale.settled() || !predelay.settled() || !onset.settled();
+        const bool levelsGliding = !reflect.settled() || !loCut.settled() || !hiCut.settled();
+        Ramp hpG = hpG_, lpG = lpG_, netDrift = netDrift_;
+        dsp::Svf hp = hp_, lp = lp_;
+        dsp::SvfCoefficients hpCoefficients = hpCoefficients_, lpCoefficients = lpCoefficients_;
+        float earlyPeak = 0.f;
+        float* const inputLine = input_.line(0);
+        const size_t inputMask = input_.mask();
+        const auto inputMost = static_cast<float>(inputMask + 1 - 3);
+
+        for (int i = 0; i < n; ++i) {
+            const size_t ii = static_cast<size_t>(i);
+            const float x = channels == 2 ? 0.5f * (ch[0][at + i] + ch[1][at + i]) : ch[0][at + i];
+            c.x[ii] = x;
+            publish(Signal, x);
+            double s = size.value, sc = s * scale.value, before = predelay.value, later = onset.value;
+            if (delaysGliding) {
+                if (sizeRatio != 1.0) size.c *= sizeRatio;
+                s = size.next();
+                sc = s * scale.next();
+                before = predelay.next();
+                later = onset.next();
+            }
+            c.s[ii] = s;
+            c.sc[ii] = sc;
+            float reflectGain = static_cast<float>(reflect.value);
+            float loMix = static_cast<float>(loCut.value), hiMix = static_cast<float>(hiCut.value);
+            if (levelsGliding) {
+                reflectGain = static_cast<float>(reflect.next());
+                loMix = static_cast<float>(loCut.next());
+                hiMix = static_cast<float>(hiCut.next());
+            }
+
+            // The input filter: each section cross-faded with its switch.
+            float filtered = x;
+            if (filterMoving) {
+                hpCoefficients = dsp::SvfCoefficients(hpG.next(), kButterworthK);
+                lpCoefficients = dsp::SvfCoefficients(lpG.next(), kButterworthK);
+            }
+            if (loActive) {
+                const dsp::Svf::Outputs o = hp.tick(hpCoefficients, filtered);
+                const float high = filtered - kButterworthK * o.band - o.low;
+                filtered += loMix * (high - filtered);
+            }
+            if (hiActive) {
+                const float low = lp.tick(lpCoefficients, filtered).low;
+                filtered += hiMix * (low - filtered);
+            }
+            inputLine[input_.write()] = filtered;
+            input_.advance();
+            const size_t next = input_.write();
+
+            // Early reflections.
+            float earlyL = 0.f, earlyR = 0.f;
+            for (int t = 0; t < tapCount; ++t) {
+                TapState& tap = taps[static_cast<size_t>(t)];
+                const float delay = static_cast<float>(before + tap.time * s) + tap.drift.next();
+                const float v = hermiteRead(inputLine, next, inputMask, inputMost, delay);
+                earlyL += v * tap.left.next();
+                earlyR += v * tap.right.next();
+            }
+            earlyL *= reflectGain;
+            earlyR *= reflectGain;
+            earlyPeak = std::max(earlyPeak, std::max(std::abs(earlyL), std::abs(earlyR)));
+            c.earlyL[ii] = earlyL;
+            c.earlyR[ii] = earlyR;
+
+            // The network's input: Shape's onset after the predelay (drifting with the first reflection).
+            c.u[ii] = hermiteRead(inputLine, next, inputMask, inputMost,
+                                  static_cast<float>(before + later) + netDrift.next());
+        }
+
+        for (int t = 0; t < tapCount; ++t)
+            tap_[static_cast<size_t>(tapList_[static_cast<size_t>(t)])] = taps[static_cast<size_t>(t)];
+        size_ = size;
+        scale_ = scale;
+        predelay_ = predelay;
+        onset_ = onset;
+        reflect_ = reflect;
+        loCutMix_ = loCut;
+        hiCutMix_ = hiCut;
+        hpG_ = hpG;
+        lpG_ = lpG;
+        netDrift_ = netDrift;
+        hp_ = hp;
+        lp_ = lp;
+        hpCoefficients_ = hpCoefficients;
+        lpCoefficients_ = lpCoefficients;
+        earlyPeak_ = earlyPeak;
+    }
+
+    // The network on one Density's lines: from the front's input to the tail's two outputs.
+    template <int N, bool LoopAllpass>
+    void network(int n) noexcept {
+        constexpr int kFirst = N == 4 ? 2 : (N == 8 ? 1 : 0);
+        constexpr int kStride = kMaxLines / N;
+        constexpr int kDiffusers = N == 4 ? 2 : (N == 8 ? 3 : 4);
+        Chunk& c = chunk_;
+        const size_t lineMask = lines_.mask(), apMask = allpasses_.mask(), diffMask = diffusers_.mask();
+        float* const lineBase = lines_.line(0);
+        float* const apBase = allpasses_.line(0);
+        float* const diffBase = diffusers_.line(0);
+        const size_t lineStride = lines_.stride(), apStride = allpasses_.stride(), diffStride = diffusers_.stride();
+        const bool linesMoving = linesMoving_, delaysMoving = delaysMoving_;
+
+        std::array<LineState, N> lines;
+        for (int k = 0; k < N; ++k) lines[static_cast<size_t>(k)] = line_[static_cast<size_t>(kFirst + kStride * k)];
+        std::array<DiffuserState, kDiffusers> diffusers;
+        for (int j = 0; j < kDiffusers; ++j) diffusers[static_cast<size_t>(j)] = diffuser_[static_cast<size_t>(j)];
+        Ramp gHiRamp = gHi_, gLoRamp = gLo_, apGain = allpassGain_, inject = inject_;
+
+        for (int i = 0; i < n; ++i) {
+            const size_t ii = static_cast<size_t>(i);
+            const double s = c.s[ii], sc = c.sc[ii];
+
+            // The network's input, through the diffusers.
+            float u = c.u[ii];
+            const size_t wd = diffusers_.write();
+            for (int j = 0; j < kDiffusers; ++j) {
+                DiffuserState& diffuser = diffusers[static_cast<size_t>(j)];
+                float* const line = diffBase + static_cast<size_t>(j) * diffStride;
+                float zj;
+                if (delaysMoving) {
+                    diffuser.read.follow(diffuserDelay(diffuser, sc), line, wd, diffMask, diffuser.y);
+                    zj = diffuser.read.readMoving(line, wd, diffMask, diffuser.y);
+                } else {
+                    zj = diffuser.read.read(line, wd, diffMask, diffuser.y);
+                }
+                const float g = diffuser.gain.next();
+                const float w = u + g * zj;
+                line[wd] = w;
+                u = zj - g * w;
+            }
+            diffusers_.advance();
+            u *= inject.next();
+
+            // The lines: read, filtered, scaled, (High: all-passed), mixed, written back.
+            const size_t w = lines_.write(), wa = allpasses_.write();
+            const float gHi = gHiRamp.next(), gLo = gLoRamp.next();
+            const float gAp = LoopAllpass ? apGain.next() : 0.f;
+            float v[N];
+            float tailL = 0.f, tailR = 0.f;
+            for (int k = 0; k < N; ++k) {
+                const int q = kFirst + kStride * k;
+                LineState& line = lines[static_cast<size_t>(k)];
+                const float* const read = lineBase + static_cast<size_t>(q) * lineStride;
+                float r;
+                if (linesMoving) {
+                    line.read.follow(lineDelay(line, s) + line.mod.next(), read, w, lineMask, line.y);
+                    r = line.read.readMoving(read, w, lineMask, line.y);
+                } else {
+                    r = line.read.read(read, w, lineMask, line.y);
+                }
+                tailL += (k & 1) ? -r : r;  // Hadamard row 1
+                tailR += (k & 2) ? -r : r;  // and row 2: uncorrelated sums of the same lines
+                const float h = line.hi.lowpass(r, gHi);
+                float y = h + line.kHi.next() * (r - h);
+                const float l = line.lo.lowpass(y, gLo);
+                y += (line.kLo.next() - 1.f) * l;
+                y *= line.gain.next();
+                if constexpr (LoopAllpass) {
+                    float* const ap = apBase + static_cast<size_t>(q) * apStride;
+                    float za;
+                    if (delaysMoving) {
+                        line.allpassRead.follow(allpassDelay(line, sc), ap, wa, apMask, line.allpassY);
+                        za = line.allpassRead.readMoving(ap, wa, apMask, line.allpassY);
+                    } else {
+                        za = line.allpassRead.read(ap, wa, apMask, line.allpassY);
+                    }
+                    const float wv = y + gAp * za;
+                    ap[wa] = wv;
+                    y = za - gAp * wv;
+                }
+                v[k] = y;
+            }
+            hadamard<N>(v);
+            for (int k = 0; k < N; ++k) {
+                const int q = kFirst + kStride * k;
+                lineBase[static_cast<size_t>(q) * lineStride + w] =
+                    v[(k + 1) & (N - 1)] + static_cast<float>(reverb::kInputSign[static_cast<size_t>(k)]) * u;
+            }
+            lines_.advance();
+            if constexpr (LoopAllpass) allpasses_.advance();
+            c.tailL[ii] = kTailGain * tailL;
+            c.tailR[ii] = kTailGain * tailR;
+        }
+
+        for (int k = 0; k < N; ++k) line_[static_cast<size_t>(kFirst + kStride * k)] = lines[static_cast<size_t>(k)];
+        for (int j = 0; j < kDiffusers; ++j) diffuser_[static_cast<size_t>(j)] = diffusers[static_cast<size_t>(j)];
+        gHi_ = gHiRamp;
+        gLo_ = gLoRamp;
+        allpassGain_ = apGain;
+        inject_ = inject;
+    }
+
+    // The network while a Density change crossfades: the lines of both layouts read and filtered once, each
+    // network's mix of them (and its own diffusers, all-passes and outputs) worked out, and every line
+    // written the crossfade of what the two write into it (cos and sin of a quarter turn, kept at its
+    // power). A line that joins is written the new network's alone, faded in; one that leaves, the old
+    // one's, faded out; an all-pass or diffuser that joins hears its input ease in.
+    void networkSwitching(int n) noexcept {
+        Chunk& c = chunk_;
+        Switch& sw = switch_;
+        const reverb::Layout& from = sw.from;
+        const reverb::Layout& to = layout_;
+        const int nf = from.lines, nt = to.lines;
+        const float invFrom = static_cast<float>(1.0 / std::sqrt(static_cast<double>(nf)));
+        const float invTo = static_cast<float>(1.0 / std::sqrt(static_cast<double>(nt)));
+        const int diffusersRun = diffusersRunning();
+        const bool anyAllpass = from.loopAllpass || to.loopAllpass;
+        // (A loop all-pass holds what its network fed it, at that network's 1 / sqrt(N): it is fed and read
+        // at that scale here too, the lines' outputs being unnormalized while both networks run.)
+        const float apScale = from.loopAllpass ? invFrom : invTo;
+        const size_t lineMask = lines_.mask(), apMask = allpasses_.mask(), diffMask = diffusers_.mask();
+        float* const lineBase = lines_.line(0);
+        float* const apBase = allpasses_.line(0);
+        float* const diffBase = diffusers_.line(0);
+        const size_t lineStride = lines_.stride(), apStride = allpasses_.stride(), diffStride = diffusers_.stride();
+        const bool linesMoving = linesMoving_, delaysMoving = delaysMoving_;
+        const double step = 1.0 / switchLength_;
+        Ramp gHiRamp = gHi_, gLoRamp = gLo_, apGain = allpassGain_, inject = inject_;
+
+        for (int i = 0; i < n; ++i) {
+            const size_t ii = static_cast<size_t>(i);
+            const double s = c.s[ii], sc = c.sc[ii];
+            const double along = std::min(1.0, (sw.at + i + 1) * step), t = dsp::sCurve(along);
+            const float in = static_cast<float>(t), out = 1.f - in;  // (linear: what the two share)
+            // What joins (a diffuser, a loop all-pass) hears its input ease in over the crossfade's first
+            // quarter: smoothly, and soon enough that its memory is mostly full by the time it is heard.
+            const auto joining = static_cast<float>(dsp::sCurve(std::min(1.0, 4.0 * along)));
+            const auto co = static_cast<float>(std::cos(0.5 * kPi * t));
+            const auto si = static_cast<float>(std::sin(0.5 * kPi * t));
+            const float cosSin = 2.f * co * si;
+
+            // The diffusers in a row, as many as either network has: each network's input after its own.
+            float u = c.u[ii], uFrom = u, uTo = u;
+            const size_t wd = diffusers_.write();
+            for (int j = 0; j < diffusersRun; ++j) {
+                DiffuserState& diffuser = diffuser_[static_cast<size_t>(j)];
+                float* const line = diffBase + static_cast<size_t>(j) * diffStride;
+                float zj;
+                if (delaysMoving) {
+                    diffuser.read.follow(diffuserDelay(diffuser, sc), line, wd, diffMask, diffuser.y);
+                    zj = diffuser.read.readMoving(line, wd, diffMask, diffuser.y);
+                } else {
+                    zj = diffuser.read.read(line, wd, diffMask, diffuser.y);
+                }
+                const float g = diffuser.gain.next();
+                const float w = (j == from.diffusers ? joining * u : u) + g * zj;  // (the first that joins)
+                line[wd] = w;
+                u = zj - g * w;
+                if (j + 1 == from.diffusers) uFrom = u;
+                if (j + 1 == to.diffusers) uTo = u;
+            }
+            diffusers_.advance();
+            const float share = inject.next();
+            uFrom *= share * invFrom;
+            uTo *= share * invTo;
+
+            // The lines of either network: read, filtered, scaled once; each network's mix of them.
+            const size_t w = lines_.write(), wa = allpasses_.write();
+            const float gHi = gHiRamp.next(), gLo = gLoRamp.next();
+            const float gAp = anyAllpass ? apGain.next() : 0.f;
+            float vFrom[kMaxLines], vTo[kMaxLines];
+            float fromL = 0.f, fromR = 0.f, toL = 0.f, toR = 0.f;
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                const int kf = sw.slotFrom[static_cast<size_t>(q)], kt = sw.slotTo[static_cast<size_t>(q)];
+                LineState& line = line_[static_cast<size_t>(q)];
+                const float* const read = lineBase + static_cast<size_t>(q) * lineStride;
+                float x;
+                if (linesMoving) {
+                    line.read.follow(lineDelay(line, s) + line.mod.next(), read, w, lineMask, line.y);
+                    x = line.read.readMoving(read, w, lineMask, line.y);
+                } else {
+                    x = line.read.read(read, w, lineMask, line.y);
+                }
+                if (kf >= 0) {
+                    fromL += (kf & 1) ? -x : x;
+                    fromR += (kf & 2) ? -x : x;
+                }
+                if (kt >= 0) {
+                    toL += (kt & 1) ? -x : x;
+                    toR += (kt & 2) ? -x : x;
+                }
+                const float h = line.hi.lowpass(x, gHi);
+                float y = h + line.kHi.next() * (x - h);
+                const float l = line.lo.lowpass(y, gLo);
+                y += (line.kLo.next() - 1.f) * l;
+                y *= line.gain.next();
+                float yFrom = y, yTo = y;
+                const bool apFrom = from.loopAllpass && kf >= 0, apTo = to.loopAllpass && kt >= 0;
+                if (apFrom || apTo) {
+                    float* const ap = apBase + static_cast<size_t>(q) * apStride;
+                    float za;
+                    if (delaysMoving) {
+                        line.allpassRead.follow(allpassDelay(line, sc), ap, wa, apMask, line.allpassY);
+                        za = line.allpassRead.readMoving(ap, wa, apMask, line.allpassY);
+                    } else {
+                        za = line.allpassRead.read(ap, wa, apMask, line.allpassY);
+                    }
+                    const float wv = (apFrom ? y : joining * y) * apScale + gAp * za;
+                    ap[wa] = wv;
+                    const float a = (za - gAp * wv) / apScale;
+                    if (apFrom) yFrom = a;
+                    if (apTo) yTo = a;
+                }
+                if (kf >= 0) vFrom[kf] = yFrom;
+                if (kt >= 0) vTo[kt] = yTo;
+            }
+            hadamard(vFrom, nf);
+            hadamard(vTo, nt);
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                const int kf = sw.slotFrom[static_cast<size_t>(q)], kt = sw.slotTo[static_cast<size_t>(q)];
+                float written;
+                if (kf >= 0 && kt >= 0) {
+                    const float a = vFrom[(kf + 1) & (nf - 1)] * invFrom, b = vTo[(kt + 1) & (nt - 1)] * invTo;
+                    const float power = std::max(0.1f, 1.f + cosSin * sw.alike[static_cast<size_t>(q)]);
+                    written = (co * a + si * b) / std::sqrt(power) +
+                              out * static_cast<float>(reverb::kInputSign[static_cast<size_t>(kf)]) * uFrom +
+                              in * static_cast<float>(reverb::kInputSign[static_cast<size_t>(kt)]) * uTo;
+                } else if (kf >= 0) {
+                    written = co * vFrom[(kf + 1) & (nf - 1)] * invFrom +
+                              out * static_cast<float>(reverb::kInputSign[static_cast<size_t>(kf)]) * uFrom;
+                } else {
+                    written = si * vTo[(kt + 1) & (nt - 1)] * invTo +
+                              in * static_cast<float>(reverb::kInputSign[static_cast<size_t>(kt)]) * uTo;
+                }
+                lineBase[static_cast<size_t>(q) * lineStride + w] = written;
+            }
+            lines_.advance();
+            if (anyAllpass) allpasses_.advance();
+            c.tailL[ii] = kTailGain * (co * fromL + si * toL) / std::sqrt(std::max(0.1f, 1.f + cosSin * sw.alikeL));
+            c.tailR[ii] = kTailGain * (co * fromR + si * toR) / std::sqrt(std::max(0.1f, 1.f + cosSin * sw.alikeR));
+        }
+
+        gHi_ = gHiRamp;
+        gLo_ = gLoRamp;
+        allpassGain_ = apGain;
+        inject_ = inject;
+        sw.at += n;
+    }
+
+    // The output: Diffuse on the tail, Stereo, Dry/Wet; the meters and the tail's display.
+    void output(float* const* ch, int channels, int at, int n) noexcept {
+        const Chunk& c = chunk_;
+        Smooth diffuse = diffuse_, stereo = stereo_, mix = mix_;
+        const bool levelsGliding = !diffuse.settled() || !stereo.settled() || !mix.settled();
+        float meterInput = meterInput_, meterEarly = meterEarly_;
+        double meterDiffuse = meterDiffuse_;
+        float netPeak = 0.f;
+        for (int i = 0; i < n; ++i) {
+            const size_t ii = static_cast<size_t>(i);
+            const float dryL = ch[0][at + i];
+            const float dryR = channels == 2 ? ch[1][at + i] : dryL;
+            float diffuseGain = static_cast<float>(diffuse.value);
+            float width = static_cast<float>(stereo.value), wet = static_cast<float>(mix.value);
+            if (levelsGliding) {
+                diffuseGain = static_cast<float>(diffuse.next());
+                width = static_cast<float>(stereo.next());
+                wet = static_cast<float>(mix.next());
+            }
+            float tailL = c.tailL[ii], tailR = c.tailR[ii];
+            netPeak = std::max(netPeak, std::max(std::abs(tailL), std::abs(tailR)));
+            tailL *= diffuseGain;
+            tailR *= diffuseGain;
+            publish(Tail, 0.5f * (tailL + tailR));
+            const float earlyL = c.earlyL[ii], earlyR = c.earlyR[ii];
+            meterInput = std::max(meterInput, std::abs(c.x[ii]));
+            meterEarly = std::max(meterEarly, std::max(std::abs(earlyL), std::abs(earlyR)));
+            meterDiffuse += 0.5 * (static_cast<double>(tailL) * tailL + static_cast<double>(tailR) * tailR);
+
+            // Stereo, then Dry/Wet.
+            const float wetL = earlyL + tailL, wetR = earlyR + tailR;
+            const float mid = 0.5f * (wetL + wetR);
+            const float side = 0.5f * (wetL - wetR) * width;
+            if (channels == 2) {
+                ch[0][at + i] = dryL * (1.f - wet) + (mid + side) * wet;
+                ch[1][at + i] = dryR * (1.f - wet) + (mid - side) * wet;
+            } else {
+                ch[0][at + i] = dryL * (1.f - wet) + mid * wet;
+            }
+            if (++meterCount_ == kMeterSamples) {
+                publishMeters(i, meterInput, meterEarly, std::sqrt(meterDiffuse / kMeterSamples));
+                meterInput = meterEarly = 0.f;
+                meterDiffuse = 0.0;
+            }
+        }
+        diffuse_ = diffuse;
+        stereo_ = stereo;
+        mix_ = mix;
+        meterInput_ = meterInput;
+        meterEarly_ = meterEarly;
+        meterDiffuse_ = meterDiffuse;
+        netPeak_ = netPeak;
+    }
+
+    // Asleep: the wet is exactly 0 (the network skipped), the dry still goes
+    // through Dry/Wet; the glides go on, and what was let go is cleared a slice at a time.
+    void renderAsleep(float* const* ch, int channels, int at, int n) noexcept {
+        if (!mix_.settled() || (mix_.value != 0.0 && mix_.value != 1.0)) {
+            for (int i = 0; i < n; ++i) {
+                const auto dry = static_cast<float>(1.0 - mix_.next());
+                for (int c = 0; c < channels; ++c) ch[c][at + i] *= dry;
+            }
+        } else if (mix_.value == 1.0) {
+            for (int c = 0; c < channels; ++c) std::fill_n(ch[c] + at, n, 0.f);
+        }  // (all dry: the input as it is)
+        for (Smooth* g : {&predelay_, &onset_, &scale_, &reflect_, &diffuse_, &stereo_, &loCutMix_, &hiCutMix_}) {
+            if (g->settled()) continue;
+            for (int i = 0; i < n; ++i) g->next();
+        }
+        if (!size_.settled()) {
+            for (int i = 0; i < n; ++i) {
+                size_.c *= sizeRatio_;
+                size_.next();
+            }
+        }
+        for (int i = 0; i < n; ++i)
+            if (++meterCount_ == kMeterSamples) publishMeters(i, -1.f, -1.f, -1.0);
+        size_t count = kClearSlice;
+        for (LineBank* bank : {&input_, &lines_, &allpasses_, &diffusers_}) count = bank->clearSome(count);
+    }
+
+    // Falling asleep: what the network and the filters hold (all below -120 dB) is let go, the states at
+    // once and the buffers as reads come near them, or a slice a sub-chunk while it sleeps (LineBank).
+    void fallAsleep() noexcept {
+        for (LineState& line : line_) {
+            line.y = line.allpassY = 0.f;
+            line.hi.s = line.lo.s = 0.f;
+        }
+        for (DiffuserState& diffuser : diffuser_) diffuser.y = 0.f;
+        hp_.reset();
+        lp_.reset();
+        letGoBuffers();
+    }
+    // The input line and what the network runs (its lines, loop all-passes and diffusers) are let go: they
+    // read as silence from now on. No event clears a whole buffer at once.
+    void letGoBuffers() noexcept {
+        input_.letGo(0);
+        for (int r = 0; r < runningCount_; ++r) {
+            const int q = running_[static_cast<size_t>(r)];
+            lines_.letGo(q);
+            if (allpassRuns(q)) allpasses_.letGo(q);
+        }
+        for (int j = 0; j < diffusersRunning(); ++j) diffusers_.letGo(j);
+    }
+    // Before a sub-chunk's reads: what they can reach of a buffer let go is cleared (LineBank::ensure()),
+    // each read's delay bounded over the sub-chunk by where its glides go in it (travel()) and its ramps'
+    // ends. So a jump (Size's, say) clears only as far as its glide has come, not to its target at once.
+    void clearAhead(int n) noexcept {
+        if (!input_.anyStale() && !lines_.anyStale() && !allpasses_.anyStale() && !diffusers_.anyStale()) return;
+        const auto [sLo, sHi] = travel(size_, n, sizeRatio_);
+        const auto [cLo, cHi] = travel(scale_, n);
+        if (input_.anyStale()) {
+            // The first reflection's at the predelay (and drifts later only); the last's, or the network's.
+            const auto [pLo, pHi] = travel(predelay_, n);
+            const double onset = travel(onset_, n).second;
+            const double drift = 2.0 * reverb::kSpinDepthMs * sampleRate_ / 1000.0;  // (at most)
+            input_.ensure(0, pLo, pHi + std::max(tap_[kMaxTaps - 1].time * sHi, onset) + drift, n);
+        }
+        if (lines_.anyStale() || allpasses_.anyStale()) {
+            for (int r = 0; r < runningCount_; ++r) {
+                const int q = running_[static_cast<size_t>(r)];
+                const LineState& line = line_[static_cast<size_t>(q)];
+                const double from = line.mod.value, to = line.mod.end;
+                lines_.ensure(q, lineDelay(line, sLo) + std::min(from, to), lineDelay(line, sHi) + std::max(from, to),
+                              n);
+                if (allpassRuns(q))
+                    allpasses_.ensure(q, allpassDelay(line, sLo * cLo), allpassDelay(line, sHi * cHi), n);
+            }
+        }
+        if (diffusers_.anyStale()) {
+            for (int j = 0; j < diffusersRunning(); ++j) {
+                const DiffuserState& diffuser = diffuser_[static_cast<size_t>(j)];
+                diffusers_.ensure(j, diffuserDelay(diffuser, sLo * cLo), diffuserDelay(diffuser, sHi * cHi), n);
+            }
+        }
+    }
+    // The least and most a per-sample glide's value is over the next `n` samples, from where it is now: it is
+    // moved on a copy exactly as front() moves it (its coefficient times `ratio` a sample: Size's pace).
+    static std::pair<double, double> travel(Smooth g, int n, double ratio = 1.0) noexcept {
+        double lo = g.value, hi = g.value;
+        if (g.settled()) return {lo, hi};
+        for (int i = 0; i < n; ++i) {
+            g.c *= ratio;
+            const double v = g.next();
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+        return {lo, hi};
+    }
+
+    // The 256-sample displays, at sample `i` of the sub-chunk: the input's and
+    // the reflections' peaks and the tail's RMS (below 0: asleep, the floor), and
+    // the phases as they are after it (so they step by exactly rate * 256 / fs
+    // however blocks fall).
+    void publishMeters(int i, float input, float early, double diffuse) noexcept {
+        const auto db = [](double level) {
+            return level < 0.0 ? kMeterFloorDb : std::max(kMeterFloorDb, gainToDb(static_cast<float>(level)));
+        };
+        publish(InputLevel, db(input));
+        publish(EarlyLevel, db(early));
+        publish(DiffuseLevel, db(diffuse));
+        const double after = (i + 1) / sampleRate_;
+        const auto phase = [](double p) { return static_cast<float>(p - std::floor(p)); };
+        publish(SpinPhase, spinShown_ ? phase(spinStart_ + spinRate_ * after) : -1.f);
+        const double ratio = line_[static_cast<size_t>(layout_.firstLine)].chorusRatio;
+        publish(ChorusPhase, chorusShown_ ? phase(chorusStart_ + chorusRate_ * ratio * after) : -1.f);
+        meterCount_ = 0;
+    }
+
+    // After an awake sub-chunk: what has died away flushed to 0, the guard, and whether to sleep.
+    void afterChunk() noexcept {
+        for (LineState& line : line_) {
+            line.y = dsp::flushTiny(line.y);
+            line.hi.s = dsp::flushTiny(line.hi.s);
+            line.lo.s = dsp::flushTiny(line.lo.s);
+            line.allpassY = dsp::flushTiny(line.allpassY);
+        }
+        for (DiffuserState& diffuser : diffuser_) diffuser.y = dsp::flushTiny(diffuser.y);
+        hp_.flush();
+        lp_.flush();
+
+        // The guard: the loops' gain eases down while the tail's output is too loud, and back.
+        if (netPeak_ > kGuardLevel) {
+            gamma_ = std::max(0.5, gamma_ * 0.97);
+            gammaMoved_ = true;
+        } else if (gamma_ != 1.0) {
+            gamma_ += 0.002 * (1.0 - gamma_);
+            if (1.0 - gamma_ < 1e-6) gamma_ = 1.0;
+            gammaMoved_ = true;
+        }
+
+        // Sleep once the input line holds nothing but silence and the tail has died away.
+        const double s = size_.value, sc = s * scale_.value;
+        double reach = predelay_.value + onset_.value +
+                       (reverb::kTapMs[kMaxTaps - 1] + 2.0 * reverb::kSpinDepthMs) * s * sampleRate_ / 1000.0 + 4.0;
+        for (int j = 0; j < layout_.diffusers; ++j) reach += diffuserDelay(diffuser_[static_cast<size_t>(j)], sc);
+        if (static_cast<double>(silent_) > reach && netPeak_ < kSleepLevel && earlyPeak_ < kSleepLevel &&
+            freeze_.settled(0.0) && !isOn(Freeze) && !switch_.active) {
+            sleeping_ = true;
+            fallAsleep();
+        }
+    }
+
+    // The Walsh-Hadamard transform in place (unnormalized: 1 / sqrt(N) is in the loops' gains).
+    template <int N>
+    static void hadamard(float* v) noexcept {
+        for (int h = 1; h < N; h *= 2) {
+            for (int i = 0; i < N; i += 2 * h) {
+                for (int j = i; j < i + h; ++j) {
+                    const float a = v[j], b = v[j + h];
+                    v[j] = a + b;
+                    v[j + h] = a - b;
+                }
+            }
+        }
+    }
+    static void hadamard(float* v, int n) noexcept {
+        switch (n) {
+        case 4: hadamard<4>(v); break;
+        case 8: hadamard<8>(v); break;
+        default: hadamard<16>(v); break;
+        }
+    }
+
+    static const std::vector<ParamInfo>& infos() {
+        const std::vector<std::string>& kOnOff = offOnLabels();
+        static const std::vector<ParamInfo> kInfos = {
+            {"predelay", "Predelay", "ms", 0.5f, 250.f, 2.5f, true},
+            {"lo_cut", "Lo Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"hi_cut", "Hi Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"in_freq", "In Filter Freq", "Hz", float(reverb::kMinInFreq), float(reverb::kMaxInFreq), 830.f, true},
+            {"in_width", "In Filter Width", "oct", float(reverb::kMinInWidth), float(reverb::kMaxInWidth), 7.5f},
+            {"spin", "ER Spin", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"spin_rate", "ER Spin Rate", "Hz", float(reverb::kMinSpinRate), float(reverb::kMaxSpinRate), 0.3f, true},
+            {"spin_amount", "ER Spin Amount", "%", 0.f, 100.f, 25.f},
+            {"shape", "ER Shape", "%", 0.f, 100.f, 50.f},
+            {"density", "Density", "", 0.f, 3.f, 3.f, false, {"Sparse", "Low", "Mid", "High"}},
+            {"smooth", "Size Smoothing", "", 0.f, 2.f, 1.f, false, {"None", "Slow", "Fast"}},
+            {"size", "Room Size", "size", float(reverb::kMinSize), float(reverb::kMaxSize), 100.f, true},
+            {"stereo", "Stereo Image", "°", 0.f, float(reverb::kMaxStereo), 100.f},
+            {"lo_shelf", "Lo Shelf", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"lo_freq", "Lo Shelf Freq", "Hz", float(reverb::kMinShelfFreq), float(reverb::kMaxLoFreq), 90.f, true},
+            {"lo_gain", "Lo Shelf Gain", "%", float(reverb::kMinShelfGain), float(reverb::kMaxShelfGain), 75.f},
+            {"hi_filter", "Hi Filter", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"hi_type", "Hi Filter Type", "", 0.f, 1.f, 0.f, false, {"Shelf", "Low-pass"}},
+            {"hi_freq", "Hi Filter Freq", "Hz", float(reverb::kMinShelfFreq), float(reverb::kMaxHiFreq), 4500.f, true},
+            {"hi_gain", "Hi Shelf Gain", "%", float(reverb::kMinShelfGain), float(reverb::kMaxShelfGain), 70.f},
+            {"decay", "Decay Time", "ms", float(reverb::kMinDecayMs), float(reverb::kMaxDecayMs), 1200.f, true},
+            {"freeze", "Freeze", "", 0.f, 1.f, 0.f, false, kOnOff},
+            {"flat", "Flat", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"cut", "Cut", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"diffusion", "Diffusion", "%", 0.f, 100.f, 70.f},
+            {"scale", "Scale", "%", 0.f, 100.f, 50.f},
+            {"chorus", "Chorus", "", 0.f, 1.f, 1.f, false, kOnOff},
+            {"chorus_rate", "Chorus Rate", "Hz", 0.01f, 8.f, 0.8f, true},
+            {"chorus_amount", "Chorus Amount", "%", 0.f, 100.f, 20.f},
+            {"reflect", "Reflect Level", "dB", -30.f, 6.f, 0.f},
+            {"diffuse", "Diffuse Level", "dB", -30.f, 6.f, 0.f},
+            {"mix", "Dry/Wet", "%", 0.f, 100.f, 40.f},
+        };
+        return kInfos;
+    }
+
+    // sin and cos of 2 pi k / 12: each tap's place on Spin's circle.
+    static constexpr std::array<double, kMaxTaps> kTapSin = {
+        0.0, 0.5, 0.86602540378443865, 1.0, 0.86602540378443865, 0.5,
+        0.0, -0.5, -0.86602540378443865, -1.0, -0.86602540378443865, -0.5};
+    static constexpr std::array<double, kMaxTaps> kTapCos = {
+        1.0, 0.86602540378443865, 0.5, 0.0, -0.5, -0.86602540378443865,
+        -1.0, -0.86602540378443865, -0.5, 0.0, 0.5, 0.86602540378443865};
+
+    double sampleRate_ = 48000.0;
+    std::array<double, TauCount> glide32_{};
+    int switchLength_ = 960;
+
+    // Buffers (prepare() sizes them).
+    LineBank input_;  // one line: the filtered input
+    LineBank lines_, allpasses_, diffusers_;
+    Chunk chunk_;
+
+    // The network.
+    std::array<LineState, kMaxLines> line_{};
+    std::array<DiffuserState, kMaxDiffusers> diffuser_{};
+    reverb::Layout layout_ = reverb::layout(reverb::Density::High);
+    int layoutDensity_ = 3;
+    std::array<int, kMaxLines> running_{};  // the lines the network runs (both layouts' while switching)
+    int runningCount_ = 0;
+    std::array<bool, kMaxLines> fresh_{};              // lines that have just joined: their ramps start aimed
+    std::array<bool, kMaxDiffusers> freshDiffuser_{};  // and diffusers
+    bool layoutSwitched_ = false;
+    Switch switch_;
+    Ramp gHi_, gLo_, allpassGain_, inject_;
+    bool delaysMoving_ = false, linesMoving_ = false, loopsRamping_ = false;
+    double gamma_ = 1.0;  // the guard's share of the loops' gain
+    bool gammaMoved_ = false;
+
+    // The input filter.
+    dsp::Svf hp_, lp_;
+    dsp::SvfCoefficients hpCoefficients_, lpCoefficients_;
+    Ramp hpG_, lpG_;
+    bool filterMoved_ = false, filterMoving_ = false;
+
+    // The early reflections, and where the network hears the input (Spin's drift of the first's).
+    std::array<TapState, kMaxTaps> tap_{};
+    std::array<int, kMaxTaps> tapList_{};  // the taps heard now
+    int taps_ = 0;
+    float tapShape_ = -1.f;
+    int tapDensity_ = -1;
+    Ramp netDrift_;
+
+    // The glides: a sample at a time (delays, levels) and a sub-chunk at a time.
+    Smooth predelay_, onset_, size_, scale_, reflect_, diffuse_, stereo_, mix_, loCutMix_, hiCutMix_;
+    dsp::Glide inFreq_, inWidth_, decay_, loFreq_, hiFreq_, loShare_, hiShare_, loOn_, hiOn_, lowpass_, freeze_, flat_,
+        cut_, diffusion_, spinAmount_, chorusAmount_, spinRateLog_, chorusRateLog_;
+    dsp::Glide pace_;                    // the log of Size's per-sample coefficient
+    double sizeRatio_ = 1.0;             // its factor a sample across the sub-chunk
+    std::array<double, 3> sizePace_{}, sizePaceLog_{};  // Size's coefficient at each Smooth (at this rate)
+    bool snapping_ = false;
+    Cached logInFreq_, logDecay_, logLoFreq_, logHiFreq_, logSpinRate_, logChorusRate_, reflectGain_, diffuseGain_;
+
+    // The LFOs.
+    double spinPhase_ = 0.0, spinStart_ = 0.0, chorusStart_ = 0.0;
+    double spinRate_ = 0.3, chorusRate_ = 0.8;
+    bool spinShown_ = true, chorusShown_ = true;
+
+    // Sleeping, and the meters.
+    bool sleeping_ = false;
+    int64_t silent_ = 0;  // samples since the input was last above kAwakeLevel
+    float netPeak_ = 0.f, earlyPeak_ = 0.f;
+    int meterCount_ = 0;
+    float meterInput_ = 0.f, meterEarly_ = 0.f;
+    double meterDiffuse_ = 0.0;
+};
+
+}  // namespace
+
+SUB_REGISTER_BUILTIN(ReverbProcessor, AudioEffect);
+
+}  // namespace sub

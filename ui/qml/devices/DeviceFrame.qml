@@ -418,9 +418,13 @@ Item {
         function onPagesChanged() {
             frame.restorePage()
         }
-        // The Sidechain's hint over its curve.
-        function onSidechainMenuRequested() {
-            frame.panel.showSidechainMenu(frame, bodyLoader.item, bodyLoader.item.width / 2, bodyLoader.item.height / 2)
+        // An editor's sidechain button (under it) or the Sidechain's hint over its curve (in the middle).
+        function onSidechainMenuRequested(from) {
+            if (from)
+                frame.panel.showSidechainMenu(frame, from, 0, from.height)
+            else
+                frame.panel.showSidechainMenu(frame, bodyLoader.item, bodyLoader.item.width / 2,
+                                              bodyLoader.item.height / 2)
         }
     }
 }

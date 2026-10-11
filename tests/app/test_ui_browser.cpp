@@ -166,9 +166,14 @@ private Q_SLOTS:
         QVERIFY(settle());
         QStringList effectNames = names();
         effectNames.sort();
-        QCOMPARE(effectNames, (QStringList{QStringLiteral("Compressor"), QStringLiteral("Delay"),
+        QCOMPARE(effectNames, (QStringList{QStringLiteral("Amp"), QStringLiteral("Chorus-Ensemble"),
+                                           QStringLiteral("Compressor"), QStringLiteral("Delay"),
                                            QStringLiteral("Disperser"), QStringLiteral("EQ"),
-                                           QStringLiteral("Over The Top"), QStringLiteral("Sidechain"),
+                                           QStringLiteral("Erosion"), QStringLiteral("Gate"),
+                                           QStringLiteral("Limiter"), QStringLiteral("Multiband Dynamics"),
+                                           QStringLiteral("Over The Top"), QStringLiteral("Phaser-Flanger"),
+                                           QStringLiteral("Reverb"), QStringLiteral("Saturator"),
+                                           QStringLiteral("Sidechain"), QStringLiteral("Spectral Compressor"),
                                            QStringLiteral("Utility")}));
         const int utility = int(names().indexOf(QStringLiteral("Utility")));
         QVariant data;
